@@ -1,5 +1,21 @@
-venv/
+# Python
 __pycache__/
+*.pyc
+venv/
+.env
+
+# Node
 node_modules/
 .next/
-.env
+out/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
