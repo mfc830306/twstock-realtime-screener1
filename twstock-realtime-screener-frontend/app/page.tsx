@@ -1,493 +1,479 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type StockItem = {
+type RawStock = {
   symbol: string;
   name?: string;
   price: number;
   change_percent?: number;
   volume?: number;
   ma5?: number;
-  ma10?: number;
   ma20?: number;
-  signal: string;
+  signal?: string;
   reason?: string;
-  score?: number;
-  entry_price?: number;
-  stop_loss?: number;
-  target_price?: number;
+};
+
+type StockCategory =
+  | "all"
+  | "top10"
+  | "bullish"
+  | "breakout"
+  | "pullback"
+  | "active"
+  | "bearish";
+
+type EnrichedStock = RawStock & {
+  score: number;
+  categoryTags: string[];
+  entryPrice: number;
+  targetPrice: number;
+  stopLossPrice: number;
 };
 
 const API_URL = "https://twstock-realtime-screener1.onrender.com/scan";
 
-export default function Home() {
-  const [stocks, setStocks] = useState("");
-  const [results, setResults] = useState<StockItem[]>([]);
+const categoryLabels: Record<StockCategory, string> = {
+  all: "全部股票",
+  top10: "推薦前10",
+  bullish: "均線多頭",
+  breakout: "強勢突破",
+  pullback: "拉回觀察",
+  active: "成交活躍",
+  bearish: "偏空避開",
+};
+
+function safeNumber(value: unknown, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function formatPrice(value: number) {
+  return Number.isFinite(value) ? value.toFixed(2) : "-";
+}
+
+function formatPercent(value?: number) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function formatVolume(value?: number) {
+  if (!value || Number.isNaN(value)) return "-";
+  return new Intl.NumberFormat("zh-TW").format(value);
+}
+
+function getScore(stock: RawStock) {
+  const price = safeNumber(stock.price);
+  const ma5 = safeNumber(stock.ma5);
+  const ma20 = safeNumber(stock.ma20);
+  const change = safeNumber(stock.change_percent);
+  const volume = safeNumber(stock.volume);
+
+  let score = 0;
+
+  if (price > ma5 && ma5 > 0) score += 20;
+  if (price > ma20 && ma20 > 0) score += 20;
+  if (ma5 > ma20 && ma5 > 0 && ma20 > 0) score += 20;
+  if (change > 0) score += Math.min(change * 4, 20);
+  if (change > 3) score += 8;
+  if (volume > 3000000) score += 8;
+  if (volume > 10000000) score += 8;
+
+  if (stock.signal?.includes("偏多")) score += 12;
+  if (stock.signal?.includes("強勢")) score += 10;
+  if (stock.signal?.includes("偏空")) score -= 18;
+
+  return Math.max(0, Math.min(100, round2(score)));
+}
+
+function getCategoryTags(stock: RawStock) {
+  const price = safeNumber(stock.price);
+  const ma5 = safeNumber(stock.ma5);
+  const ma20 = safeNumber(stock.ma20);
+  const change = safeNumber(stock.change_percent);
+  const volume = safeNumber(stock.volume);
+
+  const tags: string[] = [];
+
+  if (price > ma5 && price > ma20 && ma5 >= ma20) tags.push("bullish");
+  if (change >= 3 && volume >= 3000000) tags.push("breakout");
+  if (price >= ma20 && price <= ma20 * 1.03) tags.push("pullback");
+  if (volume >= 5000000) tags.push("active");
+  if (price < ma5 && price < ma20) tags.push("bearish");
+
+  return tags;
+}
+
+function getTradePlan(stock: RawStock) {
+  const price = safeNumber(stock.price);
+  const ma5 = safeNumber(stock.ma5);
+  const ma20 = safeNumber(stock.ma20);
+  const change = safeNumber(stock.change_percent);
+
+  let entry = price;
+  let target = price * 1.08;
+  let stop = price * 0.95;
+
+  if (price > ma5 && price > ma20) {
+    entry = price;
+    target = price * (change >= 3 ? 1.1 : 1.07);
+    stop = ma5 > 0 ? ma5 * 0.985 : price * 0.95;
+  } else if (price >= ma20 && price <= ma20 * 1.03) {
+    entry = ma20;
+    target = price * 1.06;
+    stop = ma20 * 0.97;
+  } else if (price < ma5 && price < ma20) {
+    entry = price;
+    target = price * 1.03;
+    stop = price * 0.96;
+  } else {
+    entry = price;
+    target = price * 1.05;
+    stop = ma20 > 0 ? ma20 * 0.97 : price * 0.95;
+  }
+
+  return {
+    entryPrice: round2(entry),
+    targetPrice: round2(target),
+    stopLossPrice: round2(stop),
+  };
+}
+
+function enrichStock(stock: RawStock): EnrichedStock {
+  const score = getScore(stock);
+  const categoryTags = getCategoryTags(stock);
+  const tradePlan = getTradePlan(stock);
+
+  return {
+    ...stock,
+    name: stock.name || "未提供名稱",
+    score,
+    categoryTags,
+    ...tradePlan,
+  };
+}
+
+function getFilteredStocks(stocks: EnrichedStock[], category: StockCategory) {
+  switch (category) {
+    case "top10":
+      return [...stocks].sort((a, b) => b.score - a.score).slice(0, 10);
+    case "bullish":
+      return stocks.filter((s) => s.categoryTags.includes("bullish"));
+    case "breakout":
+      return stocks.filter((s) => s.categoryTags.includes("breakout"));
+    case "pullback":
+      return stocks.filter((s) => s.categoryTags.includes("pullback"));
+    case "active":
+      return stocks.filter((s) => s.categoryTags.includes("active"));
+    case "bearish":
+      return stocks.filter((s) => s.categoryTags.includes("bearish"));
+    case "all":
+    default:
+      return stocks;
+  }
+}
+
+export default function Page() {
+  const [stockInput, setStockInput] = useState("");
+  const [allStocks, setAllStocks] = useState<EnrichedStock[]>([]);
+  const [activeCategory, setActiveCategory] = useState<StockCategory>("top10");
+  const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("全部");
 
-  const handleScan = async () => {
+  const fetchStocks = async () => {
+    setLoading(true);
+    setError("");
+
     try {
-      setLoading(true);
-      setError("");
-
-      const symbols = stocks.trim()
-        ? stocks
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : [];
+      const symbols = stockInput
+        .split(/[\s,，]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
 
       const response = await fetch(API_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ symbols }),
+        body: JSON.stringify(
+          symbols.length > 0
+            ? { stocks: symbols }
+            : {}
+        ),
       });
 
       if (!response.ok) {
-        throw new Error(`API 錯誤：${response.status}`);
+        throw new Error(`API 連線失敗，狀態碼：${response.status}`);
       }
 
       const data = await response.json();
-      setResults(Array.isArray(data) ? data : []);
-      setActiveTab("全部");
-    } catch (err: any) {
-      setError(err?.message || "系統發生錯誤");
-      setResults([]);
+
+      if (!Array.isArray(data)) {
+        throw new Error("後端回傳格式錯誤，預期為陣列資料");
+      }
+
+      const enriched = data
+        .map((item: RawStock) => enrichStock(item))
+        .sort((a, b) => b.score - a.score);
+
+      setAllStocks(enriched);
+      setLoaded(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "資料載入失敗");
+      setAllStocks([]);
+      setLoaded(true);
     } finally {
       setLoading(false);
     }
   };
 
-  const filteredResults = useMemo(() => {
-    if (activeTab === "全部") return results;
-    return results.filter((item) => item.signal === activeTab);
-  }, [results, activeTab]);
+  useEffect(() => {
+    fetchStocks();
+  }, []);
+
+  const filteredStocks = useMemo(() => {
+    const byCategory = getFilteredStocks(allStocks, activeCategory);
+
+    if (!keyword.trim()) return byCategory;
+
+    const q = keyword.trim().toLowerCase();
+    return byCategory.filter((stock) => {
+      return (
+        stock.symbol.toLowerCase().includes(q) ||
+        (stock.name || "").toLowerCase().includes(q) ||
+        (stock.signal || "").toLowerCase().includes(q) ||
+        (stock.reason || "").toLowerCase().includes(q)
+      );
+    });
+  }, [allStocks, activeCategory, keyword]);
 
   const stats = useMemo(() => {
-    const total = results.length;
-    const strong = results.filter((r) => r.signal === "強勢多方").length;
-    const watch = results.filter((r) => r.signal === "偏多觀察").length;
-    const neutral = results.filter((r) => r.signal === "中性").length;
+    const total = allStocks.length;
+    const bullish = allStocks.filter((s) => s.categoryTags.includes("bullish")).length;
+    const breakout = allStocks.filter((s) => s.categoryTags.includes("breakout")).length;
+    const active = allStocks.filter((s) => s.categoryTags.includes("active")).length;
+    const bearish = allStocks.filter((s) => s.categoryTags.includes("bearish")).length;
 
-    return { total, strong, watch, neutral };
-  }, [results]);
-
-  const getSignalStyle = (signal: string): React.CSSProperties => {
-    if (signal === "強勢多方") {
-      return {
-        background: "#FEE2E2",
-        color: "#B91C1C",
-        border: "1px solid #FECACA",
-      };
-    }
-
-    if (signal === "偏多觀察") {
-      return {
-        background: "#FEF3C7",
-        color: "#92400E",
-        border: "1px solid #FDE68A",
-      };
-    }
-
-    return {
-      background: "#E5E7EB",
-      color: "#374151",
-      border: "1px solid #D1D5DB",
-    };
-  };
+    return { total, bullish, breakout, active, bearish };
+  }, [allStocks]);
 
   return (
-    <main style={styles.page}>
-      <div style={styles.container}>
-        <section style={styles.heroCard}>
-          <div style={styles.heroTop}>
-            <div>
-              <div style={styles.badge}>TW STOCK SCREENER</div>
-              <h1 style={styles.title}>台股選股系統</h1>
-              <p style={styles.subtitle}>
-                可輸入指定股票代碼分析；若留空，系統會自動掃描預設股票池並回傳推薦結果。
-              </p>
-            </div>
+    <main className="page-shell">
+      <section className="hero-section">
+        <div className="hero-badge">TW STOCK SCREENER PRO</div>
+        <h1 className="hero-title">台股智慧選股系統</h1>
+        <p className="hero-desc">
+          一個頁面直接完成台股掃描、分類、推薦排序與進出場規劃。
+        </p>
+
+        <div className="control-panel">
+          <div className="input-group">
+            <label className="input-label">指定股票代號（可留空，留空則掃描後端預設清單）</label>
+            <textarea
+              className="stock-textarea"
+              value={stockInput}
+              onChange={(e) => setStockInput(e.target.value)}
+              placeholder="例如：2330 2317 2454 2303"
+            />
           </div>
 
-          <div style={styles.searchWrap}>
-            <input
-              value={stocks}
-              onChange={(e) => setStocks(e.target.value)}
-              placeholder="輸入股票代碼，例如：2330,2317,2454；留空可跑系統推薦"
-              style={styles.input}
-            />
+          <div className="toolbar">
+            <div className="search-box">
+              <input
+                className="search-input"
+                type="text"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="搜尋代號、名稱、訊號、理由"
+              />
+            </div>
+
             <button
-              onClick={handleScan}
+              className="primary-button"
+              onClick={fetchStocks}
               disabled={loading}
-              style={loading ? styles.buttonDisabled : styles.button}
             >
-              {loading ? "掃描中..." : "開始選股"}
+              {loading ? "載入中..." : "立即掃描"}
             </button>
           </div>
+        </div>
+      </section>
 
-          <div style={styles.tip}>
-            常用測試：2330,2317,2454,2303,2603,1301,1802
-          </div>
-        </section>
+      <section className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-label">總股票數</div>
+          <div className="stat-value">{stats.total}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">均線多頭</div>
+          <div className="stat-value">{stats.bullish}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">強勢突破</div>
+          <div className="stat-value">{stats.breakout}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">成交活躍</div>
+          <div className="stat-value">{stats.active}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">偏空避開</div>
+          <div className="stat-value">{stats.bearish}</div>
+        </div>
+      </section>
 
-        <section style={styles.statsGrid}>
-          <StatCard label="總結果數" value={stats.total} />
-          <StatCard label="強勢多方" value={stats.strong} />
-          <StatCard label="偏多觀察" value={stats.watch} />
-          <StatCard label="中性" value={stats.neutral} />
-        </section>
+      <section className="tabs-section">
+        <div className="tabs-scroll">
+          {(Object.keys(categoryLabels) as StockCategory[]).map((key) => (
+            <button
+              key={key}
+              className={`tab-button ${activeCategory === key ? "active" : ""}`}
+              onClick={() => setActiveCategory(key)}
+            >
+              {categoryLabels[key]}
+            </button>
+          ))}
+        </div>
+      </section>
 
-        <section style={styles.panel}>
-          <div style={styles.panelHeader}>
-            <div>
-              <h2 style={styles.panelTitle}>掃描結果</h2>
-              <p style={styles.panelSubtitle}>依訊號分類檢視個股資訊</p>
-            </div>
+      {error ? (
+        <section className="message-card error-card">{error}</section>
+      ) : null}
 
-            <div style={styles.tabs}>
-              {["全部", "強勢多方", "偏多觀察", "中性"].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  style={{
-                    ...styles.tab,
-                    ...(activeTab === tab ? styles.tabActive : {}),
-                  }}
+      {!loading && loaded && filteredStocks.length === 0 ? (
+        <section className="message-card">查無符合條件的股票資料</section>
+      ) : null}
+
+      <section className="desktop-table-wrap">
+        <table className="stock-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>代號</th>
+              <th>名稱</th>
+              <th>現價</th>
+              <th>漲跌幅</th>
+              <th>成交量</th>
+              <th>MA5</th>
+              <th>MA20</th>
+              <th>訊號</th>
+              <th>推薦分數</th>
+              <th>進場價</th>
+              <th>出場價</th>
+              <th>停損價</th>
+              <th>判斷理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredStocks.map((stock, index) => (
+              <tr key={`${stock.symbol}-${index}`}>
+                <td>{index + 1}</td>
+                <td className="mono">{stock.symbol}</td>
+                <td>{stock.name}</td>
+                <td className="mono">{formatPrice(stock.price)}</td>
+                <td
+                  className={
+                    safeNumber(stock.change_percent) > 0
+                      ? "up"
+                      : safeNumber(stock.change_percent) < 0
+                      ? "down"
+                      : ""
+                  }
                 >
-                  {tab}
-                </button>
-              ))}
+                  {formatPercent(stock.change_percent)}
+                </td>
+                <td className="mono">{formatVolume(stock.volume)}</td>
+                <td className="mono">{formatPrice(safeNumber(stock.ma5))}</td>
+                <td className="mono">{formatPrice(safeNumber(stock.ma20))}</td>
+                <td>{stock.signal || "-"}</td>
+                <td>
+                  <span className="score-badge">{stock.score}</span>
+                </td>
+                <td className="mono highlight">{formatPrice(stock.entryPrice)}</td>
+                <td className="mono take-profit">{formatPrice(stock.targetPrice)}</td>
+                <td className="mono stop-loss">{formatPrice(stock.stopLossPrice)}</td>
+                <td className="reason-cell">{stock.reason || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="mobile-cards">
+        {filteredStocks.map((stock, index) => (
+          <article className="stock-card" key={`${stock.symbol}-mobile-${index}`}>
+            <div className="stock-card-top">
+              <div>
+                <div className="stock-name-row">
+                  <span className="stock-symbol">{stock.symbol}</span>
+                  <span className="stock-name">{stock.name}</span>
+                </div>
+                <div className="stock-signal">{stock.signal || "-"}</div>
+              </div>
+              <div className="score-badge large">{stock.score}</div>
             </div>
-          </div>
 
-          {error ? <div style={styles.errorBox}>{error}</div> : null}
-
-          {!loading && filteredResults.length === 0 ? (
-            <div style={styles.emptyBox}>
-              尚未產生結果，請輸入代碼後開始掃描，或直接留空讓系統推薦。
+            <div className="stock-grid">
+              <div>
+                <span className="field-label">現價</span>
+                <span className="field-value">{formatPrice(stock.price)}</span>
+              </div>
+              <div>
+                <span className="field-label">漲跌幅</span>
+                <span
+                  className={`field-value ${
+                    safeNumber(stock.change_percent) > 0
+                      ? "up"
+                      : safeNumber(stock.change_percent) < 0
+                      ? "down"
+                      : ""
+                  }`}
+                >
+                  {formatPercent(stock.change_percent)}
+                </span>
+              </div>
+              <div>
+                <span className="field-label">成交量</span>
+                <span className="field-value">{formatVolume(stock.volume)}</span>
+              </div>
+              <div>
+                <span className="field-label">MA5 / MA20</span>
+                <span className="field-value">
+                  {formatPrice(safeNumber(stock.ma5))} / {formatPrice(safeNumber(stock.ma20))}
+                </span>
+              </div>
+              <div>
+                <span className="field-label">進場價</span>
+                <span className="field-value highlight">{formatPrice(stock.entryPrice)}</span>
+              </div>
+              <div>
+                <span className="field-label">出場價</span>
+                <span className="field-value take-profit">{formatPrice(stock.targetPrice)}</span>
+              </div>
+              <div>
+                <span className="field-label">停損價</span>
+                <span className="field-value stop-loss">{formatPrice(stock.stopLossPrice)}</span>
+              </div>
+              <div>
+                <span className="field-label">排名</span>
+                <span className="field-value">{index + 1}</span>
+              </div>
             </div>
-          ) : null}
 
-          {loading ? <div style={styles.emptyBox}>資料載入中...</div> : null}
-
-          {!loading && filteredResults.length > 0 ? (
-            <div style={styles.tableOuter}>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>代碼</th>
-                    <th style={styles.th}>名稱</th>
-                    <th style={styles.th}>現價</th>
-                    <th style={styles.th}>漲跌幅</th>
-                    <th style={styles.th}>訊號</th>
-                    <th style={styles.th}>分數</th>
-                    <th style={styles.th}>進場</th>
-                    <th style={styles.th}>停損</th>
-                    <th style={styles.th}>出場</th>
-                    <th style={styles.th}>原因</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredResults.map((s, i) => {
-                    const entry =
-                      s.entry_price ?? (typeof s.price === "number" ? s.price : 0);
-                    const stop =
-                      s.stop_loss ??
-                      (typeof s.price === "number"
-                        ? Number((s.price * 0.97).toFixed(2))
-                        : 0);
-                    const target =
-                      s.target_price ??
-                      (typeof s.price === "number"
-                        ? Number((s.price * 1.05).toFixed(2))
-                        : 0);
-
-                    return (
-                      <tr key={`${s.symbol}-${i}`}>
-                        <td style={styles.td}>{s.symbol}</td>
-                        <td style={styles.td}>{s.name || "-"}</td>
-                        <td style={styles.td}>{s.price ?? "-"}</td>
-                        <td
-                          style={{
-                            ...styles.td,
-                            color:
-                              typeof s.change_percent === "number"
-                                ? s.change_percent > 0
-                                  ? "#DC2626"
-                                  : s.change_percent < 0
-                                  ? "#2563EB"
-                                  : "#111827"
-                                : "#6B7280",
-                            fontWeight: 700,
-                          }}
-                        >
-                          {typeof s.change_percent === "number"
-                            ? `${s.change_percent}%`
-                            : "-"}
-                        </td>
-                        <td style={styles.td}>
-                          <span style={{ ...styles.signalPill, ...getSignalStyle(s.signal) }}>
-                            {s.signal}
-                          </span>
-                        </td>
-                        <td style={styles.td}>{s.score ?? "-"}</td>
-                        <td style={styles.td}>{entry}</td>
-                        <td style={{ ...styles.td, color: "#DC2626", fontWeight: 700 }}>
-                          {stop}
-                        </td>
-                        <td style={{ ...styles.td, color: "#059669", fontWeight: 700 }}>
-                          {target}
-                        </td>
-                        <td style={{ ...styles.td, minWidth: 240 }}>
-                          {s.reason || "-"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div className="reason-box">
+              <div className="field-label">判斷理由</div>
+              <div className="reason-text">{stock.reason || "-"}</div>
             </div>
-          ) : null}
-        </section>
-      </div>
+          </article>
+        ))}
+      </section>
     </main>
   );
 }
-
-function StatCard({ label, value }: { label: string; value: number }) {
-  return (
-    <div style={styles.statCard}>
-      <div style={styles.statLabel}>{label}</div>
-      <div style={styles.statValue}>{value}</div>
-    </div>
-  );
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background:
-      "linear-gradient(180deg, #F3F6FB 0%, #F8FAFC 35%, #EEF2F7 100%)",
-    padding: "32px 16px 60px",
-    fontFamily:
-      'Arial, "Noto Sans TC", "Microsoft JhengHei", sans-serif',
-    color: "#111827",
-  },
-  container: {
-    maxWidth: "1280px",
-    margin: "0 auto",
-  },
-  heroCard: {
-    background: "rgba(255,255,255,0.95)",
-    border: "1px solid #E5E7EB",
-    borderRadius: "28px",
-    padding: "28px",
-    boxShadow: "0 16px 40px rgba(15, 23, 42, 0.08)",
-    marginBottom: "22px",
-  },
-  heroTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "16px",
-    marginBottom: "20px",
-    flexWrap: "wrap",
-  },
-  badge: {
-    display: "inline-block",
-    background: "#EEF2FF",
-    color: "#4338CA",
-    borderRadius: "999px",
-    padding: "6px 12px",
-    fontSize: "12px",
-    fontWeight: 800,
-    letterSpacing: "0.4px",
-    marginBottom: "12px",
-  },
-  title: {
-    fontSize: "40px",
-    lineHeight: 1.15,
-    margin: 0,
-    fontWeight: 900,
-  },
-  subtitle: {
-    marginTop: "12px",
-    color: "#4B5563",
-    fontSize: "16px",
-    lineHeight: 1.8,
-    maxWidth: "760px",
-  },
-  searchWrap: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-    alignItems: "center",
-  },
-  input: {
-    flex: 1,
-    minWidth: "320px",
-    height: "54px",
-    borderRadius: "16px",
-    border: "1px solid #D1D5DB",
-    padding: "0 18px",
-    fontSize: "16px",
-    outline: "none",
-    background: "#FFFFFF",
-  },
-  button: {
-    height: "54px",
-    border: "none",
-    borderRadius: "16px",
-    padding: "0 22px",
-    background: "linear-gradient(135deg, #111827 0%, #1F2937 100%)",
-    color: "#FFFFFF",
-    fontSize: "16px",
-    fontWeight: 800,
-    cursor: "pointer",
-    boxShadow: "0 10px 24px rgba(17, 24, 39, 0.18)",
-  },
-  buttonDisabled: {
-    height: "54px",
-    border: "none",
-    borderRadius: "16px",
-    padding: "0 22px",
-    background: "#9CA3AF",
-    color: "#FFFFFF",
-    fontSize: "16px",
-    fontWeight: 800,
-    cursor: "not-allowed",
-  },
-  tip: {
-    marginTop: "14px",
-    color: "#6B7280",
-    fontSize: "13px",
-  },
-  statsGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: "14px",
-    marginBottom: "22px",
-  },
-  statCard: {
-    background: "#FFFFFF",
-    border: "1px solid #E5E7EB",
-    borderRadius: "22px",
-    padding: "22px",
-    boxShadow: "0 10px 24px rgba(15, 23, 42, 0.05)",
-  },
-  statLabel: {
-    fontSize: "14px",
-    color: "#6B7280",
-    marginBottom: "10px",
-  },
-  statValue: {
-    fontSize: "32px",
-    fontWeight: 900,
-    color: "#111827",
-  },
-  panel: {
-    background: "#FFFFFF",
-    border: "1px solid #E5E7EB",
-    borderRadius: "28px",
-    padding: "24px",
-    boxShadow: "0 16px 40px rgba(15, 23, 42, 0.06)",
-  },
-  panelHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: "16px",
-    alignItems: "center",
-    flexWrap: "wrap",
-    marginBottom: "18px",
-  },
-  panelTitle: {
-    margin: 0,
-    fontSize: "28px",
-    fontWeight: 900,
-  },
-  panelSubtitle: {
-    margin: "6px 0 0",
-    color: "#6B7280",
-    fontSize: "14px",
-  },
-  tabs: {
-    display: "flex",
-    gap: "8px",
-    flexWrap: "wrap",
-  },
-  tab: {
-    border: "1px solid #D1D5DB",
-    background: "#F9FAFB",
-    color: "#374151",
-    borderRadius: "999px",
-    padding: "10px 16px",
-    fontSize: "14px",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-  tabActive: {
-    background: "#111827",
-    color: "#FFFFFF",
-    border: "1px solid #111827",
-  },
-  errorBox: {
-    borderRadius: "16px",
-    background: "#FEF2F2",
-    color: "#B91C1C",
-    border: "1px solid #FECACA",
-    padding: "14px 16px",
-    marginBottom: "14px",
-    fontWeight: 700,
-  },
-  emptyBox: {
-    borderRadius: "18px",
-    border: "1px dashed #CBD5E1",
-    background: "#F8FAFC",
-    color: "#64748B",
-    padding: "42px 16px",
-    textAlign: "center",
-    fontSize: "15px",
-  },
-  tableOuter: {
-    overflowX: "auto",
-    borderRadius: "20px",
-    border: "1px solid #E5E7EB",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    minWidth: "1080px",
-    background: "#FFFFFF",
-  },
-  th: {
-    textAlign: "left",
-    padding: "14px 14px",
-    background: "#F8FAFC",
-    borderBottom: "1px solid #E5E7EB",
-    fontSize: "13px",
-    fontWeight: 900,
-    color: "#374151",
-    whiteSpace: "nowrap",
-  },
-  td: {
-    padding: "14px 14px",
-    borderBottom: "1px solid #F1F5F9",
-    fontSize: "14px",
-    color: "#111827",
-    verticalAlign: "top",
-  },
-  signalPill: {
-    display: "inline-block",
-    padding: "6px 10px",
-    borderRadius: "999px",
-    fontSize: "12px",
-    fontWeight: 900,
-    whiteSpace: "nowrap",
-  },
-};
