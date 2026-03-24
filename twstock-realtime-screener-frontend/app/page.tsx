@@ -14,6 +14,8 @@ type StockResult = {
   reason: string;
 };
 
+const API_URL = 'https://twstock-realtime-screener1.onrender.com/scan';
+
 export default function HomePage() {
   const [symbols, setSymbols] = useState('2330,2317,2454,2303,2603,1301,1802');
   const [results, setResults] = useState<StockResult[]>([]);
@@ -31,20 +33,26 @@ export default function HomePage() {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      const response = await fetch('http://127.0.0.1:8000/scan', {
+      if (parsedSymbols.length === 0) {
+        throw new Error('請先輸入股票代碼');
+      }
+
+      const response = await fetch(API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ symbols: parsedSymbols }),
       });
 
       if (!response.ok) {
-        throw new Error(`API 錯誤: ${response.status}`);
+        throw new Error(`API 錯誤：${response.status}`);
       }
 
       const data: StockResult[] = await response.json();
       setResults(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '未知錯誤');
+      setError(err instanceof Error ? err.message : '發生未知錯誤');
     } finally {
       setLoading(false);
     }
@@ -58,6 +66,8 @@ export default function HomePage() {
         return 'bg-green-100 text-green-700 border-green-200';
       case '觀察':
         return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+      case '錯誤':
+        return 'bg-gray-100 text-gray-700 border-gray-200';
       default:
         return 'bg-gray-100 text-gray-700 border-gray-200';
     }
@@ -67,25 +77,26 @@ export default function HomePage() {
     <main className="min-h-screen bg-gray-50 px-6 py-10">
       <div className="mx-auto max-w-6xl">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">台股選股系統</h1>
+          <h1 className="text-3xl font-bold text-gray-900">台股即時選股系統</h1>
           <p className="mt-2 text-gray-600">
-            輸入股票代碼，系統會抓取資料並做簡單技術面判斷
+            輸入股票代碼後，系統會呼叫 Render 後端並回傳簡易技術面分析結果
           </p>
         </div>
 
-        <div className="rounded-2xl bg-white p-6 shadow-sm border border-gray-200">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
           <label className="mb-2 block text-sm font-medium text-gray-700">
             股票代碼（用逗號分隔）
           </label>
+
           <textarea
             value={symbols}
             onChange={(e) => setSymbols(e.target.value)}
             rows={3}
             className="w-full rounded-xl border border-gray-300 px-4 py-3 text-sm text-gray-900 outline-none focus:border-blue-500"
-            placeholder="例如：2330,2317,2454,2303"
+            placeholder="例如：2330,2317,1802"
           />
 
-          <div className="mt-4 flex gap-3">
+          <div className="mt-4 flex flex-wrap gap-3">
             <button
               onClick={handleScan}
               disabled={loading}
@@ -93,6 +104,10 @@ export default function HomePage() {
             >
               {loading ? '掃描中...' : '開始掃描'}
             </button>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-blue-50 px-4 py-3 text-sm text-blue-700">
+            後端 API：{API_URL}
           </div>
 
           {error && (
@@ -112,18 +127,19 @@ export default function HomePage() {
           )}
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {results.map((stock) => (
+            {results.map((stock, index) => (
               <div
-                key={stock.symbol}
+                key={`${stock.symbol}-${index}`}
                 className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-4">
                   <div>
                     <h3 className="text-lg font-bold text-gray-900">{stock.symbol}</h3>
                     <p className="text-sm text-gray-500">{stock.name}</p>
                   </div>
+
                   <span
-                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(stock.signal)}`}
+                    className={`whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold ${getSignalClass(stock.signal)}`}
                   >
                     {stock.signal}
                   </span>
@@ -134,22 +150,26 @@ export default function HomePage() {
                     <span>現價</span>
                     <span className="font-medium">{stock.price ?? '-'}</span>
                   </div>
+
                   <div className="flex justify-between">
                     <span>漲跌幅</span>
                     <span className="font-medium">
                       {stock.change_percent !== null ? `${stock.change_percent}%` : '-'}
                     </span>
                   </div>
+
                   <div className="flex justify-between">
                     <span>成交量</span>
                     <span className="font-medium">
                       {stock.volume !== null ? stock.volume.toLocaleString() : '-'}
                     </span>
                   </div>
+
                   <div className="flex justify-between">
                     <span>MA5</span>
                     <span className="font-medium">{stock.ma5 ?? '-'}</span>
                   </div>
+
                   <div className="flex justify-between">
                     <span>MA20</span>
                     <span className="font-medium">{stock.ma20 ?? '-'}</span>

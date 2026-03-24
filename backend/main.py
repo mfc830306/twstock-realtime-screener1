@@ -7,6 +7,7 @@ import pandas as pd
 
 app = FastAPI(title="Taiwan Stock Screener API")
 
+# CORS（前端可連）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,6 +16,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 🔥 台股中文名稱（可擴充）
+STOCK_NAMES = {
+    "2330": "台積電",
+    "2317": "鴻海",
+    "2454": "聯發科",
+    "2303": "聯電",
+    "2603": "長榮",
+    "1301": "台塑",
+    "1802": "台玻",
+}
+
+# ===== Request / Response =====
 
 class ScanRequest(BaseModel):
     symbols: List[str] = Field(
@@ -34,6 +47,8 @@ class StockResult(BaseModel):
     reason: str
 
 
+# ===== 工具 =====
+
 def normalize_symbol(symbol: str) -> str:
     symbol = symbol.strip().replace(".TW", "").replace(".TWO", "")
     if symbol.isdigit():
@@ -41,52 +56,77 @@ def normalize_symbol(symbol: str) -> str:
     return symbol
 
 
+# ===== 抓資料 =====
+
 def fetch_stock_data(symbol: str):
-    tw_symbol = normalize_symbol(symbol)
-    ticker = yf.Ticker(tw_symbol)
-
-    hist = ticker.history(period="3mo")
-    info = {}
     try:
-        info = ticker.fast_info or {}
-    except Exception:
-        info = {}
+        tw_symbol = normalize_symbol(symbol)
+        ticker = yf.Ticker(tw_symbol)
 
-    if hist.empty:
-        return None
+        hist = ticker.history(period="3mo")
 
-    hist = hist.dropna().copy()
-    if hist.empty or len(hist) < 20:
-        return None
+        if hist.empty:
+            return None
 
-    close = hist["Close"]
-    volume = hist["Volume"]
+        hist = hist.dropna().copy()
+        if len(hist) < 20:
+            return None
 
-    latest_close = float(close.iloc[-1])
-    prev_close = float(close.iloc[-2]) if len(close) >= 2 else None
-    latest_volume = int(volume.iloc[-1]) if len(volume) >= 1 else None
+        close = hist["Close"]
+        volume = hist["Volume"]
 
-    ma5 = float(close.tail(5).mean()) if len(close) >= 5 else None
-    ma20 = float(close.tail(20).mean()) if len(close) >= 20 else None
+        latest_close = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2])
+        latest_volume = int(volume.iloc[-1])
 
-    change_percent = None
-    if prev_close and prev_close != 0:
+        ma5 = float(close.tail(5).mean())
+        ma20 = float(close.tail(20).mean())
+
         change_percent = round((latest_close - prev_close) / prev_close * 100, 2)
 
-    stock_name = tw_symbol.replace(".TW", "").replace(".TWO", "")
+        # 🔥 中文名稱
+        stock_code = tw_symbol.replace(".TW", "").replace(".TWO", "")
+        stock_name = STOCK_NAMES.get(stock_code, stock_code)
 
-    return {
-        "symbol": stock_name,
-        "name": stock_name,
-        "price": round(latest_close, 2),
-        "change_percent": change_percent,
-        "volume": latest_volume,
-        "ma5": round(ma5, 2) if ma5 else None,
-        "ma20": round(ma20, 2) if ma20 else None,
-    }
+        return {
+            "symbol": stock_code,
+            "name": stock_name,
+            "price": round(latest_close, 2),
+            "change_percent": change_percent,
+            "volume": latest_volume,
+            "ma5": round(ma5, 2),
+            "ma20": round(ma20, 2),
+        }
 
+    except Exception as e:
+        return {
+            "symbol": symbol,
+            "name": symbol,
+            "price": None,
+            "change_percent": None,
+            "volume": None,
+            "ma5": None,
+            "ma20": None,
+            "error": str(e),
+        }
+
+
+# ===== 分析 =====
 
 def analyze_stock(data: dict) -> StockResult:
+    if "error" in data:
+        return StockResult(
+            symbol=data["symbol"],
+            name=data["name"],
+            price=None,
+            change_percent=None,
+            volume=None,
+            ma5=None,
+            ma20=None,
+            signal="錯誤",
+            reason=f"抓取失敗: {data['error']}",
+        )
+
     price = data["price"]
     ma5 = data["ma5"]
     ma20 = data["ma20"]
@@ -96,33 +136,29 @@ def analyze_stock(data: dict) -> StockResult:
     signal = "觀察"
     reasons = []
 
-    if price and ma5 and ma20:
-        if price > ma5 > ma20:
-            signal = "偏多"
-            reasons.append("股價站上 MA5 與 MA20")
-        elif price < ma5 < ma20:
-            signal = "偏空"
-            reasons.append("股價跌破 MA5 與 MA20")
-        else:
-            reasons.append("均線排列不明確")
+    # 均線判斷
+    if price > ma5 > ma20:
+        signal = "偏多"
+        reasons.append("股價站上 MA5 與 MA20")
+    elif price < ma5 < ma20:
+        signal = "偏空"
+        reasons.append("股價跌破 MA5 與 MA20")
+    else:
+        reasons.append("均線排列不明確")
 
-    if change_percent is not None:
-        if change_percent > 3:
-            reasons.append("當日漲幅偏強")
-            if signal == "觀察":
-                signal = "偏多"
-        elif change_percent < -3:
-            reasons.append("當日跌幅偏弱")
-            if signal == "觀察":
-                signal = "偏空"
-        else:
-            reasons.append("當日波動中性")
+    # 漲跌幅
+    if change_percent > 3:
+        reasons.append("當日漲幅偏強")
+    elif change_percent < -3:
+        reasons.append("當日跌幅偏弱")
+    else:
+        reasons.append("當日波動中性")
 
-    if volume is not None:
-        if volume > 3000000:
-            reasons.append("成交量活躍")
-        else:
-            reasons.append("成交量普通")
+    # 成交量
+    if volume > 3000000:
+        reasons.append("成交量活躍")
+    else:
+        reasons.append("成交量普通")
 
     return StockResult(
         symbol=data["symbol"],
@@ -136,6 +172,8 @@ def analyze_stock(data: dict) -> StockResult:
         reason="、".join(reasons),
     )
 
+
+# ===== API =====
 
 @app.get("/")
 def root():
@@ -155,27 +193,14 @@ def scan_stocks(request: ScanRequest):
     results = []
 
     for symbol in request.symbols:
-        try:
-            stock_data = fetch_stock_data(symbol)
-            if stock_data:
-                analyzed = analyze_stock(stock_data)
-                results.append(analyzed)
-        except Exception as e:
-            results.append(
-                StockResult(
-                    symbol=symbol,
-                    name=symbol,
-                    price=None,
-                    change_percent=None,
-                    volume=None,
-                    ma5=None,
-                    ma20=None,
-                    signal="錯誤",
-                    reason=f"抓取失敗: {str(e)}",
-                )
-            )
+        stock_data = fetch_stock_data(symbol)
 
-    signal_priority = {"偏多": 0, "觀察": 1, "偏空": 2, "錯誤": 3}
-    results.sort(key=lambda x: signal_priority.get(x.signal, 99))
+        if stock_data:
+            analyzed = analyze_stock(stock_data)
+            results.append(analyzed)
+
+    # 排序（偏多優先）
+    priority = {"偏多": 0, "觀察": 1, "偏空": 2, "錯誤": 3}
+    results.sort(key=lambda x: priority.get(x.signal, 99))
 
     return results
