@@ -1,12 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional, List
 import yfinance as yf
 import pandas as pd
-from typing import Optional, List
 
 app = FastAPI(title="TW Stock Screener API")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,17 +20,14 @@ class ScanRequest(BaseModel):
     symbols: Optional[List[str]] = None
 
 
-# 先用大型權值 + 常見熱門股當預設池
-# 之後你要我再幫你升級成全台股版
 DEFAULT_STOCKS = [
     "2330.TW", "2317.TW", "2454.TW", "2303.TW", "2603.TW",
     "1301.TW", "1802.TW", "2882.TW", "2881.TW", "2891.TW",
     "1101.TW", "1216.TW", "2002.TW", "3008.TW", "3034.TW",
     "3711.TW", "5880.TW", "5871.TW", "2382.TW", "2327.TW",
     "2408.TW", "2886.TW", "6505.TW", "2207.TW", "2615.TW",
-    "4904.TW", "3481.TW", "2357.TW", "2379.TW", "8069.TWO"
+    "4904.TW", "3481.TW", "2357.TW", "2379.TW"
 ]
-
 
 STOCK_NAME_MAP = {
     "2330": "台積電",
@@ -63,7 +59,6 @@ STOCK_NAME_MAP = {
     "3481": "群創",
     "2357": "華碩",
     "2379": "瑞昱",
-    "8069": "元太",
 }
 
 
@@ -73,7 +68,6 @@ def normalize_symbol(symbol: str) -> str:
         return ""
     if symbol.endswith(".TW") or symbol.endswith(".TWO"):
         return symbol
-    # 先預設上市
     return f"{symbol}.TW"
 
 
@@ -82,12 +76,12 @@ def get_stock_name(symbol: str) -> str:
     return STOCK_NAME_MAP.get(code, code)
 
 
-def safe_float(v, default=0.0):
+def safe_float(value, default=0.0):
     try:
-        if pd.isna(v):
+        if pd.isna(value):
             return default
-        return float(v)
-    except:
+        return float(value)
+    except Exception:
         return default
 
 
@@ -128,7 +122,6 @@ def analyze_stock(symbol: str):
         score = 0
         reasons = []
 
-        # 價格在均線之上
         if price > ma5:
             score += 2
             reasons.append("站上MA5")
@@ -139,7 +132,6 @@ def analyze_stock(symbol: str):
             score += 3
             reasons.append("站上MA20")
 
-        # 均線多頭排列
         if ma5 > ma10:
             score += 1
             reasons.append("MA5大於MA10")
@@ -147,12 +139,10 @@ def analyze_stock(symbol: str):
             score += 2
             reasons.append("MA10大於MA20")
 
-        # 量能
         if vol > vol5:
             score += 2
             reasons.append("成交量高於5日均量")
 
-        # 當日動能
         if change_percent > 0:
             score += 1
             reasons.append("今日收漲")
@@ -160,7 +150,6 @@ def analyze_stock(symbol: str):
             score += 1
             reasons.append("漲幅大於3%")
 
-        # 訊號分類
         if score >= 10:
             signal = "強勢多方"
         elif score >= 6:
@@ -199,7 +188,7 @@ def analyze_stock(symbol: str):
             "ma5": 0,
             "ma10": 0,
             "ma20": 0,
-            "signal": "資料錯誤",
+            "signal": "中性",
             "score": 0,
             "reason": f"錯誤: {str(e)}",
             "entry_price": 0,
@@ -225,8 +214,6 @@ def health():
 def scan_stocks(req: ScanRequest):
     raw_symbols = req.symbols if req.symbols else []
 
-    # 有輸入就分析輸入
-    # 沒輸入就掃預設池
     if raw_symbols:
         symbols = []
         for s in raw_symbols:
