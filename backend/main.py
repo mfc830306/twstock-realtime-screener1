@@ -1,15 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import statistics
+from datetime import datetime, timedelta
+import requests
+import time
 import math
-import twstock
+import csv
+import io
 
 
-app = FastAPI(title="TW Stock Realtime Screener")
-
+app = FastAPI(title="TW Stock Realtime Screener B")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,26 +26,45 @@ class ScanRequest(BaseModel):
     stocks: Optional[List[str]] = None
 
 
-def safe_float(value, default=0.0):
+SESSION = requests.Session()
+SESSION.headers.update(
+    {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://mis.twse.com.tw/stock/",
+    }
+)
+
+CACHE: Dict[str, Any] = {
+    "stock_list": {"ts": 0, "data": {}},
+    "history": {},
+    "full_scan": {"ts": 0, "data": []},
+}
+
+
+def now_ts() -> float:
+    return time.time()
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
             return default
         if isinstance(value, str):
             value = value.replace(",", "").strip()
-            if value == "-":
+            if value in ("", "-", "--"):
                 return default
         return float(value)
     except Exception:
         return default
 
 
-def safe_int(value, default=0):
+def safe_int(value: Any, default: int = 0) -> int:
     try:
         if value is None:
             return default
         if isinstance(value, str):
             value = value.replace(",", "").strip()
-            if value == "-":
+            if value in ("", "-", "--"):
                 return default
         return int(float(value))
     except Exception:
@@ -61,120 +82,226 @@ def mean_last(values: List[float], count: int) -> float:
     return round2(sum(cleaned[-count:]) / count)
 
 
-def get_all_tw_stocks() -> Dict[str, str]:
-    """
-    從 twstock.codes 取出台股股票池
-    只保留一般 4 位數股票，排除 ETF、權證、指數等非一般股票標的
-    """
-    result = {}
-
-    for code, info in twstock.codes.items():
-        try:
-            symbol = str(info.code).strip()
-            name = str(info.name).strip()
-            market = str(getattr(info, "market", "")).strip()
-            type_name = str(getattr(info, "type", "")).strip()
-
-            # 僅保留 4 位數
-            if not (symbol.isdigit() and len(symbol) == 4):
-                continue
-
-            # 僅保留股票
-            # twstock 常見 type 為 股票 / ETF / 指數 / 權證 ...
-            if type_name != "股票":
-                continue
-
-            # 僅保留上市 / 上櫃
-            if market not in ["上市", "上櫃"]:
-                continue
-
-            result[symbol] = name
-        except Exception:
-            continue
-
-    return dict(sorted(result.items(), key=lambda x: x[0]))
+def fetch_json(url: str, timeout: int = 20) -> Any:
+    res = SESSION.get(url, timeout=timeout)
+    res.raise_for_status()
+    return res.json()
 
 
-def get_realtime_data(symbol: str) -> Dict[str, Any]:
-    """
-    取即時資料
-    """
+def fetch_text(url: str, timeout: int = 20, encoding: Optional[str] = None) -> str:
+    res = SESSION.get(url, timeout=timeout)
+    res.raise_for_status()
+    if encoding:
+        res.encoding = encoding
+    return res.text
+
+
+def get_twse_stock_list() -> Dict[str, Dict[str, str]]:
+    url = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+    data = fetch_json(url)
+
+    result: Dict[str, Dict[str, str]] = {}
+
+    for item in data:
+        symbol = str(item.get("公司代號", "")).strip()
+        name = str(item.get("公司簡稱", "")).strip()
+
+        if symbol.isdigit() and len(symbol) == 4 and name:
+            result[symbol] = {
+                "name": name,
+                "market": "上市",
+                "source": "tse",
+            }
+
+    return result
+
+
+def get_tpex_stock_list() -> Dict[str, Dict[str, str]]:
+    # TPEX 公開資料 CSV
+    url = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+    data = fetch_json(url)
+
+    result: Dict[str, Dict[str, str]] = {}
+
+    for item in data:
+        symbol = str(item.get("SecuritiesCompanyCode", "")).strip()
+        name = str(item.get("CompanyName", "")).strip()
+
+        if symbol.isdigit() and len(symbol) == 4 and name:
+            result[symbol] = {
+                "name": name,
+                "market": "上櫃",
+                "source": "otc",
+            }
+
+    return result
+
+
+def get_all_tw_stocks() -> Dict[str, Dict[str, str]]:
+    cache = CACHE["stock_list"]
+    if now_ts() - cache["ts"] < 60 * 60 * 6 and cache["data"]:
+        return cache["data"]
+
+    all_map: Dict[str, Dict[str, str]] = {}
+    all_map.update(get_twse_stock_list())
+    all_map.update(get_tpex_stock_list())
+
+    all_map = dict(sorted(all_map.items(), key=lambda x: x[0]))
+    CACHE["stock_list"] = {"ts": now_ts(), "data": all_map}
+    return all_map
+
+
+def chunked(seq: List[str], size: int) -> List[List[str]]:
+    return [seq[i:i + size] for i in range(0, len(seq), size)]
+
+
+def build_ex_ch(symbols: List[str], stock_map: Dict[str, Dict[str, str]]) -> str:
+    parts = []
+    for symbol in symbols:
+        meta = stock_map.get(symbol, {})
+        prefix = "tse" if meta.get("source") == "tse" else "otc"
+        parts.append(f"{prefix}_{symbol}.tw")
+    return "|".join(parts)
+
+
+def fetch_realtime_batch(symbols: List[str], stock_map: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
+    if not symbols:
+        return {}
+
+    ex_ch = build_ex_ch(symbols, stock_map)
+    url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ex_ch}&json=1&delay=0"
+
     try:
-        realtime = twstock.realtime.get(symbol)
-
-        success = realtime.get("success", False)
-        if not success:
-            return {}
-
-        realtime_info = realtime.get("realtime", {}) or {}
-        info = realtime.get("info", {}) or {}
-
-        latest_trade_price = safe_float(realtime_info.get("latest_trade_price"))
-        open_price = safe_float(realtime_info.get("open"))
-        high_price = safe_float(realtime_info.get("high"))
-        low_price = safe_float(realtime_info.get("low"))
-        accumulated_volume = safe_int(realtime_info.get("accumulate_trade_volume"))
-        best_bid_price = realtime_info.get("best_bid_price", [])
-        best_ask_price = realtime_info.get("best_ask_price", [])
-
-        if latest_trade_price <= 0:
-            # 有些盤中資料可能 latest_trade_price 暫時空值，退而求其次
-            bid = safe_float(best_bid_price[0]) if best_bid_price else 0
-            ask = safe_float(best_ask_price[0]) if best_ask_price else 0
-            if bid > 0 and ask > 0:
-                latest_trade_price = round2((bid + ask) / 2)
-            elif bid > 0:
-                latest_trade_price = bid
-            elif ask > 0:
-                latest_trade_price = ask
-
-        return {
-            "name": info.get("name", ""),
-            "price": latest_trade_price,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "volume": accumulated_volume,
-        }
+        data = fetch_json(url, timeout=25)
+        rows = data.get("msgArray", []) or []
     except Exception:
         return {}
 
+    result: Dict[str, Dict[str, Any]] = {}
 
-def get_history_data(symbol: str):
-    """
-    抓歷史資料，計算 MA5 / MA20
-    """
-    try:
-        stock = twstock.Stock(symbol)
-        history = stock.fetch_from(2025, 1)
+    for row in rows:
+        symbol = str(row.get("c", "")).strip()
+        if not symbol:
+            continue
 
-        closes = []
-        volumes = []
+        price = safe_float(row.get("z"))
+        if price <= 0:
+            bid = safe_float(row.get("b", "").split("_")[0] if row.get("b") else 0)
+            ask = safe_float(row.get("a", "").split("_")[0] if row.get("a") else 0)
+            if bid > 0 and ask > 0:
+                price = round2((bid + ask) / 2)
+            elif bid > 0:
+                price = bid
+            elif ask > 0:
+                price = ask
 
-        for item in history:
-            close_price = safe_float(getattr(item, "close", 0))
-            volume = safe_int(getattr(item, "capacity", 0))
-            if close_price > 0:
-                closes.append(close_price)
-            if volume > 0:
-                volumes.append(volume)
+        prev_close = safe_float(row.get("y"))
+        volume = safe_int(row.get("v"))
+        if volume <= 0:
+            volume = safe_int(row.get("tv"))
 
-        ma5 = mean_last(closes, 5)
-        ma20 = mean_last(closes, 20)
-
-        return {
-            "closes": closes,
-            "volumes": volumes,
-            "ma5": ma5,
-            "ma20": ma20,
+        result[symbol] = {
+            "symbol": symbol,
+            "name": str(row.get("n", "")).strip() or stock_map.get(symbol, {}).get("name", ""),
+            "price": round2(price),
+            "prev_close": round2(prev_close),
+            "volume": volume,
         }
-    except Exception:
-        return {
-            "closes": [],
-            "volumes": [],
-            "ma5": 0.0,
-            "ma20": 0.0,
-        }
+
+    return result
+
+
+def get_recent_month_keys(month_count: int = 4) -> List[Tuple[int, int]]:
+    today = datetime.today()
+    year = today.year
+    month = today.month
+
+    result = []
+    for i in range(month_count):
+        y = year
+        m = month - i
+        while m <= 0:
+            y -= 1
+            m += 12
+        result.append((y, m))
+    return result
+
+
+def fetch_twse_history(symbol: str) -> List[float]:
+    closes: List[float] = []
+
+    for year, month in get_recent_month_keys(4):
+        date_str = f"{year}{month:02d}01"
+        url = f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={date_str}&stockNo={symbol}&response=json"
+        try:
+            data = fetch_json(url, timeout=20)
+            rows = data.get("data", []) or []
+            for row in rows:
+                if len(row) >= 7:
+                    close_price = safe_float(row[6])
+                    if close_price > 0:
+                        closes.append(close_price)
+        except Exception:
+            continue
+
+        if len(closes) >= 25:
+            break
+
+    return closes[-25:]
+
+
+def fetch_tpex_history(symbol: str) -> List[float]:
+    closes: List[float] = []
+
+    for year, month in get_recent_month_keys(4):
+        roc_year = year - 1911
+        date_str = f"{roc_year}/{month:02d}"
+        url = f"https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotesHis?code={symbol}&date={date_str}&response=json"
+        try:
+            data = fetch_json(url, timeout=20)
+            rows = data.get("tables", [])
+            if rows and isinstance(rows, list):
+                raw = rows[0].get("data", []) or []
+            else:
+                raw = data.get("aaData", []) or []
+
+            for row in raw:
+                if len(row) >= 7:
+                    close_price = safe_float(row[6])
+                    if close_price > 0:
+                        closes.append(close_price)
+        except Exception:
+            continue
+
+        if len(closes) >= 25:
+            break
+
+    return closes[-25:]
+
+
+def get_history_data(symbol: str, stock_map: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+    cache_key = f"history:{symbol}"
+    cache = CACHE["history"].get(cache_key)
+
+    if cache and now_ts() - cache["ts"] < 60 * 30:
+        return cache["data"]
+
+    meta = stock_map.get(symbol, {})
+    source = meta.get("source")
+
+    if source == "tse":
+        closes = fetch_twse_history(symbol)
+    else:
+        closes = fetch_tpex_history(symbol)
+
+    data = {
+        "closes": closes,
+        "ma5": mean_last(closes, 5),
+        "ma20": mean_last(closes, 20),
+    }
+
+    CACHE["history"][cache_key] = {"ts": now_ts(), "data": data}
+    return data
 
 
 def build_signal_and_reason(price: float, change_percent: float, volume: int, ma5: float, ma20: float):
@@ -230,29 +357,18 @@ def build_signal_and_reason(price: float, change_percent: float, volume: int, ma
     return signal, "、".join(reasons)
 
 
-def analyze_stock(symbol: str, name_map: Dict[str, str]) -> Optional[Dict[str, Any]]:
+def analyze_single_stock(symbol: str, realtime_item: Dict[str, Any], stock_map: Dict[str, Dict[str, str]]) -> Optional[Dict[str, Any]]:
     try:
-        realtime_data = get_realtime_data(symbol)
-        history_data = get_history_data(symbol)
-
-        price = safe_float(realtime_data.get("price"))
-        volume = safe_int(realtime_data.get("volume"))
-        ma5 = safe_float(history_data.get("ma5"))
-        ma20 = safe_float(history_data.get("ma20"))
+        price = safe_float(realtime_item.get("price"))
+        prev_close = safe_float(realtime_item.get("prev_close"))
+        volume = safe_int(realtime_item.get("volume"))
 
         if price <= 0:
             return None
 
-        prev_close_candidates = history_data.get("closes", [])
-        prev_close = 0.0
-
-        if len(prev_close_candidates) >= 1:
-            prev_close = safe_float(prev_close_candidates[-1])
-
-            # 如果最後一筆歷史剛好就是今天 close 或接近現價，仍可接受
-            # 但若前一收太異常則保守處理
-            if prev_close <= 0:
-                prev_close = 0.0
+        history = get_history_data(symbol, stock_map)
+        ma5 = safe_float(history.get("ma5"))
+        ma20 = safe_float(history.get("ma20"))
 
         change_percent = 0.0
         if prev_close > 0:
@@ -268,7 +384,7 @@ def analyze_stock(symbol: str, name_map: Dict[str, str]) -> Optional[Dict[str, A
 
         return {
             "symbol": symbol,
-            "name": realtime_data.get("name") or name_map.get(symbol, ""),
+            "name": realtime_item.get("name") or stock_map.get(symbol, {}).get("name", ""),
             "price": round2(price),
             "change_percent": round2(change_percent),
             "volume": volume,
@@ -283,7 +399,7 @@ def analyze_stock(symbol: str, name_map: Dict[str, str]) -> Optional[Dict[str, A
 
 @app.get("/")
 def root():
-    return {"message": "TW Stock Realtime Screener API is running"}
+    return {"message": "TW Stock Realtime Screener B API is running"}
 
 
 @app.get("/health")
@@ -293,34 +409,52 @@ def health():
 
 @app.post("/scan")
 def scan_stocks(req: ScanRequest):
-    name_map = get_all_tw_stocks()
+    stock_map = get_all_tw_stocks()
 
     if req.stocks and len(req.stocks) > 0:
         stock_list = []
         for s in req.stocks:
             symbol = str(s).strip()
-            if symbol.isdigit() and len(symbol) == 4:
+            if symbol.isdigit() and len(symbol) == 4 and symbol in stock_map:
                 stock_list.append(symbol)
         stock_list = list(dict.fromkeys(stock_list))
     else:
-        stock_list = list(name_map.keys())
+        # 全台股掃描結果快取 60 秒，避免重複壓爆 Render
+        full_cache = CACHE["full_scan"]
+        if now_ts() - full_cache["ts"] < 60 and full_cache["data"]:
+            return full_cache["data"]
+        stock_list = list(stock_map.keys())
 
-    results = []
+    if not stock_list:
+        return []
 
-    # 全台股一起掃，避免太慢，用執行緒加速
-    max_workers = 16 if len(stock_list) > 200 else 8
+    realtime_map: Dict[str, Dict[str, Any]] = {}
+
+    batch_size = 80
+    for batch in chunked(stock_list, batch_size):
+        realtime_map.update(fetch_realtime_batch(batch, stock_map))
+
+    # 沒拿到即時資料的股票先跳過
+    valid_symbols = [s for s in stock_list if s in realtime_map]
+
+    results: List[Dict[str, Any]] = []
+
+    max_workers = 16 if len(valid_symbols) > 200 else 8
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {
-            executor.submit(analyze_stock, symbol, name_map): symbol
-            for symbol in stock_list
+        futures = {
+            executor.submit(analyze_single_stock, symbol, realtime_map[symbol], stock_map): symbol
+            for symbol in valid_symbols
         }
 
-        for future in as_completed(future_map):
+        for future in as_completed(futures):
             item = future.result()
             if item:
                 results.append(item)
 
-    # 依股票代號排序，讓前端可自行再依分數排序
     results.sort(key=lambda x: x["symbol"])
+
+    if not req.stocks:
+        CACHE["full_scan"] = {"ts": now_ts(), "data": results}
+
     return results
