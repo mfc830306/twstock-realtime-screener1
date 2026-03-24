@@ -26,7 +26,8 @@ type StockCategory =
 type EnrichedStock = RawStock & {
   score: number;
   categoryTags: string[];
-  entryPrice: number;
+  entryPriceMin: number;
+  entryPriceMax: number;
   targetPrice: number;
   stopLossPrice: number;
 };
@@ -54,6 +55,11 @@ function round2(value: number) {
 
 function formatPrice(value: number) {
   return Number.isFinite(value) ? value.toFixed(2) : "-";
+}
+
+function formatPriceRange(min: number, max: number) {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return "-";
+  return `${min.toFixed(2)} ~ ${max.toFixed(2)}`;
 }
 
 function formatPercent(value?: number) {
@@ -115,30 +121,36 @@ function getTradePlan(stock: RawStock) {
   const ma20 = safeNumber(stock.ma20);
   const change = safeNumber(stock.change_percent);
 
-  let entry = price;
+  let entryMin = price * 0.99;
+  let entryMax = price * 1.01;
   let target = price * 1.08;
   let stop = price * 0.95;
 
   if (price > ma5 && price > ma20) {
-    entry = price;
+    entryMin = price * 0.99;
+    entryMax = price * 1.02;
     target = price * (change >= 3 ? 1.1 : 1.07);
     stop = ma5 > 0 ? ma5 * 0.985 : price * 0.95;
   } else if (price >= ma20 && price <= ma20 * 1.03) {
-    entry = ma20;
+    entryMin = ma20 * 0.995;
+    entryMax = ma20 * 1.02;
     target = price * 1.06;
     stop = ma20 * 0.97;
   } else if (price < ma5 && price < ma20) {
-    entry = price;
+    entryMin = price * 0.985;
+    entryMax = price * 1.005;
     target = price * 1.03;
     stop = price * 0.96;
   } else {
-    entry = price;
+    entryMin = price * 0.99;
+    entryMax = price * 1.015;
     target = price * 1.05;
     stop = ma20 > 0 ? ma20 * 0.97 : price * 0.95;
   }
 
   return {
-    entryPrice: round2(entry),
+    entryPriceMin: round2(entryMin),
+    entryPriceMax: round2(entryMax),
     targetPrice: round2(target),
     stopLossPrice: round2(stop),
   };
@@ -178,6 +190,12 @@ function getFilteredStocks(stocks: EnrichedStock[], category: StockCategory) {
   }
 }
 
+function getScoreClass(score: number) {
+  if (score >= 80) return "score-high";
+  if (score >= 60) return "score-mid";
+  return "score-low";
+}
+
 export default function Page() {
   const [stockInput, setStockInput] = useState("");
   const [allStocks, setAllStocks] = useState<EnrichedStock[]>([]);
@@ -202,11 +220,7 @@ export default function Page() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(
-          symbols.length > 0
-            ? { stocks: symbols }
-            : {}
-        ),
+        body: JSON.stringify(symbols.length > 0 ? { stocks: symbols } : {}),
       });
 
       if (!response.ok) {
@@ -295,11 +309,7 @@ export default function Page() {
               />
             </div>
 
-            <button
-              className="primary-button"
-              onClick={fetchStocks}
-              disabled={loading}
-            >
+            <button className="primary-button" onClick={fetchStocks} disabled={loading}>
               {loading ? "載入中..." : "立即掃描"}
             </button>
           </div>
@@ -343,9 +353,7 @@ export default function Page() {
         </div>
       </section>
 
-      {error ? (
-        <section className="message-card error-card">{error}</section>
-      ) : null}
+      {error ? <section className="message-card error-card">{error}</section> : null}
 
       {!loading && loaded && filteredStocks.length === 0 ? (
         <section className="message-card">查無符合條件的股票資料</section>
@@ -365,7 +373,7 @@ export default function Page() {
               <th>MA20</th>
               <th>訊號</th>
               <th>推薦分數</th>
-              <th>進場價</th>
+              <th>建議進場區間</th>
               <th>出場價</th>
               <th>停損價</th>
               <th>判斷理由</th>
@@ -394,9 +402,11 @@ export default function Page() {
                 <td className="mono">{formatPrice(safeNumber(stock.ma20))}</td>
                 <td>{stock.signal || "-"}</td>
                 <td>
-                  <span className="score-badge">{stock.score}</span>
+                  <span className={`score-badge ${getScoreClass(stock.score)}`}>{stock.score}</span>
                 </td>
-                <td className="mono highlight">{formatPrice(stock.entryPrice)}</td>
+                <td className="mono highlight">
+                  {formatPriceRange(stock.entryPriceMin, stock.entryPriceMax)}
+                </td>
                 <td className="mono take-profit">{formatPrice(stock.targetPrice)}</td>
                 <td className="mono stop-loss">{formatPrice(stock.stopLossPrice)}</td>
                 <td className="reason-cell">{stock.reason || "-"}</td>
@@ -417,7 +427,8 @@ export default function Page() {
                 </div>
                 <div className="stock-signal">{stock.signal || "-"}</div>
               </div>
-              <div className="score-badge large">{stock.score}</div>
+
+              <div className={`score-badge large ${getScoreClass(stock.score)}`}>{stock.score}</div>
             </div>
 
             <div className="stock-grid">
@@ -450,8 +461,10 @@ export default function Page() {
                 </span>
               </div>
               <div>
-                <span className="field-label">進場價</span>
-                <span className="field-value highlight">{formatPrice(stock.entryPrice)}</span>
+                <span className="field-label">建議進場區間</span>
+                <span className="field-value highlight">
+                  {formatPriceRange(stock.entryPriceMin, stock.entryPriceMax)}
+                </span>
               </div>
               <div>
                 <span className="field-label">出場價</span>
