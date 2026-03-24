@@ -9,6 +9,7 @@ type StockItem = {
   change_percent?: number;
   volume?: number;
   ma5?: number;
+  ma10?: number;
   ma20?: number;
   signal: string;
   reason?: string;
@@ -53,6 +54,7 @@ export default function Home() {
 
       const data = await response.json();
       setResults(Array.isArray(data) ? data : []);
+      setActiveTab("全部");
     } catch (err: any) {
       setError(err?.message || "系統發生錯誤");
       setResults([]);
@@ -70,9 +72,7 @@ export default function Home() {
     const total = results.length;
     const strong = results.filter((r) => r.signal === "強勢多方").length;
     const watch = results.filter((r) => r.signal === "偏多觀察").length;
-    const neutral = results.filter(
-      (r) => r.signal !== "強勢多方" && r.signal !== "偏多觀察"
-    ).length;
+    const neutral = results.filter((r) => r.signal === "中性").length;
 
     return { total, strong, watch, neutral };
   }, [results]);
@@ -140,7 +140,7 @@ export default function Home() {
           <StatCard label="總結果數" value={stats.total} />
           <StatCard label="強勢多方" value={stats.strong} />
           <StatCard label="偏多觀察" value={stats.watch} />
-          <StatCard label="其他/中性" value={stats.neutral} />
+          <StatCard label="中性" value={stats.neutral} />
         </section>
 
         <section style={styles.panel}>
@@ -174,9 +174,7 @@ export default function Home() {
             </div>
           ) : null}
 
-          {loading ? (
-            <div style={styles.emptyBox}>資料載入中...</div>
-          ) : null}
+          {loading ? <div style={styles.emptyBox}>資料載入中...</div> : null}
 
           {!loading && filteredResults.length > 0 ? (
             <div style={styles.tableOuter}>
@@ -188,6 +186,7 @@ export default function Home() {
                     <th style={styles.th}>現價</th>
                     <th style={styles.th}>漲跌幅</th>
                     <th style={styles.th}>訊號</th>
+                    <th style={styles.th}>分數</th>
                     <th style={styles.th}>進場</th>
                     <th style={styles.th}>停損</th>
                     <th style={styles.th}>出場</th>
@@ -237,6 +236,7 @@ export default function Home() {
                             {s.signal}
                           </span>
                         </td>
+                        <td style={styles.td}>{s.score ?? "-"}</td>
                         <td style={styles.td}>{entry}</td>
                         <td style={{ ...styles.td, color: "#DC2626", fontWeight: 700 }}>
                           {stop}
@@ -244,7 +244,7 @@ export default function Home() {
                         <td style={{ ...styles.td, color: "#059669", fontWeight: 700 }}>
                           {target}
                         </td>
-                        <td style={{ ...styles.td, minWidth: 220 }}>
+                        <td style={{ ...styles.td, minWidth: 240 }}>
                           {s.reason || "-"}
                         </td>
                       </tr>
@@ -462,7 +462,7 @@ const styles: Record<string, React.CSSProperties> = {
   table: {
     width: "100%",
     borderCollapse: "collapse",
-    minWidth: "980px",
+    minWidth: "1080px",
     background: "#FFFFFF",
   },
   th: {
