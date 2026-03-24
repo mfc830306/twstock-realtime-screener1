@@ -5,6 +5,7 @@ from typing import List, Optional, Dict
 import yfinance as yf
 import requests
 import time
+import pandas as pd
 
 app = FastAPI(title="Taiwan Stock Screener API")
 
@@ -16,16 +17,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 官方資料來源：
-# TWSE OpenAPI / TPEx OpenAPI
 TWSE_STOCK_LIST_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 TPEX_OTC_LIST_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
 TPEX_ESB_LIST_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R"
 
-# 啟動後動態載入的股票名稱表
 STOCK_NAMES: Dict[str, str] = {}
 
-# 少量預設備援，避免官方清單暫時失敗時整個沒中文
 FALLBACK_STOCK_NAMES = {
     "2330": "台積電",
     "2317": "鴻海",
@@ -37,7 +34,7 @@ FALLBACK_STOCK_NAMES = {
 }
 
 _LAST_REFRESH_TS = 0.0
-_REFRESH_INTERVAL_SECONDS = 60 * 60 * 6  # 6 小時更新一次
+_REFRESH_INTERVAL_SECONDS = 60 * 60 * 6  # 6小時更新一次
 
 
 class ScanRequest(BaseModel):
@@ -82,7 +79,6 @@ def _safe_get_json(url: str):
 def _extract_code_name(records: list) -> Dict[str, str]:
     result: Dict[str, str] = {}
 
-    # 官方欄位名稱偶爾會有差異，所以做容錯
     code_keys = ["公司代號", "股票代號", "代號", "SecuritiesCompanyCode", "Code"]
     name_keys = ["公司簡稱", "公司名稱", "名稱", "CompanyName", "Name"]
 
@@ -119,9 +115,9 @@ def refresh_stock_names(force: bool = False) -> int:
     merged: Dict[str, str] = {}
 
     urls = [
-        TWSE_STOCK_LIST_URL,   # 上市
-        TPEX_OTC_LIST_URL,     # 上櫃
-        TPEX_ESB_LIST_URL,     # 興櫃
+        TWSE_STOCK_LIST_URL,
+        TPEX_OTC_LIST_URL,
+        TPEX_ESB_LIST_URL,
     ]
 
     for url in urls:
@@ -129,10 +125,8 @@ def refresh_stock_names(force: bool = False) -> int:
             data = _safe_get_json(url)
             merged.update(_extract_code_name(data))
         except Exception:
-            # 某一個來源失敗時，不要讓整個 API 掛掉
             continue
 
-    # 保障至少有基本名稱
     merged.update(FALLBACK_STOCK_NAMES)
 
     STOCK_NAMES = merged
@@ -152,8 +146,35 @@ def fetch_stock_data(symbol: str):
 
     try:
         ticker = yf.Ticker(tw_symbol)
-        hist = ticker.history(period="3mo")
+        hist = ticker.history(period="3mo", auto_adjust=False)
 
+        # 1. 防止 hist 是 None
+        if hist is None:
+            return {
+                "symbol": stock_code,
+                "name": stock_name,
+                "price": None,
+                "change_percent": None,
+                "volume": None,
+                "ma5": None,
+                "ma20": None,
+                "error": "查無歷史資料（hist is None）",
+            }
+
+        # 2. 防止 hist 不是 DataFrame
+        if not isinstance(hist, pd.DataFrame):
+            return {
+                "symbol": stock_code,
+                "name": stock_name,
+                "price": None,
+                "change_percent": None,
+                "volume": None,
+                "ma5": None,
+                "ma20": None,
+                "error": "歷史資料格式錯誤",
+            }
+
+        # 3. 防止空資料
         if hist.empty:
             return {
                 "symbol": stock_code,
@@ -166,7 +187,34 @@ def fetch_stock_data(symbol: str):
                 "error": "查無歷史資料",
             }
 
-        hist = hist.dropna().copy()
+        # 4. 防止缺欄位
+        required_columns = {"Close", "Volume"}
+        if not required_columns.issubset(set(hist.columns)):
+            return {
+                "symbol": stock_code,
+                "name": stock_name,
+                "price": None,
+                "change_percent": None,
+                "volume": None,
+                "ma5": None,
+                "ma20": None,
+                "error": f"缺少必要欄位: {list(required_columns - set(hist.columns))}",
+            }
+
+        hist = hist.dropna(subset=["Close", "Volume"]).copy()
+
+        if hist.empty:
+            return {
+                "symbol": stock_code,
+                "name": stock_name,
+                "price": None,
+                "change_percent": None,
+                "volume": None,
+                "ma5": None,
+                "ma20": None,
+                "error": "清理後無有效資料",
+            }
+
         if len(hist) < 20:
             return {
                 "symbol": stock_code,
@@ -182,6 +230,18 @@ def fetch_stock_data(symbol: str):
         close = hist["Close"]
         volume = hist["Volume"]
 
+        if close is None or volume is None:
+            return {
+                "symbol": stock_code,
+                "name": stock_name,
+                "price": None,
+                "change_percent": None,
+                "volume": None,
+                "ma5": None,
+                "ma20": None,
+                "error": "Close 或 Volume 為空",
+            }
+
         latest_close = float(close.iloc[-1])
         prev_close = float(close.iloc[-2])
         latest_volume = int(volume.iloc[-1])
@@ -189,7 +249,10 @@ def fetch_stock_data(symbol: str):
         ma5 = float(close.tail(5).mean())
         ma20 = float(close.tail(20).mean())
 
-        change_percent = round((latest_close - prev_close) / prev_close * 100, 2)
+        if prev_close == 0:
+            change_percent = 0.0
+        else:
+            change_percent = round((latest_close - prev_close) / prev_close * 100, 2)
 
         return {
             "symbol": stock_code,
