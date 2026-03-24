@@ -1,13 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from pydantic import BaseModel
 import yfinance as yf
-import requests
-import time
 import pandas as pd
+from typing import Optional, List
 
-app = FastAPI(title="Taiwan Stock Screener API")
+app = FastAPI(title="TW Stock Screener API")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,13 +16,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TWSE_STOCK_LIST_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
-TPEX_OTC_LIST_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
-TPEX_ESB_LIST_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R"
 
-STOCK_NAMES: Dict[str, str] = {}
+class ScanRequest(BaseModel):
+    symbols: Optional[List[str]] = None
 
-FALLBACK_STOCK_NAMES = {
+
+# 先用大型權值 + 常見熱門股當預設池
+# 之後你要我再幫你升級成全台股版
+DEFAULT_STOCKS = [
+    "2330.TW", "2317.TW", "2454.TW", "2303.TW", "2603.TW",
+    "1301.TW", "1802.TW", "2882.TW", "2881.TW", "2891.TW",
+    "1101.TW", "1216.TW", "2002.TW", "3008.TW", "3034.TW",
+    "3711.TW", "5880.TW", "5871.TW", "2382.TW", "2327.TW",
+    "2408.TW", "2886.TW", "6505.TW", "2207.TW", "2615.TW",
+    "4904.TW", "3481.TW", "2357.TW", "2379.TW", "8069.TWO"
+]
+
+
+STOCK_NAME_MAP = {
     "2330": "台積電",
     "2317": "鴻海",
     "2454": "聯發科",
@@ -31,317 +41,178 @@ FALLBACK_STOCK_NAMES = {
     "2603": "長榮",
     "1301": "台塑",
     "1802": "台玻",
+    "2882": "國泰金",
+    "2881": "富邦金",
+    "2891": "中信金",
+    "1101": "台泥",
+    "1216": "統一",
+    "2002": "中鋼",
+    "3008": "大立光",
+    "3034": "聯詠",
+    "3711": "日月光投控",
+    "5880": "合庫金",
+    "5871": "中租-KY",
+    "2382": "廣達",
+    "2327": "國巨",
+    "2408": "南亞科",
+    "2886": "兆豐金",
+    "6505": "台塑化",
+    "2207": "和泰車",
+    "2615": "萬海",
+    "4904": "遠傳",
+    "3481": "群創",
+    "2357": "華碩",
+    "2379": "瑞昱",
+    "8069": "元太",
 }
-
-_LAST_REFRESH_TS = 0.0
-_REFRESH_INTERVAL_SECONDS = 60 * 60 * 6  # 6小時更新一次
-
-
-class ScanRequest(BaseModel):
-    symbols: List[str] = Field(
-        default=["2330", "2317", "2454", "2303", "2603", "1301", "1802"]
-    )
-
-
-class StockResult(BaseModel):
-    symbol: str
-    name: str
-    price: Optional[float]
-    change_percent: Optional[float]
-    volume: Optional[int]
-    ma5: Optional[float]
-    ma20: Optional[float]
-    signal: str
-    reason: str
 
 
 def normalize_symbol(symbol: str) -> str:
-    symbol = symbol.strip().replace(".TW", "").replace(".TWO", "")
-    if symbol.isdigit():
-        return f"{symbol}.TW"
-    return symbol
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return ""
+    if symbol.endswith(".TW") or symbol.endswith(".TWO"):
+        return symbol
+    # 先預設上市
+    return f"{symbol}.TW"
 
 
-def get_stock_code(symbol: str) -> str:
-    return symbol.replace(".TW", "").replace(".TWO", "").strip()
+def get_stock_name(symbol: str) -> str:
+    code = symbol.replace(".TW", "").replace(".TWO", "")
+    return STOCK_NAME_MAP.get(code, code)
 
 
-def get_stock_name(stock_code: str) -> str:
-    return STOCK_NAMES.get(stock_code, FALLBACK_STOCK_NAMES.get(stock_code, stock_code))
-
-
-def _safe_get_json(url: str):
-    resp = requests.get(url, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _extract_code_name(records: list) -> Dict[str, str]:
-    result: Dict[str, str] = {}
-
-    code_keys = ["公司代號", "股票代號", "代號", "SecuritiesCompanyCode", "Code"]
-    name_keys = ["公司簡稱", "公司名稱", "名稱", "CompanyName", "Name"]
-
-    for row in records:
-        if not isinstance(row, dict):
-            continue
-
-        code = None
-        name = None
-
-        for k in code_keys:
-            if k in row and str(row[k]).strip():
-                code = str(row[k]).strip()
-                break
-
-        for k in name_keys:
-            if k in row and str(row[k]).strip():
-                name = str(row[k]).strip()
-                break
-
-        if code and name and code.isdigit():
-            result[code] = name
-
-    return result
-
-
-def refresh_stock_names(force: bool = False) -> int:
-    global STOCK_NAMES, _LAST_REFRESH_TS
-
-    now = time.time()
-    if not force and STOCK_NAMES and (now - _LAST_REFRESH_TS < _REFRESH_INTERVAL_SECONDS):
-        return len(STOCK_NAMES)
-
-    merged: Dict[str, str] = {}
-
-    urls = [
-        TWSE_STOCK_LIST_URL,
-        TPEX_OTC_LIST_URL,
-        TPEX_ESB_LIST_URL,
-    ]
-
-    for url in urls:
-        try:
-            data = _safe_get_json(url)
-            merged.update(_extract_code_name(data))
-        except Exception:
-            continue
-
-    merged.update(FALLBACK_STOCK_NAMES)
-
-    STOCK_NAMES = merged
-    _LAST_REFRESH_TS = now
-    return len(STOCK_NAMES)
-
-
-@app.on_event("startup")
-def startup_load_stock_names():
-    refresh_stock_names(force=True)
-
-
-def fetch_stock_data(symbol: str):
-    tw_symbol = normalize_symbol(symbol)
-    stock_code = get_stock_code(tw_symbol)
-    stock_name = get_stock_name(stock_code)
-
+def safe_float(v, default=0.0):
     try:
-        ticker = yf.Ticker(tw_symbol)
-        hist = ticker.history(period="3mo", auto_adjust=False)
+        if pd.isna(v):
+            return default
+        return float(v)
+    except:
+        return default
 
-        # 1. 防止 hist 是 None
-        if hist is None:
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": "查無歷史資料（hist is None）",
-            }
 
-        # 2. 防止 hist 不是 DataFrame
-        if not isinstance(hist, pd.DataFrame):
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": "歷史資料格式錯誤",
-            }
+def analyze_stock(symbol: str):
+    try:
+        df = yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=False)
 
-        # 3. 防止空資料
-        if hist.empty:
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": "查無歷史資料",
-            }
+        if df.empty or len(df) < 25:
+            return None
 
-        # 4. 防止缺欄位
-        required_columns = {"Close", "Volume"}
-        if not required_columns.issubset(set(hist.columns)):
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": f"缺少必要欄位: {list(required_columns - set(hist.columns))}",
-            }
+        close_series = df["Close"]
+        volume_series = df["Volume"]
 
-        hist = hist.dropna(subset=["Close", "Volume"]).copy()
+        if isinstance(close_series, pd.DataFrame):
+            close_series = close_series.iloc[:, 0]
+        if isinstance(volume_series, pd.DataFrame):
+            volume_series = volume_series.iloc[:, 0]
 
-        if hist.empty:
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": "清理後無有效資料",
-            }
+        close_series = close_series.dropna()
+        volume_series = volume_series.dropna()
 
-        if len(hist) < 20:
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": "歷史資料不足 20 筆",
-            }
+        if len(close_series) < 25 or len(volume_series) < 25:
+            return None
 
-        close = hist["Close"]
-        volume = hist["Volume"]
+        price = safe_float(close_series.iloc[-1])
+        prev_price = safe_float(close_series.iloc[-2])
+        ma5 = safe_float(close_series.rolling(5).mean().iloc[-1])
+        ma10 = safe_float(close_series.rolling(10).mean().iloc[-1])
+        ma20 = safe_float(close_series.rolling(20).mean().iloc[-1])
+        vol = safe_float(volume_series.iloc[-1])
+        vol5 = safe_float(volume_series.rolling(5).mean().iloc[-1])
 
-        if close is None or volume is None:
-            return {
-                "symbol": stock_code,
-                "name": stock_name,
-                "price": None,
-                "change_percent": None,
-                "volume": None,
-                "ma5": None,
-                "ma20": None,
-                "error": "Close 或 Volume 為空",
-            }
-
-        latest_close = float(close.iloc[-1])
-        prev_close = float(close.iloc[-2])
-        latest_volume = int(volume.iloc[-1])
-
-        ma5 = float(close.tail(5).mean())
-        ma20 = float(close.tail(20).mean())
-
-        if prev_close == 0:
-            change_percent = 0.0
+        if prev_price == 0:
+            change_percent = 0
         else:
-            change_percent = round((latest_close - prev_close) / prev_close * 100, 2)
+            change_percent = round((price - prev_price) / prev_price * 100, 2)
+
+        score = 0
+        reasons = []
+
+        # 價格在均線之上
+        if price > ma5:
+            score += 2
+            reasons.append("站上MA5")
+        if price > ma10:
+            score += 2
+            reasons.append("站上MA10")
+        if price > ma20:
+            score += 3
+            reasons.append("站上MA20")
+
+        # 均線多頭排列
+        if ma5 > ma10:
+            score += 1
+            reasons.append("MA5大於MA10")
+        if ma10 > ma20:
+            score += 2
+            reasons.append("MA10大於MA20")
+
+        # 量能
+        if vol > vol5:
+            score += 2
+            reasons.append("成交量高於5日均量")
+
+        # 當日動能
+        if change_percent > 0:
+            score += 1
+            reasons.append("今日收漲")
+        if change_percent > 3:
+            score += 1
+            reasons.append("漲幅大於3%")
+
+        # 訊號分類
+        if score >= 10:
+            signal = "強勢多方"
+        elif score >= 6:
+            signal = "偏多觀察"
+        else:
+            signal = "中性"
+
+        entry_price = round(price, 2)
+        stop_loss = round(price * 0.97, 2)
+        target_price = round(price * 1.05, 2)
 
         return {
-            "symbol": stock_code,
-            "name": stock_name,
-            "price": round(latest_close, 2),
+            "symbol": symbol.replace(".TW", "").replace(".TWO", ""),
+            "name": get_stock_name(symbol),
+            "price": round(price, 2),
             "change_percent": change_percent,
-            "volume": latest_volume,
+            "volume": int(vol),
             "ma5": round(ma5, 2),
+            "ma10": round(ma10, 2),
             "ma20": round(ma20, 2),
+            "signal": signal,
+            "score": score,
+            "reason": "、".join(reasons) if reasons else "無明確訊號",
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "target_price": target_price,
         }
 
     except Exception as e:
         return {
-            "symbol": stock_code,
-            "name": stock_name,
-            "price": None,
-            "change_percent": None,
-            "volume": None,
-            "ma5": None,
-            "ma20": None,
-            "error": str(e),
+            "symbol": symbol.replace(".TW", "").replace(".TWO", ""),
+            "name": get_stock_name(symbol),
+            "price": 0,
+            "change_percent": 0,
+            "volume": 0,
+            "ma5": 0,
+            "ma10": 0,
+            "ma20": 0,
+            "signal": "資料錯誤",
+            "score": 0,
+            "reason": f"錯誤: {str(e)}",
+            "entry_price": 0,
+            "stop_loss": 0,
+            "target_price": 0,
         }
-
-
-def analyze_stock(data: dict) -> StockResult:
-    if "error" in data and data["error"]:
-        return StockResult(
-            symbol=data["symbol"],
-            name=data["name"],
-            price=data["price"],
-            change_percent=data["change_percent"],
-            volume=data["volume"],
-            ma5=data["ma5"],
-            ma20=data["ma20"],
-            signal="錯誤",
-            reason=f"抓取失敗: {data['error']}",
-        )
-
-    price = data["price"]
-    ma5 = data["ma5"]
-    ma20 = data["ma20"]
-    volume = data["volume"]
-    change_percent = data["change_percent"]
-
-    signal = "觀察"
-    reasons = []
-
-    if price is not None and ma5 is not None and ma20 is not None:
-        if price > ma5 > ma20:
-            signal = "偏多"
-            reasons.append("股價站上 MA5 與 MA20")
-        elif price < ma5 < ma20:
-            signal = "偏空"
-            reasons.append("股價跌破 MA5 與 MA20")
-        else:
-            reasons.append("均線排列不明確")
-
-    if change_percent is not None:
-        if change_percent > 3:
-            reasons.append("當日漲幅偏強")
-        elif change_percent < -3:
-            reasons.append("當日跌幅偏弱")
-        else:
-            reasons.append("當日波動中性")
-
-    if volume is not None:
-        if volume > 3_000_000:
-            reasons.append("成交量活躍")
-        else:
-            reasons.append("成交量普通")
-
-    return StockResult(
-        symbol=data["symbol"],
-        name=data["name"],
-        price=price,
-        change_percent=change_percent,
-        volume=volume,
-        ma5=ma5,
-        ma20=ma20,
-        signal=signal,
-        reason="、".join(reasons),
-    )
 
 
 @app.get("/")
 def root():
     return {
-        "message": "Taiwan Stock Screener API is running",
-        "endpoints": ["/health", "/scan", "/stock-names/status"],
+        "message": "TW Stock Screener API is running",
+        "mode": "default pool top 10"
     }
 
 
@@ -350,29 +221,31 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/stock-names/status")
-def stock_names_status():
-    count = refresh_stock_names(force=False)
-    return {
-        "loaded_count": count,
-        "sample": {
-            "2330": get_stock_name("2330"),
-            "2317": get_stock_name("2317"),
-            "1802": get_stock_name("1802"),
-        },
-    }
+@app.post("/scan")
+def scan_stocks(req: ScanRequest):
+    raw_symbols = req.symbols if req.symbols else []
 
-
-@app.post("/scan", response_model=List[StockResult])
-def scan_stocks(request: ScanRequest):
-    refresh_stock_names(force=False)
+    # 有輸入就分析輸入
+    # 沒輸入就掃預設池
+    if raw_symbols:
+        symbols = []
+        for s in raw_symbols:
+            s = normalize_symbol(s)
+            if s:
+                symbols.append(s)
+    else:
+        symbols = DEFAULT_STOCKS
 
     results = []
-    for symbol in request.symbols:
-        stock_data = fetch_stock_data(symbol)
-        analyzed = analyze_stock(stock_data)
-        results.append(analyzed)
+    for symbol in symbols:
+        r = analyze_stock(symbol)
+        if r:
+            results.append(r)
 
-    priority = {"偏多": 0, "觀察": 1, "偏空": 2, "錯誤": 3}
-    results.sort(key=lambda x: priority.get(x.signal, 99))
+    results = sorted(
+        results,
+        key=lambda x: (x["score"], x["change_percent"], x["volume"]),
+        reverse=True
+    )[:10]
+
     return results
