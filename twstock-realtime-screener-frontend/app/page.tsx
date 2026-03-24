@@ -200,7 +200,6 @@ export default function Page() {
   const [stockInput, setStockInput] = useState("");
   const [allStocks, setAllStocks] = useState<EnrichedStock[]>([]);
   const [activeCategory, setActiveCategory] = useState<StockCategory>("top10");
-  const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -253,20 +252,8 @@ export default function Page() {
   }, []);
 
   const filteredStocks = useMemo(() => {
-    const byCategory = getFilteredStocks(allStocks, activeCategory);
-
-    if (!keyword.trim()) return byCategory;
-
-    const q = keyword.trim().toLowerCase();
-    return byCategory.filter((stock) => {
-      return (
-        stock.symbol.toLowerCase().includes(q) ||
-        (stock.name || "").toLowerCase().includes(q) ||
-        (stock.signal || "").toLowerCase().includes(q) ||
-        (stock.reason || "").toLowerCase().includes(q)
-      );
-    });
-  }, [allStocks, activeCategory, keyword]);
+    return getFilteredStocks(allStocks, activeCategory);
+  }, [allStocks, activeCategory]);
 
   const stats = useMemo(() => {
     const total = allStocks.length;
@@ -289,7 +276,7 @@ export default function Page() {
 
         <div className="control-panel">
           <div className="input-group">
-            <label className="input-label">指定股票代號（可留空，留空則掃描後端預設清單）</label>
+            <label className="input-label">指定股票代號（可留空，留空則掃描全部台股）</label>
             <textarea
               className="stock-textarea"
               value={stockInput}
@@ -298,17 +285,7 @@ export default function Page() {
             />
           </div>
 
-          <div className="toolbar">
-            <div className="search-box">
-              <input
-                className="search-input"
-                type="text"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                placeholder="搜尋代號、名稱、訊號、理由"
-              />
-            </div>
-
+          <div className="action-row">
             <button className="primary-button" onClick={fetchStocks} disabled={loading}>
               {loading ? "載入中..." : "立即掃描"}
             </button>
