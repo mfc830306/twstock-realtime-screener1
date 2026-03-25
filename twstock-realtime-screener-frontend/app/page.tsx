@@ -20,26 +20,6 @@ type StockResult = {
 
 const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 
-function trendClass(trend: string) {
-  if (trend.includes("強勢")) {
-    return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  }
-  if (trend.includes("弱勢")) {
-    return "bg-rose-50 text-rose-700 border-rose-200";
-  }
-  return "bg-amber-50 text-amber-700 border-amber-200";
-}
-
-function scoreClass(score: number) {
-  if (score >= 75) return "text-emerald-600";
-  if (score >= 50) return "text-amber-600";
-  return "text-rose-600";
-}
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat("zh-TW").format(value);
-}
-
 export default function Home() {
   const [stockInput, setStockInput] = useState("2330,2317,2454");
   const [results, setResults] = useState<StockResult[]>([]);
@@ -98,7 +78,7 @@ export default function Home() {
       const data = await res.json();
       setResults(Array.isArray(data) ? data : []);
       setTab("全部");
-    } catch (e) {
+    } catch {
       setError("讀取資料失敗，請稍後再試");
       setResults([]);
     } finally {
@@ -119,7 +99,7 @@ export default function Home() {
       const data = await res.json();
       setResults(Array.isArray(data) ? data : []);
       setTab("全部");
-    } catch (e) {
+    } catch {
       setError("全台股掃描失敗，請稍後再試");
       setResults([]);
     } finally {
@@ -131,114 +111,77 @@ export default function Home() {
     fetchScan();
   }, []);
 
+  const strongCount = results.filter((x) => x.trend.includes("強勢")).length;
+  const weakCount = results.filter((x) => x.trend.includes("弱勢")).length;
+  const neutralCount = results.filter(
+    (x) =>
+      x.trend.includes("中性") &&
+      !x.trend.includes("強勢") &&
+      !x.trend.includes("弱勢")
+  ).length;
+
   return (
-    <main className="min-h-screen bg-slate-100">
-      <div className="mx-auto max-w-7xl px-4 py-6 md:px-6 lg:px-8">
-        <section className="mb-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <div className="flex flex-col gap-4">
-            <div>
-              <div className="mb-3 inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
-                台股即時選股系統 2.0
-              </div>
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900 md:text-5xl">
-                TW Stock Realtime Screener
-              </h1>
-              <p className="mt-3 text-sm text-slate-500 md:text-base">
-                顯示推薦分數、進場區間、停損與出場價，快速找出較強勢個股。
-              </p>
-            </div>
+    <main className="page">
+      <div className="container">
+        <section className="hero">
+          <div className="badge">台股智慧選股系統</div>
+          <h1 className="title">TW Stock Realtime Screener</h1>
+          <p className="subtitle">
+            顯示推薦分數、進場區間、停損與出場價，快速找出較強勢個股。
+          </p>
 
-            <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
-              <input
-                value={stockInput}
-                onChange={(e) => setStockInput(e.target.value)}
-                placeholder="例如：2330, 2317, 2454"
-                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-blue-500"
-              />
-              <button
-                onClick={fetchScan}
-                disabled={loading}
-                className="rounded-2xl bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loading ? "掃描中..." : "掃描指定股票"}
-              </button>
-              <button
-                onClick={fetchScanAll}
-                disabled={loadingAll}
-                className="rounded-2xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loadingAll ? "掃描中..." : "全台股 Top 30"}
-              </button>
-            </div>
-
-            {error ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {error}
-              </div>
-            ) : null}
+          <div className="searchRow">
+            <input
+              value={stockInput}
+              onChange={(e) => setStockInput(e.target.value)}
+              placeholder="例如：2330, 2317, 2454"
+              className="input"
+            />
+            <button onClick={fetchScan} disabled={loading} className="btn btnBlue">
+              {loading ? "掃描中..." : "掃描指定股票"}
+            </button>
+            <button onClick={fetchScanAll} disabled={loadingAll} className="btn btnDark">
+              {loadingAll ? "掃描中..." : "全台股 Top 30"}
+            </button>
           </div>
+
+          {error ? <div className="errorBox">{error}</div> : null}
         </section>
 
-        <section className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <section className="summaryGrid">
           <SummaryCard title="掃描結果" value={`${results.length} 檔`} />
-          <SummaryCard
-            title="強勢股"
-            value={`${results.filter((x) => x.trend.includes("強勢")).length} 檔`}
-          />
-          <SummaryCard
-            title="中性股"
-            value={`${
-              results.filter(
-                (x) =>
-                  x.trend.includes("中性") &&
-                  !x.trend.includes("強勢") &&
-                  !x.trend.includes("弱勢")
-              ).length
-            } 檔`}
-          />
-          <SummaryCard
-            title="弱勢股"
-            value={`${results.filter((x) => x.trend.includes("弱勢")).length} 檔`}
-          />
+          <SummaryCard title="強勢股" value={`${strongCount} 檔`} />
+          <SummaryCard title="中性股" value={`${neutralCount} 檔`} />
+          <SummaryCard title="弱勢股" value={`${weakCount} 檔`} />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-3">
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">推薦 Top 10</h2>
-              <span className="text-sm text-slate-500">依分數排序</span>
+        <section className="mainGrid">
+          <div className="panel">
+            <div className="panelHeader">
+              <h2>推薦 Top 10</h2>
+              <span>依分數排序</span>
             </div>
 
-            <div className="space-y-3">
+            <div className="topList">
               {top10.length === 0 ? (
-                <EmptyBox text="目前沒有資料" />
+                <div className="emptyBox">目前沒有資料</div>
               ) : (
                 top10.map((stock, index) => (
-                  <div
-                    key={`${stock.symbol}-${index}`}
-                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate font-bold text-slate-900">
+                  <div className="topCard" key={`${stock.symbol}-${index}`}>
+                    <div className="topCardHeader">
+                      <div>
+                        <div className="topName">
                           {index + 1}. {stock.name}
                         </div>
-                        <div className="text-sm text-slate-500">{stock.symbol}</div>
+                        <div className="topSymbol">{stock.symbol}</div>
                       </div>
-                      <div className={`text-xl font-bold ${scoreClass(stock.score)}`}>
-                        {stock.score}
-                      </div>
+                      <div className="scoreBig">{stock.score}</div>
                     </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span
-                        className={`rounded-full border px-3 py-1 text-sm font-medium ${trendClass(
-                          stock.trend
-                        )}`}
-                      >
+                    <div className="topCardFooter">
+                      <span className={`trendBadge ${getTrendClass(stock.trend)}`}>
                         {stock.trend}
                       </span>
-                      <span className="text-sm text-slate-500">現價 {stock.price}</span>
+                      <span className="muted">現價 {stock.price}</span>
                     </div>
                   </div>
                 ))
@@ -246,19 +189,15 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 xl:col-span-2">
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <h2 className="text-xl font-bold text-slate-900">選股結果</h2>
-              <div className="flex flex-wrap gap-2">
+          <div className="panel panelWide">
+            <div className="panelHeader panelHeaderWrap">
+              <h2>選股結果</h2>
+              <div className="tabs">
                 {(["全部", "強勢", "中性", "弱勢"] as const).map((item) => (
                   <button
                     key={item}
                     onClick={() => setTab(item)}
-                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                      tab === item
-                        ? "bg-slate-900 text-white"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
+                    className={`tabBtn ${tab === item ? "tabBtnActive" : ""}`}
                   >
                     {item}
                   </button>
@@ -267,63 +206,38 @@ export default function Home() {
             </div>
 
             {filteredResults.length === 0 ? (
-              <EmptyBox text="沒有符合條件的資料" />
+              <div className="emptyBox">沒有符合條件的資料</div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="cardGrid">
                 {filteredResults.map((stock) => (
-                  <div
-                    key={stock.symbol}
-                    className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
-                  >
-                    <div className="mb-4 flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-xl font-bold text-slate-900">
-                          {stock.name}
-                        </div>
-                        <div className="text-sm text-slate-500">{stock.symbol}</div>
+                  <div className="stockCard" key={stock.symbol}>
+                    <div className="stockHeader">
+                      <div>
+                        <div className="stockName">{stock.name}</div>
+                        <div className="stockSymbol">{stock.symbol}</div>
                       </div>
-                      <span
-                        className={`shrink-0 rounded-full border px-3 py-1 text-sm font-medium ${trendClass(
-                          stock.trend
-                        )}`}
-                      >
+                      <span className={`trendBadge ${getTrendClass(stock.trend)}`}>
                         {stock.trend}
                       </span>
                     </div>
 
-                    <div className="mb-4 grid grid-cols-2 gap-3">
+                    <div className="metricGrid">
                       <MetricBox label="現價" value={`${stock.price}`} />
-                      <MetricBox
-                        label="推薦分數"
-                        value={`${stock.score}`}
-                        valueClassName={scoreClass(stock.score)}
-                      />
-                      <MetricBox
-                        label="漲跌幅"
-                        value={`${stock.change_percent}%`}
-                        valueClassName={
-                          stock.change_percent > 0
-                            ? "text-emerald-600"
-                            : stock.change_percent < 0
-                            ? "text-rose-600"
-                            : "text-slate-900"
-                        }
-                      />
+                      <MetricBox label="推薦分數" value={`${stock.score}`} />
+                      <MetricBox label="漲跌幅" value={`${stock.change_percent}%`} />
                       <MetricBox label="成交量" value={formatNumber(stock.volume)} />
                     </div>
 
-                    <div className="mb-4 space-y-3">
+                    <div className="strategyList">
                       <StrategyRow label="進場區間" value={stock.entry_range} />
                       <StrategyRow label="出場價" value={`${stock.take_profit}`} />
                       <StrategyRow label="停損價" value={`${stock.stop_loss}`} />
                       <StrategyRow label="MA5 / MA20" value={`${stock.ma5} / ${stock.ma20}`} />
                     </div>
 
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="mb-1 text-sm font-medium text-slate-700">判斷原因</div>
-                      <div className="break-words text-sm leading-6 text-slate-600">
-                        {stock.reason}
-                      </div>
+                    <div className="reasonBox">
+                      <div className="reasonTitle">判斷原因</div>
+                      <div className="reasonText">{stock.reason}</div>
                     </div>
                   </div>
                 ))}
@@ -338,45 +252,37 @@ export default function Home() {
 
 function SummaryCard({ title, value }: { title: string; value: string }) {
   return (
-    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-      <div className="text-sm text-slate-500">{title}</div>
-      <div className="mt-2 text-3xl font-bold text-slate-900">{value}</div>
+    <div className="summaryCard">
+      <div className="summaryTitle">{title}</div>
+      <div className="summaryValue">{value}</div>
     </div>
   );
 }
 
-function MetricBox({
-  label,
-  value,
-  valueClassName = "",
-}: {
-  label: string;
-  value: string;
-  valueClassName?: string;
-}) {
+function MetricBox({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-slate-50 p-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`mt-1 text-lg font-bold ${valueClassName}`}>{value}</div>
+    <div className="metricBox">
+      <div className="metricLabel">{label}</div>
+      <div className="metricValue">{value}</div>
     </div>
   );
 }
 
 function StrategyRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 px-4 py-3">
-      <span className="text-sm text-slate-500">{label}</span>
-      <span className="break-all text-right text-sm font-semibold text-slate-900">
-        {value}
-      </span>
+    <div className="strategyRow">
+      <span className="strategyLabel">{label}</span>
+      <span className="strategyValue">{value}</span>
     </div>
   );
 }
 
-function EmptyBox({ text }: { text: string }) {
-  return (
-    <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-10 text-center text-slate-500">
-      {text}
-    </div>
-  );
+function getTrendClass(trend: string) {
+  if (trend.includes("強勢")) return "trendStrong";
+  if (trend.includes("弱勢")) return "trendWeak";
+  return "trendNeutral";
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("zh-TW").format(value);
 }
