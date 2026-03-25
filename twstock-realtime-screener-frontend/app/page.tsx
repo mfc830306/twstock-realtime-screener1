@@ -18,6 +18,16 @@ type StockResult = {
   reason: string;
 };
 
+type PriceTab =
+  | "全部"
+  | "10元以下"
+  | "10-30元"
+  | "30-50元"
+  | "50-100元"
+  | "100-300元"
+  | "300-500元"
+  | "500元以上";
+
 const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 
 export default function Home() {
@@ -26,7 +36,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"全部" | "強勢" | "中性" | "弱勢">("全部");
+  const [trendTab, setTrendTab] = useState<"全部" | "強勢" | "中性" | "弱勢">("全部");
+  const [priceTab, setPriceTab] = useState<PriceTab>("全部");
   const [marketCount, setMarketCount] = useState(0);
   const [returnedCount, setReturnedCount] = useState(0);
 
@@ -41,17 +52,57 @@ export default function Home() {
     return [...results].sort((a, b) => b.score - a.score).slice(0, 10);
   }, [results]);
 
-  const filteredResults = useMemo(() => {
-    if (tab === "全部") return results;
-    if (tab === "強勢") return results.filter((x) => x.trend.includes("強勢"));
-    if (tab === "弱勢") return results.filter((x) => x.trend.includes("弱勢"));
-    return results.filter(
+  const filterByTrend = (data: StockResult[]) => {
+    if (trendTab === "全部") return data;
+    if (trendTab === "強勢") return data.filter((x) => x.trend.includes("強勢"));
+    if (trendTab === "弱勢") return data.filter((x) => x.trend.includes("弱勢"));
+    return data.filter(
       (x) =>
         x.trend.includes("中性") &&
         !x.trend.includes("強勢") &&
         !x.trend.includes("弱勢")
     );
-  }, [results, tab]);
+  };
+
+  const filterByPrice = (data: StockResult[]) => {
+    switch (priceTab) {
+      case "10元以下":
+        return data.filter((x) => x.price < 10);
+      case "10-30元":
+        return data.filter((x) => x.price >= 10 && x.price < 30);
+      case "30-50元":
+        return data.filter((x) => x.price >= 30 && x.price < 50);
+      case "50-100元":
+        return data.filter((x) => x.price >= 50 && x.price < 100);
+      case "100-300元":
+        return data.filter((x) => x.price >= 100 && x.price < 300);
+      case "300-500元":
+        return data.filter((x) => x.price >= 300 && x.price < 500);
+      case "500元以上":
+        return data.filter((x) => x.price >= 500);
+      default:
+        return data;
+    }
+  };
+
+  const filteredResults = useMemo(() => {
+    const byTrend = filterByTrend(results);
+    const byPrice = filterByPrice(byTrend);
+    return byPrice.sort((a, b) => b.score - a.score);
+  }, [results, trendTab, priceTab]);
+
+  const priceCounts = useMemo(() => {
+    return {
+      全部: results.length,
+      "10元以下": results.filter((x) => x.price < 10).length,
+      "10-30元": results.filter((x) => x.price >= 10 && x.price < 30).length,
+      "30-50元": results.filter((x) => x.price >= 30 && x.price < 50).length,
+      "50-100元": results.filter((x) => x.price >= 50 && x.price < 100).length,
+      "100-300元": results.filter((x) => x.price >= 100 && x.price < 300).length,
+      "300-500元": results.filter((x) => x.price >= 300 && x.price < 500).length,
+      "500元以上": results.filter((x) => x.price >= 500).length,
+    };
+  }, [results]);
 
   const fetchScan = async () => {
     try {
@@ -81,7 +132,8 @@ export default function Home() {
 
       const data = await res.json();
       setResults(Array.isArray(data) ? data : []);
-      setTab("全部");
+      setTrendTab("全部");
+      setPriceTab("全部");
     } catch {
       setError("讀取資料失敗，請稍後再試");
       setResults([]);
@@ -104,7 +156,8 @@ export default function Home() {
       setResults(Array.isArray(data?.results) ? data.results : []);
       setMarketCount(Number(data?.total_symbols || 0));
       setReturnedCount(Number(data?.returned_count || 0));
-      setTab("全部");
+      setTrendTab("全部");
+      setPriceTab("全部");
     } catch {
       setError("全台股掃描失敗，請稍後再試");
       setResults([]);
@@ -128,6 +181,17 @@ export default function Home() {
       !x.trend.includes("弱勢")
   ).length;
 
+  const priceTabs: PriceTab[] = [
+    "全部",
+    "10元以下",
+    "10-30元",
+    "30-50元",
+    "50-100元",
+    "100-300元",
+    "300-500元",
+    "500元以上",
+  ];
+
   return (
     <main className="page">
       <div className="container">
@@ -135,7 +199,7 @@ export default function Home() {
           <div className="badge">台股智慧選股系統</div>
           <h1 className="title">TW Stock Realtime Screener</h1>
           <p className="subtitle">
-            顯示推薦分數、進場區間、停損與出場價，快速找出較強勢個股。
+            依推薦分數、趨勢與股價區間分類檢視個股。
           </p>
 
           <div className="searchRow">
@@ -169,6 +233,23 @@ export default function Home() {
           <SummaryCard title="弱勢股" value={`${weakCount} 檔`} />
         </section>
 
+        <section className="pricePanel">
+          <div className="panelHeader panelHeaderWrap">
+            <h2>依股價分類檢視</h2>
+            <div className="tabs">
+              {priceTabs.map((item) => (
+                <button
+                  key={item}
+                  onClick={() => setPriceTab(item)}
+                  className={`tabBtn ${priceTab === item ? "tabBtnActive" : ""}`}
+                >
+                  {item}（{priceCounts[item]}）
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section className="mainGrid">
           <div className="panel">
             <div className="panelHeader">
@@ -187,7 +268,9 @@ export default function Home() {
                         <div className="topName">
                           {index + 1}. {stock.name}
                         </div>
-                        <div className="topSymbol">{stock.symbol}</div>
+                        <div className="topSymbol">
+                          {stock.symbol}｜{stock.price} 元
+                        </div>
                       </div>
                       <div className="scoreBig">{stock.score}</div>
                     </div>
@@ -195,7 +278,7 @@ export default function Home() {
                       <span className={`trendBadge ${getTrendClass(stock.trend)}`}>
                         {stock.trend}
                       </span>
-                      <span className="muted">現價 {stock.price}</span>
+                      <span className="muted">{stock.entry_range}</span>
                     </div>
                   </div>
                 ))
@@ -205,13 +288,16 @@ export default function Home() {
 
           <div className="panel panelWide">
             <div className="panelHeader panelHeaderWrap">
-              <h2>選股結果</h2>
+              <h2>
+                選股結果
+                <span className="resultHint">目前分類：{priceTab}</span>
+              </h2>
               <div className="tabs">
                 {(["全部", "強勢", "中性", "弱勢"] as const).map((item) => (
                   <button
                     key={item}
-                    onClick={() => setTab(item)}
-                    className={`tabBtn ${tab === item ? "tabBtnActive" : ""}`}
+                    onClick={() => setTrendTab(item)}
+                    className={`tabBtn ${trendTab === item ? "tabBtnActive" : ""}`}
                   >
                     {item}
                   </button>
@@ -220,7 +306,7 @@ export default function Home() {
             </div>
 
             {filteredResults.length === 0 ? (
-              <div className="emptyBox">沒有符合條件的資料</div>
+              <div className="emptyBox">這個價位區間目前沒有符合資料</div>
             ) : (
               <div className="cardGrid">
                 {filteredResults.map((stock) => (
@@ -228,7 +314,9 @@ export default function Home() {
                     <div className="stockHeader">
                       <div>
                         <div className="stockName">{stock.name}</div>
-                        <div className="stockSymbol">{stock.symbol}</div>
+                        <div className="stockSymbol">
+                          {stock.symbol}｜股價 {stock.price} 元
+                        </div>
                       </div>
                       <span className={`trendBadge ${getTrendClass(stock.trend)}`}>
                         {stock.trend}
