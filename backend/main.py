@@ -149,12 +149,12 @@ def calc_trade_plan(price: float) -> Dict[str, str]:
 
 
 def normalize_row(row: Any, fields: List[str]) -> Optional[Dict[str, Any]]:
-    item = {}
-
     if isinstance(row, dict):
         item = row
     elif isinstance(row, list) and fields:
-        item = {fields[i]: row[i] if i < len(row) else None for i in range(len(fields))}
+        item = {}
+        for i, field_name in enumerate(fields):
+            item[field_name] = row[i] if i < len(row) else None
     else:
         return None
 
@@ -164,7 +164,6 @@ def normalize_row(row: Any, fields: List[str]) -> Optional[Dict[str, Any]]:
     if not code or not name:
         return None
 
-    # 僅保留證交所常見股票代號
     if not code.isdigit() or len(code) not in (4, 5):
         return None
 
@@ -206,11 +205,11 @@ def fetch_all_twse() -> List[Dict[str, Any]]:
     resp.raise_for_status()
     payload = resp.json()
 
-    data = payload.get("data", [])
+    rows = payload.get("data", [])
     fields = payload.get("fields", [])
 
     stocks: List[Dict[str, Any]] = []
-    for row in data:
+    for row in rows:
         stock = normalize_row(row, fields)
         if stock:
             stocks.append(stock)
@@ -221,6 +220,7 @@ def fetch_all_twse() -> List[Dict[str, Any]]:
 def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str, order: str) -> List[Dict[str, Any]]:
     reverse = order == "desc"
     valid_sort_fields = {"symbol", "name", "price", "change_percent", "volume", "score"}
+
     if sort_by not in valid_sort_fields:
         sort_by = "symbol"
 
@@ -378,18 +378,16 @@ def get_price_buckets():
 
 @app.post("/scan")
 def scan_stocks(req: ScanRequest):
-    """
-    前端若原本是 POST /scan，可繼續用這支。
-    req.stocks 可傳：
-    - 空字串：回全部
-    - "2330,2317,2454"：回指定股票
-    """
     try:
         stocks = fetch_all_twse()
 
         raw_input = (req.stocks or "").strip()
         if raw_input:
-            wanted = {x.strip() for x in raw_input.replace("\n", ",").split(",") if x.strip()}
+            wanted = {
+                x.strip()
+                for x in raw_input.replace("\n", ",").split(",")
+                if x.strip()
+            }
             stocks = [s for s in stocks if s["symbol"] in wanted or s["name"] in wanted]
 
         stocks.sort(
