@@ -2,7 +2,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: #0b1e3a;   /* 深藍 */
+  background: linear-gradient(135deg, #08162d, #0b1e3a 45%, #10284d);
   color: #0f172a;
   font-family: Arial, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
 }
@@ -32,7 +32,7 @@ input {
 .stockCard {
   background: #ffffff;
   border-radius: 24px;
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.18);
 }
 
 .hero {
@@ -42,7 +42,7 @@ input {
 
 .badge {
   display: inline-block;
-  background: #eff6ff;
+  background: #dbeafe;
   color: #1d4ed8;
   border-radius: 999px;
   padding: 6px 12px;
@@ -61,6 +61,17 @@ input {
   margin: 12px 0 0 0;
   color: #64748b;
   font-size: 16px;
+}
+
+.marketInfo {
+  margin-top: 16px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  border: 1px solid #bfdbfe;
+  border-radius: 16px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .searchRow {
