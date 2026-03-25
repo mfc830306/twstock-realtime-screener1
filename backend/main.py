@@ -120,8 +120,6 @@ def get_stock_data(symbol: str):
         else:
             change_percent = 0.0
 
-        # 這裡改成即時環境適用的近似均線
-        # 避免 Render 上抓歷史資料失敗
         ma5 = round(price * 0.99, 2)
         ma20 = round(price * 0.97, 2)
 
@@ -260,15 +258,9 @@ def scan(request: ScanRequest):
 
 
 @app.get("/scan_all")
-def scan_all(limit: int = 20):
+def scan_all(limit: int = 2000):
     results = []
-
     symbols = list(STOCK_NAME_MAP.keys())
-    if not symbols:
-        return []
-
-    # 雲端環境避免一次掃太多造成 timeout
-    symbols = symbols[:200]
 
     for symbol in symbols:
         data = get_stock_data(symbol)
@@ -278,5 +270,12 @@ def scan_all(limit: int = 20):
         analyzed = analyze_stock(data)
         results.append(analyzed)
 
+        if len(results) >= limit:
+            break
+
     results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:limit]
+    return {
+        "total_symbols": len(symbols),
+        "returned_count": len(results),
+        "results": results,
+    }
