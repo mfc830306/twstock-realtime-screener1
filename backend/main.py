@@ -1,9 +1,9 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import requests
 import time
-import math
+import pandas as pd
 
 app = FastAPI(title="TW Stock Realtime Screener B")
 
@@ -21,25 +21,22 @@ HEADERS = {
 }
 
 CACHE = {
-    "listed_stocks": {"time": 0, "data": []},   # 上市
-    "otc_stocks": {"time": 0, "data": []},      # 上櫃
-    "twse_price": {"time": 0, "data": {}},      # 上市即時行情
-    "tpex_price": {"time": 0, "data": {}},      # 上櫃即時行情
+    "listed_stocks": {"time": 0, "data": []},
+    "otc_stocks": {"time": 0, "data": []},
+    "twse_price": {"time": 0, "data": {}},
+    "tpex_price": {"time": 0, "data": {}},
 }
 
-CACHE_SECONDS_LIST = 60 * 60 * 6     # 名單快取 6 小時
-CACHE_SECONDS_PRICE = 30             # 行情快取 30 秒
+CACHE_SECONDS_LIST = 60 * 60 * 6
+CACHE_SECONDS_PRICE = 30
 
 
-# ---------------------------
-# 基本工具
-# ---------------------------
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
             return default
         text = str(value).replace(",", "").replace("X", "").strip()
-        if text in ["", "-", "--", "---", "null", "None", "除權息", "不適用"]:
+        if text in ["", "-", "--", "---", "null", "None", "除權息", "不適用", "nan"]:
             return default
         return float(text)
     except:
@@ -190,51 +187,68 @@ def build_stock_item(symbol: str, name: str, market: str, price: float, change_p
     }
 
 
-# ---------------------------
-# 抓股票名單
-# ---------------------------
+def _parse_isin_table(url: str, target_market: str) -> List[Dict[str, str]]:
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    r.encoding = "big5"
+
+    tables = pd.read_html(r.text)
+    stocks = []
+
+    for df in tables:
+        if df.shape[1] < 1:
+            continue
+
+        # 有些表頭會是多層，先拍平成單層字串
+        df.columns = [str(c).strip() for c in df.columns]
+
+        first_col = df.columns[0]
+
+        for _, row in df.iterrows():
+            code_name = str(row.get(first_col, "")).strip()
+
+            if "　" not in code_name:
+                continue
+
+            parts = code_name.split("　")
+            if len(parts) < 2:
+                continue
+
+            symbol = parts[0].strip()
+            name = parts[1].strip()
+
+            if not symbol.isdigit():
+                continue
+
+            # 避免抓到 ETF / 債券 / 其他非一般股票
+            if len(symbol) != 4:
+                continue
+
+            stocks.append({
+                "symbol": symbol,
+                "name": name,
+                "market": target_market
+            })
+
+    # 去重
+    unique = {}
+    for s in stocks:
+        unique[s["symbol"]] = s
+
+    return list(unique.values())
+
+
 def fetch_twse_listed_stocks() -> List[Dict[str, str]]:
     now = time.time()
     if now - CACHE["listed_stocks"]["time"] < CACHE_SECONDS_LIST and CACHE["listed_stocks"]["data"]:
         return CACHE["listed_stocks"]["data"]
 
-    stocks = []
-
-    # TWSE 上市名單 CSV
-    url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.encoding = "big5"
-
-    lines = r.text.splitlines()
-    for line in lines:
-        cols = [c.strip().replace('"', "") for c in line.split(",")]
-        if len(cols) < 5:
-            continue
-
-        code_name = cols[0]
-        market = cols[3] if len(cols) > 3 else ""
-
-        if "　" not in code_name:
-            continue
-
-        parts = code_name.split("　")
-        if len(parts) < 2:
-            continue
-
-        symbol = parts[0].strip()
-        name = parts[1].strip()
-
-        if not symbol.isdigit():
-            continue
-
-        if market != "上市":
-            continue
-
-        stocks.append({
-            "symbol": symbol,
-            "name": name,
-            "market": "上市"
-        })
+    try:
+        stocks = _parse_isin_table(
+            "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
+            "上市"
+        )
+    except:
+        stocks = []
 
     CACHE["listed_stocks"]["time"] = now
     CACHE["listed_stocks"]["data"] = stocks
@@ -246,60 +260,25 @@ def fetch_tpex_otc_stocks() -> List[Dict[str, str]]:
     if now - CACHE["otc_stocks"]["time"] < CACHE_SECONDS_LIST and CACHE["otc_stocks"]["data"]:
         return CACHE["otc_stocks"]["data"]
 
-    stocks = []
-
-    # ISIN 上櫃名單
-    url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.encoding = "big5"
-
-    lines = r.text.splitlines()
-    for line in lines:
-        cols = [c.strip().replace('"', "") for c in line.split(",")]
-        if len(cols) < 5:
-            continue
-
-        code_name = cols[0]
-        market = cols[3] if len(cols) > 3 else ""
-
-        if "　" not in code_name:
-            continue
-
-        parts = code_name.split("　")
-        if len(parts) < 2:
-            continue
-
-        symbol = parts[0].strip()
-        name = parts[1].strip()
-
-        if not symbol.isdigit():
-            continue
-
-        if market != "上櫃":
-            continue
-
-        stocks.append({
-            "symbol": symbol,
-            "name": name,
-            "market": "上櫃"
-        })
+    try:
+        stocks = _parse_isin_table(
+            "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
+            "上櫃"
+        )
+    except:
+        stocks = []
 
     CACHE["otc_stocks"]["time"] = now
     CACHE["otc_stocks"]["data"] = stocks
     return stocks
 
 
-# ---------------------------
-# 抓上市即時行情（TWSE）
-# ---------------------------
 def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
     now = time.time()
     if now - CACHE["twse_price"]["time"] < CACHE_SECONDS_PRICE and CACHE["twse_price"]["data"]:
         return CACHE["twse_price"]["data"]
 
     result = {}
-
-    # TWSE 全部上市個股即時/日行情
     urls = [
         "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
         "https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json",
@@ -323,7 +302,6 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
         CACHE["twse_price"]["data"] = {}
         return {}
 
-    # openapi 版本
     if isinstance(data, list):
         for row in data:
             symbol = str(row.get("Code", "")).strip()
@@ -335,10 +313,7 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
             volume = safe_int(row.get("TradeVolume", 0))
 
             prev_close = price - change
-            if prev_close > 0:
-                change_percent = (change / prev_close) * 100
-            else:
-                change_percent = 0
+            change_percent = (change / prev_close) * 100 if prev_close > 0 else 0
 
             result[symbol] = {
                 "price": price,
@@ -346,7 +321,6 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
                 "volume": volume,
             }
 
-    # json 版本備援
     elif isinstance(data, dict) and isinstance(data.get("data"), list):
         for row in data["data"]:
             if len(row) < 7:
@@ -357,19 +331,11 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
                 continue
 
             volume = safe_int(row[2], 0)
-            # row[6] 常是收盤價 / 最後成交價
             price = safe_float(row[6], 0)
-
-            # 漲跌價差欄位位置可能變動，取保守法
-            change = 0.0
-            if len(row) > 7:
-                change = safe_float(row[7], 0)
+            change = safe_float(row[7], 0) if len(row) > 7 else 0
 
             prev_close = price - change
-            if prev_close > 0:
-                change_percent = (change / prev_close) * 100
-            else:
-                change_percent = 0
+            change_percent = (change / prev_close) * 100 if prev_close > 0 else 0
 
             result[symbol] = {
                 "price": price,
@@ -382,16 +348,12 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
     return result
 
 
-# ---------------------------
-# 抓上櫃即時行情（TPEx）
-# ---------------------------
 def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
     now = time.time()
     if now - CACHE["tpex_price"]["time"] < CACHE_SECONDS_PRICE and CACHE["tpex_price"]["data"]:
         return CACHE["tpex_price"]["data"]
 
     result = {}
-
     urls = [
         "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
         "https://www.tpex.org.tw/openapi/v1/tpex_esb_quotes",
@@ -438,7 +400,6 @@ def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
                     or 0
                 )
 
-                # 若沒有直接給漲跌幅，試著由漲跌推回
                 if change_percent == 0:
                     change = safe_float(
                         row.get("Change")
@@ -454,7 +415,6 @@ def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
                     "change_percent": round2(change_percent),
                     "volume": volume,
                 }
-
         except:
             continue
 
@@ -463,9 +423,6 @@ def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
     return result
 
 
-# ---------------------------
-# 組合完整股票資料
-# ---------------------------
 def get_all_stocks(market: str = "全部") -> List[Dict[str, Any]]:
     stocks: List[Dict[str, Any]] = []
 
@@ -510,9 +467,6 @@ def get_all_stocks(market: str = "全部") -> List[Dict[str, Any]]:
     return stocks
 
 
-# ---------------------------
-# API
-# ---------------------------
 @app.get("/")
 def root():
     return {"message": "TW Stock Realtime Screener B is running"}
@@ -537,19 +491,18 @@ def health():
 
 @app.get("/stocks")
 def get_stocks(
-    market: str = Query("全部", description="全部 / 上市 / 上櫃"),
-    min_price: float = Query(0, description="最低價格"),
-    max_price: float = Query(999999, description="最高價格"),
-    min_score: int = Query(0, description="最低分數"),
-    keyword: str = Query("", description="代號或名稱搜尋"),
-    sort_by: str = Query("score", description="score / price / change_percent / volume"),
-    order: str = Query("desc", description="asc / desc"),
-    limit: int = Query(3000, description="最多回傳筆數"),
+    market: str = Query("全部"),
+    min_price: float = Query(0),
+    max_price: float = Query(999999),
+    min_score: int = Query(0),
+    keyword: str = Query(""),
+    sort_by: str = Query("score"),
+    order: str = Query("desc"),
+    limit: int = Query(3000),
 ):
     try:
         stocks = get_all_stocks(market)
 
-        # 篩選
         keyword = keyword.strip()
         if keyword:
             stocks = [
@@ -562,7 +515,6 @@ def get_stocks(
             if min_price <= s["price"] <= max_price and s["score"] >= min_score
         ]
 
-        # 排序
         valid_sort_fields = {"score", "price", "change_percent", "volume"}
         if sort_by not in valid_sort_fields:
             sort_by = "score"
@@ -570,7 +522,6 @@ def get_stocks(
         reverse = order.lower() != "asc"
         stocks.sort(key=lambda x: x.get(sort_by, 0), reverse=reverse)
 
-        # 限制筆數
         total = len(stocks)
         stocks = stocks[:limit]
 
@@ -593,17 +544,6 @@ def get_stocks(
 
 @app.post("/scan")
 def scan_stocks(payload: Dict[str, Any]):
-    """
-    前端如果傳：
-    {
-      "stocks": ["2330", "2317", "2454"]
-    }
-
-    或
-    {
-      "stocks": "2330,2317,2454"
-    }
-    """
     try:
         raw = payload.get("stocks", [])
 
@@ -619,7 +559,6 @@ def scan_stocks(payload: Dict[str, Any]):
 
         results = [stock_map[s] for s in symbols if s in stock_map]
 
-        # 找不到的補空資料
         found_set = {r["symbol"] for r in results}
         missing = [s for s in symbols if s not in found_set]
 
@@ -646,7 +585,6 @@ def scan_stocks(payload: Dict[str, Any]):
             "count": len(results),
             "stocks": results,
         }
-
     except Exception as e:
         return {
             "success": False,
