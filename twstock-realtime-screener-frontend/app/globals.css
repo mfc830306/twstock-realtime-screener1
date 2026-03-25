@@ -16,6 +16,8 @@ input {
   font: inherit;
 }
 
+/* ===== Layout ===== */
+
 .page {
   min-height: 100vh;
 }
@@ -26,14 +28,19 @@ input {
   padding: 24px;
 }
 
+/* ===== 共用卡片 ===== */
+
 .hero,
 .panel,
 .summaryCard,
-.stockCard {
+.stockCard,
+.pricePanel {
   background: #ffffff;
   border-radius: 24px;
   box-shadow: 0 2px 14px rgba(0, 0, 0, 0.18);
 }
+
+/* ===== Hero ===== */
 
 .hero {
   padding: 24px;
@@ -74,6 +81,8 @@ input {
   font-weight: 600;
 }
 
+/* ===== 搜尋區 ===== */
+
 .searchRow {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -88,6 +97,8 @@ input {
   padding: 14px 16px;
   background: #fff;
 }
+
+/* ===== 按鈕 ===== */
 
 .btn {
   border: 0;
@@ -111,6 +122,8 @@ input {
   background: #0f172a;
 }
 
+/* ===== 錯誤 ===== */
+
 .errorBox {
   margin-top: 16px;
   background: #fff1f2;
@@ -119,6 +132,8 @@ input {
   border-radius: 16px;
   padding: 12px 14px;
 }
+
+/* ===== Summary ===== */
 
 .summaryGrid {
   display: grid;
@@ -142,6 +157,23 @@ input {
   font-weight: 700;
 }
 
+/* ===== 價位分類 ===== */
+
+.pricePanel {
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.resultHint {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 14px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* ===== 主版面 ===== */
+
 .mainGrid {
   display: grid;
   grid-template-columns: 360px 1fr;
@@ -155,6 +187,8 @@ input {
 .panelWide {
   min-width: 0;
 }
+
+/* ===== Header ===== */
 
 .panelHeader {
   display: flex;
@@ -178,58 +212,7 @@ input {
   flex-wrap: wrap;
 }
 
-.topList {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.topCard {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 18px;
-  padding: 16px;
-}
-
-.topCardHeader,
-.topCardFooter,
-.stockHeader,
-.strategyRow {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.topCardHeader,
-.stockHeader {
-  align-items: flex-start;
-}
-
-.topCardFooter,
-.strategyRow {
-  align-items: center;
-}
-
-.topName,
-.stockName {
-  font-size: 20px;
-  font-weight: 700;
-  word-break: break-word;
-}
-
-.topSymbol,
-.stockSymbol,
-.muted,
-.metricLabel,
-.strategyLabel {
-  color: #64748b;
-  font-size: 14px;
-}
-
-.scoreBig {
-  font-size: 28px;
-  font-weight: 700;
-}
+/* ===== Tabs ===== */
 
 .tabs {
   display: flex;
@@ -244,12 +227,52 @@ input {
   border-radius: 999px;
   padding: 10px 16px;
   cursor: pointer;
+  font-size: 14px;
 }
 
 .tabBtnActive {
   background: #0f172a;
   color: #ffffff;
 }
+
+/* ===== Top10 ===== */
+
+.topList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.topCard {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.topCardHeader,
+.topCardFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.topName {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.topSymbol {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.scoreBig {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+/* ===== 股票卡片 ===== */
 
 .cardGrid {
   display: grid;
@@ -262,32 +285,47 @@ input {
   border: 1px solid #e2e8f0;
 }
 
+.stockHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stockName {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.stockSymbol {
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* ===== 趨勢 ===== */
+
 .trendBadge {
-  display: inline-block;
   border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 14px;
+  padding: 6px 12px;
+  font-size: 13px;
   font-weight: 600;
-  white-space: nowrap;
 }
 
 .trendStrong {
   background: #ecfdf5;
   color: #047857;
-  border: 1px solid #a7f3d0;
 }
 
 .trendNeutral {
   background: #fffbeb;
   color: #b45309;
-  border: 1px solid #fde68a;
 }
 
 .trendWeak {
   background: #fff1f2;
   color: #be123c;
-  border: 1px solid #fecdd3;
 }
+
+/* ===== 指標 ===== */
 
 .metricGrid {
   display: grid;
@@ -299,53 +337,64 @@ input {
 .metricBox {
   background: #f8fafc;
   border-radius: 16px;
-  padding: 14px;
+  padding: 12px;
+}
+
+.metricLabel {
+  font-size: 12px;
+  color: #64748b;
 }
 
 .metricValue {
-  margin-top: 6px;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
-  word-break: break-word;
 }
+
+/* ===== 策略 ===== */
 
 .strategyList {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
 }
 
 .strategyRow {
+  display: flex;
+  justify-content: space-between;
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 12px 14px;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.strategyLabel {
+  font-size: 13px;
+  color: #64748b;
 }
 
 .strategyValue {
-  text-align: right;
   font-weight: 600;
-  word-break: break-all;
 }
 
+/* ===== 原因 ===== */
+
 .reasonBox {
+  margin-top: 10px;
   background: #f8fafc;
-  border-radius: 16px;
-  padding: 14px;
+  border-radius: 12px;
+  padding: 10px;
 }
 
 .reasonTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  margin-bottom: 6px;
-  color: #334155;
 }
 
 .reasonText {
+  font-size: 13px;
   color: #475569;
-  line-height: 1.7;
-  word-break: break-word;
 }
+
+/* ===== 空資料 ===== */
 
 .emptyBox {
   border: 1px dashed #cbd5e1;
@@ -354,6 +403,8 @@ input {
   color: #64748b;
   padding: 40px 16px;
 }
+
+/* ===== RWD ===== */
 
 @media (max-width: 1100px) {
   .mainGrid {
@@ -366,14 +417,6 @@ input {
 }
 
 @media (max-width: 768px) {
-  .container {
-    padding: 16px;
-  }
-
-  .title {
-    font-size: 30px;
-  }
-
   .searchRow {
     grid-template-columns: 1fr;
   }
@@ -381,27 +424,10 @@ input {
   .summaryGrid {
     grid-template-columns: repeat(2, 1fr);
   }
-
-  .summaryValue {
-    font-size: 24px;
-  }
 }
 
 @media (max-width: 520px) {
   .summaryGrid {
     grid-template-columns: 1fr;
-  }
-
-  .panelHeader,
-  .stockHeader,
-  .topCardHeader,
-  .topCardFooter,
-  .strategyRow {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .strategyValue {
-    text-align: left;
   }
 }
