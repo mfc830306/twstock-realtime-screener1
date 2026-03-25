@@ -27,6 +27,8 @@ export default function Home() {
   const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"全部" | "強勢" | "中性" | "弱勢">("全部");
+  const [marketCount, setMarketCount] = useState(0);
+  const [returnedCount, setReturnedCount] = useState(0);
 
   const parseStocks = () => {
     return stockInput
@@ -55,6 +57,8 @@ export default function Home() {
     try {
       setLoading(true);
       setError("");
+      setMarketCount(0);
+      setReturnedCount(0);
 
       const stocks = parseStocks();
       if (!stocks.length) {
@@ -91,17 +95,21 @@ export default function Home() {
       setLoadingAll(true);
       setError("");
 
-      const res = await fetch(`${API_BASE}/scan_all?limit=30`);
+      const res = await fetch(`${API_BASE}/scan_all?limit=2000`);
       if (!res.ok) {
         throw new Error("全台股掃描失敗");
       }
 
       const data = await res.json();
-      setResults(Array.isArray(data) ? data : []);
+      setResults(Array.isArray(data?.results) ? data.results : []);
+      setMarketCount(Number(data?.total_symbols || 0));
+      setReturnedCount(Number(data?.returned_count || 0));
       setTab("全部");
     } catch {
       setError("全台股掃描失敗，請稍後再試");
       setResults([]);
+      setMarketCount(0);
+      setReturnedCount(0);
     } finally {
       setLoadingAll(false);
     }
@@ -141,9 +149,15 @@ export default function Home() {
               {loading ? "掃描中..." : "掃描指定股票"}
             </button>
             <button onClick={fetchScanAll} disabled={loadingAll} className="btn btnDark">
-              {loadingAll ? "掃描中..." : "全台股 Top 30"}
+              {loadingAll ? "掃描中..." : "顯示全部台股"}
             </button>
           </div>
+
+          {marketCount > 0 ? (
+            <div className="marketInfo">
+              全市場股票總數：{marketCount} 檔　｜　目前成功載入：{returnedCount} 檔
+            </div>
+          ) : null}
 
           {error ? <div className="errorBox">{error}</div> : null}
         </section>
