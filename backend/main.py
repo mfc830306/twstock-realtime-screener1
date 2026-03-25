@@ -1,12 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any
-import csv
-import os
-import twstock
+from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+import requests
 
-app = FastAPI(title="TW Stock Realtime Screener B")
+app = FastAPI(title="TWSE Stock Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,266 +14,390 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CSV_FILE = "tw_stock_listed_otc_database.csv"
+TWSE_URL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json"
+
+session = requests.Session()
+session.headers.update(
+    {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://www.twse.com.tw/",
+    }
+)
 
 
 class ScanRequest(BaseModel):
-    stocks: List[str] = Field(default_factory=list)
+    stocks: str = ""
 
 
-def safe_float(value, default=0.0):
+def to_float(value: Any, default: float = 0.0) -> float:
     try:
-        if value in [None, "", "-", "--"]:
+        if value is None:
             return default
-        if isinstance(value, list):
-            if not value:
-                return default
-            value = value[0]
-        return float(str(value).replace(",", ""))
+        s = str(value).replace(",", "").replace("--", "").strip()
+        if s == "":
+            return default
+        return float(s)
     except Exception:
         return default
 
 
-def load_stock_database() -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
-
-    if not os.path.exists(CSV_FILE):
-        return mapping
-
-    with open(CSV_FILE, "r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            symbol = str(
-                row.get("symbol")
-                or row.get("code")
-                or row.get("股票代號")
-                or row.get("代號")
-                or ""
-            ).strip()
-
-            name = str(
-                row.get("name")
-                or row.get("股票名稱")
-                or row.get("名稱")
-                or ""
-            ).strip()
-
-            if symbol:
-                mapping[symbol] = name or symbol
-
-    return mapping
-
-
-STOCK_NAME_MAP = load_stock_database()
-
-
-def get_stock_name(symbol: str) -> str:
-    if symbol in STOCK_NAME_MAP:
-        return STOCK_NAME_MAP[symbol]
-
+def to_int(value: Any, default: int = 0) -> int:
     try:
-        if symbol in twstock.codes:
-            return twstock.codes[symbol].name
+        if value is None:
+            return default
+        s = str(value).replace(",", "").replace("--", "").strip()
+        if s == "":
+            return default
+        return int(float(s))
     except Exception:
-        pass
-
-    return symbol
+        return default
 
 
-def get_stock_data(symbol: str):
-    symbol = str(symbol).strip()
+def calc_score(change_percent: float, volume: int, price: float) -> int:
+    score = 50
 
-    try:
-        rt = twstock.realtime.get(symbol)
+    if change_percent >= 7:
+        score += 25
+    elif change_percent >= 4:
+        score += 18
+    elif change_percent >= 2:
+        score += 10
+    elif change_percent >= 0:
+        score += 5
+    elif change_percent <= -5:
+        score -= 15
+    elif change_percent <= -2:
+        score -= 8
 
-        if not rt or not rt.get("success"):
-            return None
+    if volume >= 100000:
+        score += 18
+    elif volume >= 50000:
+        score += 12
+    elif volume >= 10000:
+        score += 8
+    elif volume >= 1000:
+        score += 4
 
-        realtime = rt.get("realtime", {})
-        info = rt.get("info", {})
+    if price <= 0:
+        score -= 10
 
-        price = safe_float(realtime.get("latest_trade_price"), 0)
-        open_price = safe_float(realtime.get("open"), 0)
-        high = safe_float(realtime.get("high"), 0)
-        low = safe_float(realtime.get("low"), 0)
-        volume = safe_float(realtime.get("accumulate_trade_volume"), 0)
-        yesterday_close = safe_float(info.get("yesterday_close"), 0)
-
-        if price <= 0:
-            price = open_price
-
-        if price <= 0:
-            best_bid_price = safe_float(realtime.get("best_bid_price"), 0)
-            best_ask_price = safe_float(realtime.get("best_ask_price"), 0)
-            if best_bid_price > 0:
-                price = best_bid_price
-            elif best_ask_price > 0:
-                price = best_ask_price
-
-        if price <= 0:
-            return None
-
-        if yesterday_close > 0:
-            change_percent = round((price - yesterday_close) / yesterday_close * 100, 2)
-        else:
-            change_percent = 0.0
-
-        ma5 = round(price * 0.99, 2)
-        ma20 = round(price * 0.97, 2)
-
-        return {
-            "symbol": symbol,
-            "name": get_stock_name(symbol),
-            "price": round(price, 2),
-            "open": round(open_price, 2),
-            "high": round(high, 2),
-            "low": round(low, 2),
-            "volume": round(volume, 2),
-            "change_percent": change_percent,
-            "yesterday_close": round(yesterday_close, 2),
-            "ma5": ma5,
-            "ma20": ma20,
-        }
-
-    except Exception:
-        return None
+    return max(1, min(99, score))
 
 
-def analyze_stock(data: Dict[str, Any]) -> Dict[str, Any]:
-    price = safe_float(data.get("price"))
-    ma5 = safe_float(data.get("ma5"))
-    ma20 = safe_float(data.get("ma20"))
-    volume = safe_float(data.get("volume"))
-    change_percent = safe_float(data.get("change_percent"))
-    high = safe_float(data.get("high"))
-    low = safe_float(data.get("low"))
-    open_price = safe_float(data.get("open"))
+def build_signal(score: int) -> str:
+    if score >= 85:
+        return "偏多"
+    if score >= 70:
+        return "中性偏多"
+    if score >= 55:
+        return "中性"
+    if score >= 40:
+        return "中性偏空"
+    return "偏空"
 
-    score = 0
+
+def build_reason(score: int, change_percent: float, volume: int) -> str:
     reasons = []
 
-    if price > ma5 > 0:
-        score += 20
-        reasons.append("股價站上MA5")
+    if change_percent >= 4:
+        reasons.append("動能偏強")
+    elif change_percent >= 1:
+        reasons.append("股價表現穩定")
+    elif change_percent <= -3:
+        reasons.append("短線壓力較大")
     else:
-        reasons.append("股價未站上MA5")
+        reasons.append("量價變化普通")
 
-    if price > ma20 > 0:
-        score += 20
-        reasons.append("股價站上MA20")
-    else:
-        reasons.append("股價未站上MA20")
-
-    if ma5 > ma20 > 0:
-        score += 20
-        reasons.append("MA5在MA20之上")
-    else:
-        reasons.append("均線排列偏弱")
-
-    if change_percent > 0:
-        score += 10
-        reasons.append("當日漲幅為正")
-    elif change_percent < 0:
-        reasons.append("當日漲幅為負")
-    else:
-        reasons.append("當日漲跌持平")
-
-    if volume >= 1000:
-        score += 10
+    if volume >= 50000:
         reasons.append("成交量活躍")
+    elif volume >= 10000:
+        reasons.append("量能尚可")
     else:
-        reasons.append("成交量普通")
+        reasons.append("量能一般")
 
-    if high > 0 and low > 0 and price > 0:
-        intraday_range = ((high - low) / price) * 100
-        if intraday_range <= 3:
-            score += 5
-            reasons.append("日內波動穩定")
-        elif intraday_range >= 7:
-            reasons.append("日內波動較大")
-
-    if open_price > 0 and price > open_price:
-        score += 5
-        reasons.append("現價高於開盤")
-
-    score = max(0, min(100, score))
-
-    if score >= 75:
-        trend = "強勢"
-    elif score >= 50:
-        trend = "中性偏強"
-    elif score >= 30:
-        trend = "中性"
+    if score >= 85:
+        reasons.append("短線表現相對有利")
+    elif score >= 70:
+        reasons.append("可持續觀察")
+    elif score >= 55:
+        reasons.append("暫以整理看待")
     else:
-        trend = "弱勢"
+        reasons.append("宜保守應對")
 
-    entry_low = round(ma5 * 0.98, 2)
-    entry_high = round(ma5 * 1.02, 2)
-    take_profit = round(price * 1.10, 2)
-    stop_loss = round(price * 0.95, 2)
+    return "、".join(reasons)
+
+
+def calc_trade_plan(price: float) -> Dict[str, str]:
+    if price <= 0:
+        return {
+            "entry_price": "-",
+            "target_price": "-",
+            "stop_loss": "-",
+        }
+
+    entry_low = round(price * 0.99, 2)
+    entry_high = round(price * 1.01, 2)
+    target = round(price * 1.05, 2)
+    stop_loss = round(price * 0.97, 2)
 
     return {
-        "symbol": data["symbol"],
-        "name": data["name"],
-        "price": round(price, 2),
-        "change_percent": round(change_percent, 2),
-        "volume": round(volume, 2),
-        "ma5": round(ma5, 2),
-        "ma20": round(ma20, 2),
-        "score": score,
-        "trend": trend,
-        "entry_range": f"{entry_low} ~ {entry_high}",
-        "take_profit": take_profit,
-        "stop_loss": stop_loss,
-        "reason": "、".join(reasons[:5]),
+        "entry_price": f"{entry_low:.2f} ~ {entry_high:.2f}",
+        "target_price": f"{target:.2f}",
+        "stop_loss": f"{stop_loss:.2f}",
     }
+
+
+def normalize_row(row: Any, fields: List[str]) -> Optional[Dict[str, Any]]:
+    item = {}
+
+    if isinstance(row, dict):
+        item = row
+    elif isinstance(row, list) and fields:
+        item = {fields[i]: row[i] if i < len(row) else None for i in range(len(fields))}
+    else:
+        return None
+
+    code = str(item.get("Code", "")).strip()
+    name = str(item.get("Name", "")).strip()
+
+    if not code or not name:
+        return None
+
+    # 僅保留證交所常見股票代號
+    if not code.isdigit() or len(code) not in (4, 5):
+        return None
+
+    price = to_float(item.get("ClosingPrice"))
+    volume = to_int(item.get("TradeVolume"))
+
+    change_raw = str(item.get("Change", "")).replace("X", "").replace("+", "").strip()
+    change_value = to_float(change_raw, 0.0)
+
+    prev_close = price - change_value
+    if prev_close > 0:
+        change_percent = round((change_value / prev_close) * 100, 2)
+    else:
+        change_percent = 0.0
+
+    score = calc_score(change_percent, volume, price)
+    signal = build_signal(score)
+    reason = build_reason(score, change_percent, volume)
+    trade_plan = calc_trade_plan(price)
+
+    return {
+        "symbol": code,
+        "name": name,
+        "market": "上市",
+        "price": price,
+        "change_percent": change_percent,
+        "volume": volume,
+        "score": score,
+        "signal": signal,
+        "reason": reason,
+        "entry_price": trade_plan["entry_price"],
+        "target_price": trade_plan["target_price"],
+        "stop_loss": trade_plan["stop_loss"],
+    }
+
+
+def fetch_all_twse() -> List[Dict[str, Any]]:
+    resp = session.get(TWSE_URL, timeout=30)
+    resp.raise_for_status()
+    payload = resp.json()
+
+    data = payload.get("data", [])
+    fields = payload.get("fields", [])
+
+    stocks: List[Dict[str, Any]] = []
+    for row in data:
+        stock = normalize_row(row, fields)
+        if stock:
+            stocks.append(stock)
+
+    return stocks
+
+
+def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str, order: str) -> List[Dict[str, Any]]:
+    reverse = order == "desc"
+    valid_sort_fields = {"symbol", "name", "price", "change_percent", "volume", "score"}
+    if sort_by not in valid_sort_fields:
+        sort_by = "symbol"
+
+    if sort_by in {"symbol", "name"}:
+        stocks.sort(key=lambda x: str(x.get(sort_by, "")), reverse=reverse)
+    else:
+        stocks.sort(key=lambda x: float(x.get(sort_by, 0)), reverse=reverse)
+
+    return stocks
 
 
 @app.get("/")
 def root():
-    return {"message": "TW Stock Realtime Screener B is running"}
+    return {"message": "backend running"}
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+@app.get("/stocks")
+def get_stocks():
+    try:
+        stocks = fetch_all_twse()
+        return {
+            "success": True,
+            "source": "TWSE",
+            "market": "上市",
+            "total": len(stocks),
+            "stocks": stocks,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "source": "TWSE",
+            "market": "上市",
+            "total": 0,
+            "stocks": [],
+            "error": str(e),
+        }
+
+
+@app.get("/api/stocks/all")
+def get_all_stocks(
+    q: str = Query("", description="搜尋股票代號或名稱"),
+    min_price: float = Query(0, description="最低股價"),
+    max_price: float = Query(999999, description="最高股價"),
+    sort_by: str = Query("symbol", description="symbol|name|price|change_percent|volume|score"),
+    order: str = Query("asc", description="asc|desc"),
+):
+    try:
+        stocks = fetch_all_twse()
+
+        keyword = q.strip().lower()
+        if keyword:
+            stocks = [
+                s for s in stocks
+                if keyword in s["symbol"].lower() or keyword in s["name"].lower()
+            ]
+
+        stocks = [s for s in stocks if min_price <= s["price"] <= max_price]
+        stocks = sort_stocks(stocks, sort_by, order)
+
+        return {
+            "success": True,
+            "source": "TWSE",
+            "market": "上市",
+            "total": len(stocks),
+            "stocks": stocks,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "source": "TWSE",
+            "market": "上市",
+            "total": 0,
+            "stocks": [],
+            "error": str(e),
+        }
+
+
+@app.get("/api/stocks/top")
+def get_top_stocks(limit: int = 10):
+    try:
+        stocks = fetch_all_twse()
+        stocks.sort(
+            key=lambda x: (x["score"], x["change_percent"], x["volume"]),
+            reverse=True
+        )
+
+        return {
+            "success": True,
+            "source": "TWSE",
+            "market": "上市",
+            "total": len(stocks),
+            "top": stocks[:limit],
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "source": "TWSE",
+            "market": "上市",
+            "total": 0,
+            "top": [],
+            "error": str(e),
+        }
+
+
+@app.get("/api/stocks/price-buckets")
+def get_price_buckets():
+    try:
+        stocks = fetch_all_twse()
+
+        buckets = [
+            {"key": "0-20", "label": "20元以下", "min": 0, "max": 20},
+            {"key": "20-50", "label": "20~50元", "min": 20, "max": 50},
+            {"key": "50-100", "label": "50~100元", "min": 50, "max": 100},
+            {"key": "100-200", "label": "100~200元", "min": 100, "max": 200},
+            {"key": "200-500", "label": "200~500元", "min": 200, "max": 500},
+            {"key": "500-1000", "label": "500~1000元", "min": 500, "max": 1000},
+            {"key": "1000+", "label": "1000元以上", "min": 1000, "max": 99999999},
+        ]
+
+        result = []
+        for bucket in buckets:
+            count = sum(
+                1 for s in stocks
+                if bucket["min"] <= s["price"] < bucket["max"]
+            )
+            result.append(
+                {
+                    "key": bucket["key"],
+                    "label": bucket["label"],
+                    "count": count,
+                    "min": bucket["min"],
+                    "max": bucket["max"],
+                }
+            )
+
+        return {
+            "success": True,
+            "source": "TWSE",
+            "market": "上市",
+            "total": len(stocks),
+            "buckets": result,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "source": "TWSE",
+            "market": "上市",
+            "total": 0,
+            "buckets": [],
+            "error": str(e),
+        }
 
 
 @app.post("/scan")
-def scan(request: ScanRequest):
-    results = []
+def scan_stocks(req: ScanRequest):
+    """
+    前端若原本是 POST /scan，可繼續用這支。
+    req.stocks 可傳：
+    - 空字串：回全部
+    - "2330,2317,2454"：回指定股票
+    """
+    try:
+        stocks = fetch_all_twse()
 
-    for symbol in request.stocks:
-        data = get_stock_data(symbol)
-        if not data:
-            continue
+        raw_input = (req.stocks or "").strip()
+        if raw_input:
+            wanted = {x.strip() for x in raw_input.replace("\n", ",").split(",") if x.strip()}
+            stocks = [s for s in stocks if s["symbol"] in wanted or s["name"] in wanted]
 
-        analyzed = analyze_stock(data)
-        results.append(analyzed)
+        stocks.sort(
+            key=lambda x: (x["score"], x["change_percent"], x["volume"]),
+            reverse=True
+        )
 
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results
+        return stocks
 
-
-@app.get("/scan_all")
-def scan_all(limit: int = 2000):
-    results = []
-    symbols = list(STOCK_NAME_MAP.keys())
-
-    for symbol in symbols:
-        data = get_stock_data(symbol)
-        if not data:
-            continue
-
-        analyzed = analyze_stock(data)
-        results.append(analyzed)
-
-        if len(results) >= limit:
-            break
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return {
-        "total_symbols": len(symbols),
-        "returned_count": len(results),
-        "results": results,
-    }
+    except Exception as e:
+        return [{"error": str(e)}]
