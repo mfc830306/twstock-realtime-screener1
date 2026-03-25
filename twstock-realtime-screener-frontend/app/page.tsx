@@ -2,468 +2,380 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type RawStock = {
+type StockResult = {
   symbol: string;
-  name?: string;
+  name: string;
   price: number;
-  change_percent?: number;
-  volume?: number;
-  ma5?: number;
-  ma20?: number;
-  signal?: string;
-  reason?: string;
-};
-
-type StockCategory =
-  | "all"
-  | "top10"
-  | "bullish"
-  | "breakout"
-  | "pullback"
-  | "active"
-  | "bearish";
-
-type EnrichedStock = RawStock & {
+  change_percent: number;
+  volume: number;
+  ma5: number;
+  ma20: number;
   score: number;
-  categoryTags: string[];
-  entryPriceMin: number;
-  entryPriceMax: number;
-  targetPrice: number;
-  stopLossPrice: number;
+  trend: string;
+  entry_range: string;
+  take_profit: number;
+  stop_loss: number;
+  reason: string;
 };
 
-const API_URL = "https://twstock-realtime-screener1.onrender.com/scan";
+const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 
-const categoryLabels: Record<StockCategory, string> = {
-  all: "全部股票",
-  top10: "推薦前10",
-  bullish: "均線多頭",
-  breakout: "強勢突破",
-  pullback: "拉回觀察",
-  active: "成交活躍",
-  bearish: "偏空避開",
-};
-
-function safeNumber(value: unknown, fallback = 0) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : fallback;
+function getTrendColor(trend: string) {
+  if (trend.includes("強勢")) {
+    return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  }
+  if (trend.includes("弱勢")) {
+    return "bg-rose-100 text-rose-700 border-rose-200";
+  }
+  return "bg-amber-100 text-amber-700 border-amber-200";
 }
 
-function round2(value: number) {
-  return Math.round(value * 100) / 100;
+function getScoreColor(score: number) {
+  if (score >= 75) return "text-emerald-600";
+  if (score >= 50) return "text-amber-600";
+  return "text-rose-600";
 }
 
-function formatPrice(value: number) {
-  return Number.isFinite(value) ? value.toFixed(2) : "-";
-}
-
-function formatPriceRange(min: number, max: number) {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return "-";
-  return `${min.toFixed(2)} ~ ${max.toFixed(2)}`;
-}
-
-function formatPercent(value?: number) {
-  if (value === undefined || value === null || Number.isNaN(value)) return "-";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
-}
-
-function formatVolume(value?: number) {
-  if (!value || Number.isNaN(value)) return "-";
+function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-TW").format(value);
 }
 
-function getScore(stock: RawStock) {
-  const price = safeNumber(stock.price);
-  const ma5 = safeNumber(stock.ma5);
-  const ma20 = safeNumber(stock.ma20);
-  const change = safeNumber(stock.change_percent);
-  const volume = safeNumber(stock.volume);
-
-  let score = 0;
-
-  if (price > ma5 && ma5 > 0) score += 20;
-  if (price > ma20 && ma20 > 0) score += 20;
-  if (ma5 > ma20 && ma5 > 0 && ma20 > 0) score += 20;
-  if (change > 0) score += Math.min(change * 4, 20);
-  if (change > 3) score += 8;
-  if (volume > 3000000) score += 8;
-  if (volume > 10000000) score += 8;
-
-  if (stock.signal?.includes("偏多")) score += 12;
-  if (stock.signal?.includes("強勢")) score += 10;
-  if (stock.signal?.includes("偏空")) score -= 18;
-
-  return Math.max(0, Math.min(100, round2(score)));
-}
-
-function getCategoryTags(stock: RawStock) {
-  const price = safeNumber(stock.price);
-  const ma5 = safeNumber(stock.ma5);
-  const ma20 = safeNumber(stock.ma20);
-  const change = safeNumber(stock.change_percent);
-  const volume = safeNumber(stock.volume);
-
-  const tags: string[] = [];
-
-  if (price > ma5 && price > ma20 && ma5 >= ma20) tags.push("bullish");
-  if (change >= 3 && volume >= 3000000) tags.push("breakout");
-  if (price >= ma20 && price <= ma20 * 1.03) tags.push("pullback");
-  if (volume >= 5000000) tags.push("active");
-  if (price < ma5 && price < ma20) tags.push("bearish");
-
-  return tags;
-}
-
-function getTradePlan(stock: RawStock) {
-  const price = safeNumber(stock.price);
-  const ma5 = safeNumber(stock.ma5);
-  const ma20 = safeNumber(stock.ma20);
-  const change = safeNumber(stock.change_percent);
-
-  let entryMin = price * 0.99;
-  let entryMax = price * 1.01;
-  let target = price * 1.08;
-  let stop = price * 0.95;
-
-  if (price > ma5 && price > ma20) {
-    entryMin = price * 0.99;
-    entryMax = price * 1.02;
-    target = price * (change >= 3 ? 1.1 : 1.07);
-    stop = ma5 > 0 ? ma5 * 0.985 : price * 0.95;
-  } else if (price >= ma20 && price <= ma20 * 1.03) {
-    entryMin = ma20 * 0.995;
-    entryMax = ma20 * 1.02;
-    target = price * 1.06;
-    stop = ma20 * 0.97;
-  } else if (price < ma5 && price < ma20) {
-    entryMin = price * 0.985;
-    entryMax = price * 1.005;
-    target = price * 1.03;
-    stop = price * 0.96;
-  } else {
-    entryMin = price * 0.99;
-    entryMax = price * 1.015;
-    target = price * 1.05;
-    stop = ma20 > 0 ? ma20 * 0.97 : price * 0.95;
-  }
-
-  return {
-    entryPriceMin: round2(entryMin),
-    entryPriceMax: round2(entryMax),
-    targetPrice: round2(target),
-    stopLossPrice: round2(stop),
-  };
-}
-
-function enrichStock(stock: RawStock): EnrichedStock {
-  const score = getScore(stock);
-  const categoryTags = getCategoryTags(stock);
-  const tradePlan = getTradePlan(stock);
-
-  return {
-    ...stock,
-    name: stock.name || "未提供名稱",
-    score,
-    categoryTags,
-    ...tradePlan,
-  };
-}
-
-function getFilteredStocks(stocks: EnrichedStock[], category: StockCategory) {
-  switch (category) {
-    case "top10":
-      return [...stocks].sort((a, b) => b.score - a.score).slice(0, 10);
-    case "bullish":
-      return stocks.filter((s) => s.categoryTags.includes("bullish"));
-    case "breakout":
-      return stocks.filter((s) => s.categoryTags.includes("breakout"));
-    case "pullback":
-      return stocks.filter((s) => s.categoryTags.includes("pullback"));
-    case "active":
-      return stocks.filter((s) => s.categoryTags.includes("active"));
-    case "bearish":
-      return stocks.filter((s) => s.categoryTags.includes("bearish"));
-    case "all":
-    default:
-      return stocks;
-  }
-}
-
-function getScoreClass(score: number) {
-  if (score >= 80) return "score-high";
-  if (score >= 60) return "score-mid";
-  return "score-low";
-}
-
-export default function Page() {
-  const [stockInput, setStockInput] = useState("");
-  const [allStocks, setAllStocks] = useState<EnrichedStock[]>([]);
-  const [activeCategory, setActiveCategory] = useState<StockCategory>("top10");
+export default function Home() {
+  const [stockInput, setStockInput] = useState("2330,2317,2454");
+  const [results, setResults] = useState<StockResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<"全部" | "強勢" | "中性" | "弱勢">("全部");
 
-  const fetchStocks = async () => {
-    setLoading(true);
-    setError("");
+  const filteredResults = useMemo(() => {
+    if (activeTab === "全部") return results;
+    if (activeTab === "強勢") return results.filter((x) => x.trend.includes("強勢"));
+    if (activeTab === "中性") return results.filter(
+      (x) => x.trend.includes("中性") && !x.trend.includes("強勢") && !x.trend.includes("弱勢")
+    );
+    if (activeTab === "弱勢") return results.filter((x) => x.trend.includes("弱勢"));
+    return results;
+  }, [results, activeTab]);
 
+  const top10 = useMemo(() => {
+    return [...results].sort((a, b) => b.score - a.score).slice(0, 10);
+  }, [results]);
+
+  const parseStocks = () => {
+    return stockInput
+      .split(/[\s,，]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
+
+  const fetchScan = async () => {
     try {
-      const symbols = stockInput
-        .split(/[\s,，]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+      setLoading(true);
+      setError("");
 
-      const response = await fetch(API_URL, {
+      const stocks = parseStocks();
+
+      if (stocks.length === 0) {
+        setError("請先輸入股票代號");
+        return;
+      }
+
+      const res = await fetch(`${API_BASE}/scan`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(symbols.length > 0 ? { stocks: symbols } : {}),
+        body: JSON.stringify({ stocks }),
       });
 
-      if (!response.ok) {
-        throw new Error(`API 連線失敗，狀態碼：${response.status}`);
+      if (!res.ok) {
+        throw new Error("掃描失敗");
       }
 
-      const data = await response.json();
-
-      if (!Array.isArray(data)) {
-        throw new Error("後端回傳格式錯誤，預期為陣列資料");
-      }
-
-      const enriched = data
-        .map((item: RawStock) => enrichStock(item))
-        .sort((a, b) => b.score - a.score);
-
-      setAllStocks(enriched);
-      setLoaded(true);
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : []);
+      setActiveTab("全部");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "資料載入失敗");
-      setAllStocks([]);
-      setLoaded(true);
+      setError("讀取資料失敗，請稍後再試");
+      setResults([]);
     } finally {
       setLoading(false);
     }
   };
 
+  const fetchScanAll = async () => {
+    try {
+      setLoadingAll(true);
+      setError("");
+
+      const res = await fetch(`${API_BASE}/scan_all?limit=30`, {
+        method: "GET",
+      });
+
+      if (!res.ok) {
+        throw new Error("全市場掃描失敗");
+      }
+
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : []);
+      setActiveTab("全部");
+    } catch (err) {
+      setError("全台股掃描失敗，請稍後再試");
+      setResults([]);
+    } finally {
+      setLoadingAll(false);
+    }
+  };
+
   useEffect(() => {
-    fetchStocks();
+    fetchScan();
   }, []);
 
-  const filteredStocks = useMemo(() => {
-    return getFilteredStocks(allStocks, activeCategory);
-  }, [allStocks, activeCategory]);
-
-  const stats = useMemo(() => {
-    const total = allStocks.length;
-    const bullish = allStocks.filter((s) => s.categoryTags.includes("bullish")).length;
-    const breakout = allStocks.filter((s) => s.categoryTags.includes("breakout")).length;
-    const active = allStocks.filter((s) => s.categoryTags.includes("active")).length;
-    const bearish = allStocks.filter((s) => s.categoryTags.includes("bearish")).length;
-
-    return { total, bullish, breakout, active, bearish };
-  }, [allStocks]);
-
   return (
-    <main className="page-shell">
-      <section className="hero-section">
-        <div className="hero-badge">TW STOCK SCREENER PRO</div>
-        <h1 className="hero-title">台股智慧選股系統</h1>
-        <p className="hero-desc">
-          一個頁面直接完成台股掃描、分類、推薦排序與進出場規劃。
-        </p>
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto max-w-7xl px-4 py-8 md:px-6 lg:px-8">
+        <div className="mb-8 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <div className="mb-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
+                台股即時選股系統 2.0
+              </div>
+              <h1 className="text-3xl font-bold tracking-tight md:text-4xl">
+                TW Stock Realtime Screener
+              </h1>
+              <p className="mt-2 text-sm text-slate-500 md:text-base">
+                顯示推薦分數、進場區間、停損與出場價，快速找出較強勢個股。
+              </p>
+            </div>
 
-        <div className="control-panel">
-          <div className="input-group">
-            <label className="input-label">指定股票代號（可留空，留空則掃描全部台股）</label>
-            <textarea
-              className="stock-textarea"
-              value={stockInput}
-              onChange={(e) => setStockInput(e.target.value)}
-              placeholder="例如：2330 2317 2454 2303"
-            />
-          </div>
-
-          <div className="action-row">
-            <button className="primary-button" onClick={fetchStocks} disabled={loading}>
-              {loading ? "載入中..." : "立即掃描"}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-label">總股票數</div>
-          <div className="stat-value">{stats.total}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">均線多頭</div>
-          <div className="stat-value">{stats.bullish}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">強勢突破</div>
-          <div className="stat-value">{stats.breakout}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">成交活躍</div>
-          <div className="stat-value">{stats.active}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">偏空避開</div>
-          <div className="stat-value">{stats.bearish}</div>
-        </div>
-      </section>
-
-      <section className="tabs-section">
-        <div className="tabs-scroll">
-          {(Object.keys(categoryLabels) as StockCategory[]).map((key) => (
-            <button
-              key={key}
-              className={`tab-button ${activeCategory === key ? "active" : ""}`}
-              onClick={() => setActiveCategory(key)}
-            >
-              {categoryLabels[key]}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {error ? <section className="message-card error-card">{error}</section> : null}
-
-      {!loading && loaded && filteredStocks.length === 0 ? (
-        <section className="message-card">查無符合條件的股票資料</section>
-      ) : null}
-
-      <section className="desktop-table-wrap">
-        <table className="stock-table">
-          <thead>
-            <tr>
-              <th>排名</th>
-              <th>代號</th>
-              <th>名稱</th>
-              <th>現價</th>
-              <th>漲跌幅</th>
-              <th>成交量</th>
-              <th>MA5</th>
-              <th>MA20</th>
-              <th>訊號</th>
-              <th>推薦分數</th>
-              <th>建議進場區間</th>
-              <th>出場價</th>
-              <th>停損價</th>
-              <th>判斷理由</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredStocks.map((stock, index) => (
-              <tr key={`${stock.symbol}-${index}`}>
-                <td>{index + 1}</td>
-                <td className="mono">{stock.symbol}</td>
-                <td>{stock.name}</td>
-                <td className="mono">{formatPrice(stock.price)}</td>
-                <td
-                  className={
-                    safeNumber(stock.change_percent) > 0
-                      ? "up"
-                      : safeNumber(stock.change_percent) < 0
-                      ? "down"
-                      : ""
-                  }
+            <div className="grid w-full gap-3 lg:max-w-2xl">
+              <label className="text-sm font-medium text-slate-700">
+                股票代號（用逗號分隔）
+              </label>
+              <div className="flex flex-col gap-3 md:flex-row">
+                <input
+                  value={stockInput}
+                  onChange={(e) => setStockInput(e.target.value)}
+                  placeholder="例如：2330, 2317, 2454"
+                  className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 outline-none transition focus:border-blue-500"
+                />
+                <button
+                  onClick={fetchScan}
+                  disabled={loading}
+                  className="rounded-2xl bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {formatPercent(stock.change_percent)}
-                </td>
-                <td className="mono">{formatVolume(stock.volume)}</td>
-                <td className="mono">{formatPrice(safeNumber(stock.ma5))}</td>
-                <td className="mono">{formatPrice(safeNumber(stock.ma20))}</td>
-                <td>{stock.signal || "-"}</td>
-                <td>
-                  <span className={`score-badge ${getScoreClass(stock.score)}`}>{stock.score}</span>
-                </td>
-                <td className="mono highlight">
-                  {formatPriceRange(stock.entryPriceMin, stock.entryPriceMax)}
-                </td>
-                <td className="mono take-profit">{formatPrice(stock.targetPrice)}</td>
-                <td className="mono stop-loss">{formatPrice(stock.stopLossPrice)}</td>
-                <td className="reason-cell">{stock.reason || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+                  {loading ? "掃描中..." : "掃描指定股票"}
+                </button>
+                <button
+                  onClick={fetchScanAll}
+                  disabled={loadingAll}
+                  className="rounded-2xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loadingAll ? "掃描中..." : "全台股 Top 30"}
+                </button>
+              </div>
+            </div>
+          </div>
 
-      <section className="mobile-cards">
-        {filteredStocks.map((stock, index) => (
-          <article className="stock-card" key={`${stock.symbol}-mobile-${index}`}>
-            <div className="stock-card-top">
-              <div>
-                <div className="stock-name-row">
-                  <span className="stock-symbol">{stock.symbol}</span>
-                  <span className="stock-name">{stock.name}</span>
+          {error ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
+        </div>
+
+        <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <SummaryCard title="掃描結果" value={`${results.length} 檔`} />
+          <SummaryCard
+            title="強勢股"
+            value={`${results.filter((x) => x.trend.includes("強勢")).length} 檔`}
+          />
+          <SummaryCard
+            title="中性股"
+            value={`${
+              results.filter(
+                (x) =>
+                  x.trend.includes("中性") &&
+                  !x.trend.includes("強勢") &&
+                  !x.trend.includes("弱勢")
+              ).length
+            } 檔`}
+          />
+          <SummaryCard
+            title="弱勢股"
+            value={`${results.filter((x) => x.trend.includes("弱勢")).length} 檔`}
+          />
+        </section>
+
+        <section className="mb-8 grid gap-6 xl:grid-cols-[1.1fr_1.9fr]">
+          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold">推薦 Top 10</h2>
+              <span className="text-sm text-slate-500">依分數排序</span>
+            </div>
+
+            <div className="space-y-3">
+              {top10.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-8 text-center text-slate-500">
+                  目前沒有資料
                 </div>
-                <div className="stock-signal">{stock.signal || "-"}</div>
-              </div>
+              ) : (
+                top10.map((stock, index) => (
+                  <div
+                    key={`${stock.symbol}-${index}`}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-base font-bold">
+                          {index + 1}. {stock.name}
+                        </div>
+                        <div className="text-sm text-slate-500">{stock.symbol}</div>
+                      </div>
+                      <div className={`text-lg font-bold ${getScoreColor(stock.score)}`}>
+                        {stock.score}
+                      </div>
+                    </div>
 
-              <div className={`score-badge large ${getScoreClass(stock.score)}`}>{stock.score}</div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span
+                        className={`rounded-full border px-2.5 py-1 font-medium ${getTrendColor(
+                          stock.trend
+                        )}`}
+                      >
+                        {stock.trend}
+                      </span>
+                      <span className="text-slate-500">現價 {stock.price}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <h2 className="text-xl font-bold">選股結果</h2>
+              <div className="flex flex-wrap gap-2">
+                {(["全部", "強勢", "中性", "弱勢"] as const).map((tab) => {
+                  const active = activeTab === tab;
+                  return (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                        active
+                          ? "bg-slate-900 text-white"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="stock-grid">
-              <div>
-                <span className="field-label">現價</span>
-                <span className="field-value">{formatPrice(stock.price)}</span>
+            {filteredResults.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 px-4 py-10 text-center text-slate-500">
+                沒有符合條件的資料
               </div>
-              <div>
-                <span className="field-label">漲跌幅</span>
-                <span
-                  className={`field-value ${
-                    safeNumber(stock.change_percent) > 0
-                      ? "up"
-                      : safeNumber(stock.change_percent) < 0
-                      ? "down"
-                      : ""
-                  }`}
-                >
-                  {formatPercent(stock.change_percent)}
-                </span>
-              </div>
-              <div>
-                <span className="field-label">成交量</span>
-                <span className="field-value">{formatVolume(stock.volume)}</span>
-              </div>
-              <div>
-                <span className="field-label">MA5 / MA20</span>
-                <span className="field-value">
-                  {formatPrice(safeNumber(stock.ma5))} / {formatPrice(safeNumber(stock.ma20))}
-                </span>
-              </div>
-              <div>
-                <span className="field-label">建議進場區間</span>
-                <span className="field-value highlight">
-                  {formatPriceRange(stock.entryPriceMin, stock.entryPriceMax)}
-                </span>
-              </div>
-              <div>
-                <span className="field-label">出場價</span>
-                <span className="field-value take-profit">{formatPrice(stock.targetPrice)}</span>
-              </div>
-              <div>
-                <span className="field-label">停損價</span>
-                <span className="field-value stop-loss">{formatPrice(stock.stopLossPrice)}</span>
-              </div>
-              <div>
-                <span className="field-label">排名</span>
-                <span className="field-value">{index + 1}</span>
-              </div>
-            </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {filteredResults.map((stock) => (
+                  <div
+                    key={stock.symbol}
+                    className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md"
+                  >
+                    <div className="mb-4 flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-xl font-bold">{stock.name}</div>
+                        <div className="mt-1 text-sm text-slate-500">{stock.symbol}</div>
+                      </div>
+                      <span
+                        className={`rounded-full border px-3 py-1 text-sm font-medium ${getTrendColor(
+                          stock.trend
+                        )}`}
+                      >
+                        {stock.trend}
+                      </span>
+                    </div>
 
-            <div className="reason-box">
-              <div className="field-label">判斷理由</div>
-              <div className="reason-text">{stock.reason || "-"}</div>
-            </div>
-          </article>
-        ))}
-      </section>
+                    <div className="mb-4 grid grid-cols-2 gap-3">
+                      <MetricBox label="現價" value={String(stock.price)} />
+                      <MetricBox
+                        label="推薦分數"
+                        value={String(stock.score)}
+                        valueClassName={getScoreColor(stock.score)}
+                      />
+                      <MetricBox
+                        label="漲跌幅"
+                        value={`${stock.change_percent}%`}
+                        valueClassName={
+                          stock.change_percent > 0
+                            ? "text-emerald-600"
+                            : stock.change_percent < 0
+                            ? "text-rose-600"
+                            : "text-slate-900"
+                        }
+                      />
+                      <MetricBox label="成交量" value={formatNumber(stock.volume)} />
+                    </div>
+
+                    <div className="mb-4 grid gap-3">
+                      <StrategyRow label="進場區間" value={stock.entry_range} />
+                      <StrategyRow label="出場價" value={String(stock.take_profit)} />
+                      <StrategyRow label="停損價" value={String(stock.stop_loss)} />
+                      <StrategyRow label="MA5 / MA20" value={`${stock.ma5} / ${stock.ma20}`} />
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <div className="mb-1 text-sm font-medium text-slate-700">判斷原因</div>
+                      <div className="text-sm leading-6 text-slate-600">{stock.reason}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
     </main>
+  );
+}
+
+function SummaryCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="text-sm text-slate-500">{title}</div>
+      <div className="mt-2 text-3xl font-bold">{value}</div>
+    </div>
+  );
+}
+
+function MetricBox({
+  label,
+  value,
+  valueClassName = "",
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="rounded-2xl bg-slate-50 p-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className={`mt-1 text-lg font-bold ${valueClassName}`}>{value}</div>
+    </div>
+  );
+}
+
+function StrategyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
+      <span className="text-sm text-slate-500">{label}</span>
+      <span className="text-sm font-semibold text-slate-900">{value}</span>
+    </div>
   );
 }
