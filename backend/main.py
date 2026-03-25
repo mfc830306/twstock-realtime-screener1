@@ -14,7 +14,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TWSE_URL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json"
+# 1) 證交所上市公司基本清單（穩定，用來保證 total 不會是 0）
+TWSE_LIST_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+
+# 2) 證交所上市當日行情（能抓到就補價格、漲跌、成交量）
+TWSE_DAY_ALL_URL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json"
 
 session = requests.Session()
 session.headers.update(
@@ -80,7 +84,7 @@ def calc_score(change_percent: float, volume: int, price: float) -> int:
         score += 4
 
     if price <= 0:
-        score -= 10
+        score -= 5
 
     return max(1, min(99, score))
 
@@ -97,7 +101,10 @@ def build_signal(score: int) -> str:
     return "偏空"
 
 
-def build_reason(score: int, change_percent: float, volume: int) -> str:
+def build_reason(score: int, change_percent: float, volume: int, has_realtime: bool) -> str:
+    if not has_realtime:
+        return "已載入證交所上市公司清單，日行情暫時未補齊"
+
     reasons = []
 
     if change_percent >= 4:
@@ -148,70 +155,169 @@ def calc_trade_plan(price: float) -> Dict[str, str]:
     }
 
 
-def normalize_row(row: Any, fields: List[str]) -> Optional[Dict[str, Any]]:
-    if isinstance(row, dict):
-        item = row
-    elif isinstance(row, list) and fields:
-        item = {}
-        for i, field_name in enumerate(fields):
-            item[field_name] = row[i] if i < len(row) else None
-    else:
-        return None
-
-    code = str(item.get("Code", "")).strip()
-    name = str(item.get("Name", "")).strip()
-
-    if not code or not name:
-        return None
-
-    if not code.isdigit() or len(code) not in (4, 5):
-        return None
-
-    price = to_float(item.get("ClosingPrice"))
-    volume = to_int(item.get("TradeVolume"))
-
-    change_raw = str(item.get("Change", "")).replace("X", "").replace("+", "").strip()
-    change_value = to_float(change_raw, 0.0)
-
-    prev_close = price - change_value
-    if prev_close > 0:
-        change_percent = round((change_value / prev_close) * 100, 2)
-    else:
-        change_percent = 0.0
-
-    score = calc_score(change_percent, volume, price)
-    signal = build_signal(score)
-    reason = build_reason(score, change_percent, volume)
-    trade_plan = calc_trade_plan(price)
-
-    return {
-        "symbol": code,
-        "name": name,
-        "market": "上市",
-        "price": price,
-        "change_percent": change_percent,
-        "volume": volume,
-        "score": score,
-        "signal": signal,
-        "reason": reason,
-        "entry_price": trade_plan["entry_price"],
-        "target_price": trade_plan["target_price"],
-        "stop_loss": trade_plan["stop_loss"],
-    }
-
-
-def fetch_all_twse() -> List[Dict[str, Any]]:
-    resp = session.get(TWSE_URL, timeout=30)
+def fetch_twse_listed_master() -> List[Dict[str, Any]]:
+    """
+    以上市公司清單做基底，保證 total 可正確反映證交所上市公司數量。
+    """
+    resp = session.get(TWSE_LIST_URL, timeout=30)
     resp.raise_for_status()
     payload = resp.json()
 
-    rows = payload.get("data", [])
-    fields = payload.get("fields", [])
+    if not isinstance(payload, list):
+        return []
 
     stocks: List[Dict[str, Any]] = []
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+
+        code = str(
+            item.get("公司代號")
+            or item.get("產業別")
+            or ""
+        ).strip()
+
+        name = str(
+            item.get("公司名稱")
+            or item.get("公司簡稱")
+            or ""
+        ).strip()
+
+        # 只保留正常股票代號
+        if not code.isdigit():
+            continue
+        if len(code) not in (4, 5):
+            continue
+        if not name:
+            continue
+
+        price = 0.0
+        change_percent = 0.0
+        volume = 0
+        score = calc_score(change_percent, volume, price)
+        signal = build_signal(score)
+        reason = build_reason(score, change_percent, volume, False)
+        trade_plan = calc_trade_plan(price)
+
+        stocks.append(
+            {
+                "symbol": code,
+                "name": name,
+                "market": "上市",
+                "price": price,
+                "change_percent": change_percent,
+                "volume": volume,
+                "score": score,
+                "signal": signal,
+                "reason": reason,
+                "entry_price": trade_plan["entry_price"],
+                "target_price": trade_plan["target_price"],
+                "stop_loss": trade_plan["stop_loss"],
+            }
+        )
+
+    return stocks
+
+
+def parse_day_all_rows(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    解析 STOCK_DAY_ALL，支援 row 為 list 或 dict 兩種情況。
+    回傳格式: { "2330": {price, change_percent, volume, ...}, ... }
+    """
+    rows = payload.get("data", [])
+    fields = payload.get("fields", [])
+    result: Dict[str, Dict[str, Any]] = {}
+
     for row in rows:
-        stock = normalize_row(row, fields)
-        if stock:
+        if isinstance(row, dict):
+            item = row
+        elif isinstance(row, list) and fields:
+            item = {fields[i]: row[i] if i < len(row) else None for i in range(len(fields))}
+        else:
+            continue
+
+        code = str(item.get("Code", "")).strip()
+        name = str(item.get("Name", "")).strip()
+
+        if not code.isdigit():
+            continue
+
+        price = to_float(item.get("ClosingPrice"))
+        volume = to_int(item.get("TradeVolume"))
+
+        change_raw = str(item.get("Change", "")).replace("X", "").replace("+", "").strip()
+        change_value = to_float(change_raw, 0.0)
+
+        prev_close = price - change_value
+        if prev_close > 0:
+            change_percent = round((change_value / prev_close) * 100, 2)
+        else:
+            change_percent = 0.0
+
+        score = calc_score(change_percent, volume, price)
+        signal = build_signal(score)
+        reason = build_reason(score, change_percent, volume, True)
+        trade_plan = calc_trade_plan(price)
+
+        result[code] = {
+            "symbol": code,
+            "name": name,
+            "market": "上市",
+            "price": price,
+            "change_percent": change_percent,
+            "volume": volume,
+            "score": score,
+            "signal": signal,
+            "reason": reason,
+            "entry_price": trade_plan["entry_price"],
+            "target_price": trade_plan["target_price"],
+            "stop_loss": trade_plan["stop_loss"],
+        }
+
+    return result
+
+
+def fetch_twse_day_all() -> Dict[str, Dict[str, Any]]:
+    """
+    抓日行情；失敗時回空 dict，不讓整體清單失效。
+    """
+    try:
+        resp = session.get(TWSE_DAY_ALL_URL, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+
+        if not isinstance(payload, dict):
+            return {}
+
+        return parse_day_all_rows(payload)
+    except Exception:
+        return {}
+
+
+def fetch_all_twse() -> List[Dict[str, Any]]:
+    """
+    最終版本：
+    1. 先抓上市公司完整清單（保證有 total）
+    2. 再用日行情補價格、漲跌、量、評分
+    """
+    master_list = fetch_twse_listed_master()
+    day_map = fetch_twse_day_all()
+
+    stocks: List[Dict[str, Any]] = []
+
+    for stock in master_list:
+        code = stock["symbol"]
+        if code in day_map:
+            merged = stock.copy()
+            merged.update(day_map[code])
+
+            # 名稱以基本清單優先，避免日行情名稱格式差異
+            if not merged.get("name"):
+                merged["name"] = stock["name"]
+
+            stocks.append(merged)
+        else:
             stocks.append(stock)
 
     return stocks
