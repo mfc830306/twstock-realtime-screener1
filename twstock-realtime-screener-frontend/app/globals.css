@@ -2,8 +2,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  min-height: 100%;
-  background: linear-gradient(135deg, #06162f, #082042 45%, #0b2a56);
+  background: linear-gradient(135deg, #08162d, #0b1e3a 45%, #10284d);
   color: #0f172a;
   font-family: Arial, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
 }
@@ -13,29 +12,39 @@ body {
 }
 
 button,
-input,
-select {
+input {
   font: inherit;
 }
+
+/* ===== Layout ===== */
 
 .page {
   min-height: 100vh;
 }
 
 .container {
-  max-width: 1500px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 24px;
 }
 
-/* top hero */
+/* ===== 共用卡片 ===== */
 
-.hero {
+.hero,
+.panel,
+.summaryCard,
+.stockCard,
+.pricePanel {
   background: #ffffff;
   border-radius: 24px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.18);
+}
+
+/* ===== Hero ===== */
+
+.hero {
   padding: 24px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .badge {
@@ -45,63 +54,59 @@ select {
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
   margin-bottom: 12px;
 }
 
 .title {
   margin: 0;
-  font-size: 34px;
-  line-height: 1.15;
-  color: #0b1b45;
+  font-size: 40px;
+  line-height: 1.1;
 }
 
 .subtitle {
-  margin: 10px 0 0;
-  font-size: 16px;
+  margin: 12px 0 0 0;
   color: #64748b;
+  font-size: 16px;
 }
 
 .marketInfo {
   margin-top: 16px;
   background: #eff6ff;
-  border: 1px solid #bfdbfe;
   color: #1e3a8a;
+  border: 1px solid #bfdbfe;
   border-radius: 16px;
   padding: 12px 14px;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
 }
+
+/* ===== 搜尋區 ===== */
 
 .searchRow {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto;
   gap: 12px;
-  margin-top: 18px;
+  margin-top: 20px;
 }
 
 .input {
   width: 100%;
   border: 1px solid #cbd5e1;
-  background: #fff;
   border-radius: 16px;
   padding: 14px 16px;
-  outline: none;
+  background: #fff;
 }
 
-.input:focus {
-  border-color: #60a5fa;
-  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
-}
+/* ===== 按鈕 ===== */
 
 .btn {
   border: 0;
   border-radius: 16px;
-  padding: 14px 18px;
+  padding: 14px 20px;
   color: #fff;
   cursor: pointer;
-  font-weight: 700;
-  white-space: nowrap;
+  font-weight: 600;
 }
 
 .btn:disabled {
@@ -113,168 +118,128 @@ select {
   background: #2563eb;
 }
 
-.btnBlue:hover {
-  background: #1d4ed8;
-}
-
 .btnDark {
   background: #0f172a;
 }
 
-.btnDark:hover {
-  background: #1e293b;
-}
-
-.btnGhost {
-  background: #475569;
-}
-
-.btnGhost:hover {
-  background: #334155;
-}
+/* ===== 錯誤 ===== */
 
 .errorBox {
-  margin-top: 14px;
+  margin-top: 16px;
   background: #fff1f2;
   color: #be123c;
   border: 1px solid #fecdd3;
-  border-radius: 14px;
+  border-radius: 16px;
   padding: 12px 14px;
 }
 
-.summaryRow {
+/* ===== Summary ===== */
+
+.summaryGrid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .summaryCard {
-  background: #ffffff;
-  border-radius: 22px;
-  padding: 18px 20px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  padding: 20px;
 }
 
-.summaryLabel {
-  font-size: 14px;
+.summaryTitle {
   color: #64748b;
+  font-size: 14px;
 }
 
 .summaryValue {
-  margin-top: 10px;
-  font-size: 24px;
-  font-weight: 800;
-  color: #0b1b45;
+  margin-top: 8px;
+  font-size: 32px;
+  font-weight: 700;
 }
 
-/* layout */
+/* ===== 價位分類 ===== */
 
-.contentGrid {
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: 20px;
-}
-
-/* side */
-
-.sidePanel,
-.mainPanel,
-.topPanel {
-  background: #ffffff;
-  border-radius: 24px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-}
-
-.sidePanel {
+.pricePanel {
   padding: 20px;
-  height: fit-content;
-  position: sticky;
-  top: 20px;
+  margin-bottom: 24px;
 }
 
-.sideTitle,
-.mainTitle,
-.topTitle {
+.resultHint {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 14px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* ===== 主版面 ===== */
+
+.mainGrid {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 24px;
+}
+
+.panel {
+  padding: 20px;
+}
+
+.panelWide {
+  min-width: 0;
+}
+
+/* ===== Header ===== */
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panelHeader h2 {
   margin: 0;
-  font-size: 28px;
-  color: #0b1b45;
+  font-size: 24px;
 }
 
-.sideSub,
-.mainSub,
-.topSub {
-  margin-top: 6px;
+.panelHeader span {
   color: #64748b;
   font-size: 14px;
 }
 
-.bucketList {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 18px;
+.panelHeaderWrap {
+  flex-wrap: wrap;
 }
 
-.bucketBtn {
-  width: 100%;
-  border: 0;
-  border-radius: 16px;
-  padding: 14px 14px;
+/* ===== Tabs ===== */
+
+.tabs {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tabBtn {
+  border: 0;
   background: #e2e8f0;
   color: #334155;
+  border-radius: 999px;
+  padding: 10px 16px;
   cursor: pointer;
-  font-weight: 700;
+  font-size: 14px;
 }
 
-.bucketBtn:hover {
-  background: #cbd5e1;
-}
-
-.bucketBtnActive {
+.tabBtnActive {
   background: #0f172a;
   color: #ffffff;
 }
 
-.bucketCount {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.24);
-  font-size: 13px;
-}
-
-/* right area */
-
-.rightArea {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.topPanel {
-  padding: 20px;
-}
-
-.topHeader,
-.mainHeader {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
+/* ===== Top10 ===== */
 
 .topList {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 
@@ -282,175 +247,154 @@ select {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 18px;
-  padding: 14px;
+  padding: 16px;
+}
+
+.topCardHeader,
+.topCardFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .topName {
   font-size: 18px;
-  font-weight: 800;
-  color: #0b1b45;
+  font-weight: 700;
 }
 
 .topSymbol {
-  margin-top: 4px;
-  color: #64748b;
   font-size: 13px;
+  color: #64748b;
 }
 
-.topMeta {
-  margin-top: 12px;
+.scoreBig {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+/* ===== 股票卡片 ===== */
+
+.cardGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
-.topMetaBox {
-  background: #ffffff;
+.stockCard {
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+}
+
+.stockHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stockName {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.stockSymbol {
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* ===== 趨勢 ===== */
+
+.trendBadge {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.trendStrong {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.trendNeutral {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.trendWeak {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+/* ===== 指標 ===== */
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.metricBox {
+  background: #f8fafc;
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.metricLabel {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.metricValue {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* ===== 策略 ===== */
+
+.strategyList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.strategyRow {
+  display: flex;
+  justify-content: space-between;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.strategyLabel {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.strategyValue {
+  font-weight: 600;
+}
+
+/* ===== 原因 ===== */
+
+.reasonBox {
+  margin-top: 10px;
+  background: #f8fafc;
   border-radius: 12px;
   padding: 10px;
 }
 
-.topMetaLabel {
-  font-size: 12px;
-  color: #64748b;
-}
-
-.topMetaValue {
-  margin-top: 4px;
-  font-size: 20px;
-  font-weight: 800;
-}
-
-.topFooter {
-  margin-top: 12px;
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+.reasonTitle {
   font-size: 13px;
-  color: #334155;
+  font-weight: 600;
 }
 
-.mainPanel {
-  padding: 20px;
+.reasonText {
+  font-size: 13px;
+  color: #475569;
 }
 
-.listTableWrap {
-  overflow-x: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 18px;
-}
-
-.listTable {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 1100px;
-  background: #ffffff;
-}
-
-.listTable thead tr {
-  background: #f1f5f9;
-}
-
-.listTable th {
-  text-align: left;
-  padding: 14px 12px;
-  font-size: 14px;
-  color: #334155;
-  border-bottom: 1px solid #e2e8f0;
-  white-space: nowrap;
-}
-
-.listTable td {
-  padding: 14px 12px;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 14px;
-  color: #0f172a;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
-.listTable tbody tr:hover {
-  background: #f8fafc;
-}
-
-.textRight {
-  text-align: right;
-}
-
-.stockCode {
-  font-weight: 800;
-  color: #0b1b45;
-}
-
-.stockName {
-  font-weight: 700;
-}
-
-.marketTag {
-  display: inline-block;
-  padding: 5px 10px;
-  border-radius: 999px;
-  background: #e2e8f0;
-  color: #334155;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.scoreTag {
-  display: inline-block;
-  min-width: 46px;
-  text-align: center;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: #dbeafe;
-  color: #1d4ed8;
-  font-weight: 800;
-}
-
-.upText {
-  color: #dc2626 !important;
-  font-weight: 800;
-}
-
-.downText {
-  color: #16a34a !important;
-  font-weight: 800;
-}
-
-.neutralText {
-  color: #334155 !important;
-  font-weight: 700;
-}
-
-.signalStrong {
-  display: inline-block;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: #ecfdf5;
-  color: #047857;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.signalMid {
-  display: inline-block;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: #fffbeb;
-  color: #b45309;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.signalWeak {
-  display: inline-block;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: #fff1f2;
-  color: #be123c;
-  font-size: 12px;
-  font-weight: 700;
-}
+/* ===== 空資料 ===== */
 
 .emptyBox {
   border: 1px dashed #cbd5e1;
@@ -460,45 +404,15 @@ select {
   padding: 40px 16px;
 }
 
-.autoRefreshBox {
-  margin-top: 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  padding: 10px 14px;
-  color: #334155;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: #22c55e;
-  flex: 0 0 auto;
-}
-
-@media (max-width: 1280px) {
-  .topList {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
+/* ===== RWD ===== */
 
 @media (max-width: 1100px) {
-  .contentGrid {
+  .mainGrid {
     grid-template-columns: 1fr;
   }
 
-  .sidePanel {
-    position: static;
-  }
-
-  .topList {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .cardGrid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -507,31 +421,13 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .summaryRow {
+  .summaryGrid {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .topHeader,
-  .mainHeader {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
 
-@media (max-width: 560px) {
-  .container {
-    padding: 16px;
-  }
-
-  .summaryRow {
+@media (max-width: 520px) {
+  .summaryGrid {
     grid-template-columns: 1fr;
-  }
-
-  .topList {
-    grid-template-columns: 1fr;
-  }
-
-  .title {
-    font-size: 28px;
   }
 }
