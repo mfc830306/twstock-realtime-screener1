@@ -1,13 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional, Union
 import requests
-import time
-import re
-from typing import Dict, List, Any
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import math
 
-app = FastAPI()
+app = FastAPI(title="TW Stock Realtime Screener")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,308 +17,398 @@ app.add_middleware(
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Referer": "https://mis.twse.com.tw/stock/index.jsp",
+    "Accept": "application/json,text/plain,*/*",
 }
 
-SESSION = requests.Session()
-SESSION.headers.update(HEADERS)
-
-CACHE = {
-    "list": {"time": 0, "data": []},
-    "price": {"time": 0, "data": {}},
-    "daily": {"time": 0, "data": {}},
-}
-
-LIST_CACHE_TIME = 60 * 60 * 6
-PRICE_CACHE_TIME = 5
-DAILY_CACHE_TIME = 60 * 10
-BATCH_SIZE = 50
+TIMEOUT = 12
 
 
-def safe_float(x: Any) -> float:
+class ScanRequest(BaseModel):
+    stocks: Union[str, List[str]]
+
+
+def safe_float(value, default=0.0):
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip().replace(",", "")
+    if s in {"", "--", "---", "----", "X", "除權息", "N/A", "null", "None"}:
+        return default
+
+    # 去掉 + 號
+    s = s.replace("+", "")
+
+    # 有些漲跌欄位可能帶箭頭或中文
+    s = s.replace("△", "").replace("▲", "").replace("▽", "-").replace("▼", "-")
+
     try:
-        s = str(x).replace(",", "").strip()
-        if s in ("", "-", "--", "X", "除權息", "null", "None"):
-            return 0.0
         return float(s)
     except Exception:
-        return 0.0
+        return default
 
 
-def chunks(lst: List[Any], size: int):
-    for i in range(0, len(lst), size):
-        yield lst[i:i + size]
+def safe_int(value, default=0):
+    return int(round(safe_float(value, default)))
 
 
-def taipei_now() -> datetime:
-    return datetime.now(ZoneInfo("Asia/Taipei"))
+def score_stock(price, change_percent, volume, open_price, high_price, low_price):
+    score = 50
+
+    # 漲跌幅
+    if change_percent >= 6:
+        score += 20
+    elif change_percent >= 3:
+        score += 14
+    elif change_percent >= 1:
+        score += 8
+    elif change_percent <= -6:
+        score -= 18
+    elif change_percent <= -3:
+        score -= 12
+    elif change_percent <= -1:
+        score -= 6
+
+    # 成交量
+    if volume >= 50000000:
+        score += 16
+    elif volume >= 10000000:
+        score += 10
+    elif volume >= 3000000:
+        score += 6
+    elif volume <= 50000:
+        score -= 6
+
+    # 日內位置
+    if high_price > 0 and low_price > 0 and high_price != low_price:
+        position = (price - low_price) / (high_price - low_price)
+        if position >= 0.8:
+            score += 8
+        elif position <= 0.2:
+            score -= 6
+
+    # 開盤後表現
+    if open_price > 0:
+        intraday_change = ((price - open_price) / open_price) * 100
+        if intraday_change >= 2:
+            score += 8
+        elif intraday_change <= -2:
+            score -= 8
+
+    return max(1, min(99, int(round(score))))
 
 
-def taipei_now_str() -> str:
-    return taipei_now().strftime("%H:%M:%S")
+def build_signal(stock):
+    score = stock["score"]
+    change_percent = stock["change_percent"]
+    price = stock["price"]
+
+    if score >= 80:
+        signal = "偏多"
+        reason = "股價強勢、量能充足，短線偏多"
+    elif score >= 65:
+        signal = "中性偏多"
+        reason = "走勢穩定，仍有續強機會"
+    elif score >= 45:
+        signal = "中性"
+        reason = "多空力道接近，建議觀望"
+    elif score >= 30:
+        signal = "中性偏空"
+        reason = "動能轉弱，操作宜保守"
+    else:
+        signal = "偏空"
+        reason = "價格弱勢，短線風險較高"
+
+    # 進出場區間
+    if price > 0:
+        entry_low = round(price * 0.985, 2)
+        entry_high = round(price * 1.01, 2)
+        target = round(price * (1.04 if score >= 65 else 1.025), 2)
+        stop_loss = round(price * (0.965 if score >= 65 else 0.975), 2)
+    else:
+        entry_low, entry_high, target, stop_loss = 0, 0, 0, 0
+
+    if change_percent >= 7:
+        reason += "，但漲幅已大，不宜追高"
+    elif change_percent <= -5:
+        reason += "，跌勢明顯，需留意續弱"
+
+    stock["signal"] = signal
+    stock["reason"] = reason
+    stock["entry_price"] = f"{entry_low} ~ {entry_high}"
+    stock["target_price"] = str(target)
+    stock["stop_loss"] = str(stop_loss)
+    return stock
 
 
-def is_after_close() -> bool:
-    now = taipei_now()
-    return now.hour > 13 or (now.hour == 13 and now.minute >= 30)
+def normalize_twse_item(item):
+    symbol = str(item.get("Code", "")).strip()
+    name = str(item.get("Name", "")).strip()
+    price = safe_float(item.get("ClosingPrice"))
+    prev_close = price - safe_float(item.get("Change"))
+    if prev_close <= 0:
+        prev_close = price
+
+    change_percent = 0.0
+    if prev_close > 0 and price > 0:
+        change_percent = round(((price - prev_close) / prev_close) * 100, 2)
+
+    open_price = safe_float(item.get("OpeningPrice"))
+    high_price = safe_float(item.get("HighestPrice"))
+    low_price = safe_float(item.get("LowestPrice"))
+    volume = safe_int(item.get("TradeVolume"))
+
+    score = score_stock(price, change_percent, volume, open_price, high_price, low_price)
+
+    return {
+        "symbol": symbol,
+        "name": name,
+        "market": "上市",
+        "price": round(price, 2),
+        "change_percent": round(change_percent, 2),
+        "volume": volume,
+        "score": score,
+        "prev_close": round(prev_close, 2),
+        "open": round(open_price, 2),
+        "high": round(high_price, 2),
+        "low": round(low_price, 2),
+        "last_update": "official",
+    }
 
 
-def get_market_last_update(row: Dict[str, Any]) -> str:
-    t = str(row.get("t", "")).strip()
-    if t:
-        return t
+def normalize_tpex_item(item):
+    symbol = str(
+        item.get("SecuritiesCompanyCode")
+        or item.get("Code")
+        or item.get("股票代號")
+        or ""
+    ).strip()
+    name = str(
+        item.get("CompanyName")
+        or item.get("Name")
+        or item.get("股票名稱")
+        or ""
+    ).strip()
 
-    alt = str(row.get("time", "")).strip()
-    if alt:
-        return alt
+    price = safe_float(
+        item.get("Close")
+        or item.get("ClosingPrice")
+        or item.get("收盤")
+    )
 
-    if is_after_close():
-        return "13:30:00"
+    change_value = safe_float(
+        item.get("Change")
+        or item.get("漲跌")
+        or item.get("UpDown")
+    )
 
-    return taipei_now_str()
+    prev_close = price - change_value
+    if prev_close <= 0:
+        prev_close = price
+
+    change_percent = 0.0
+    if prev_close > 0 and price > 0:
+        change_percent = round(((price - prev_close) / prev_close) * 100, 2)
+
+    open_price = safe_float(item.get("Open") or item.get("OpeningPrice") or item.get("開盤"))
+    high_price = safe_float(item.get("High") or item.get("HighestPrice") or item.get("最高"))
+    low_price = safe_float(item.get("Low") or item.get("LowestPrice") or item.get("最低"))
+    volume = safe_int(
+        item.get("TradeShares")
+        or item.get("Volume")
+        or item.get("成交股數")
+        or item.get("成交量")
+    )
+
+    score = score_stock(price, change_percent, volume, open_price, high_price, low_price)
+
+    return {
+        "symbol": symbol,
+        "name": name,
+        "market": "上櫃",
+        "price": round(price, 2),
+        "change_percent": round(change_percent, 2),
+        "volume": volume,
+        "score": score,
+        "prev_close": round(prev_close, 2),
+        "open": round(open_price, 2),
+        "high": round(high_price, 2),
+        "low": round(low_price, 2),
+        "last_update": "official",
+    }
 
 
-def fetch_stock_list() -> List[Dict[str, str]]:
-    now = time.time()
-    if now - CACHE["list"]["time"] < LIST_CACHE_TIME:
-        return CACHE["list"]["data"]
-
-    url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-    r = SESSION.get(url, timeout=20)
-    r.encoding = "big5"
-
-    matches = re.findall(r'>(\d{4})　([^<]+)<', r.text)
+def fetch_twse_stocks():
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
 
     stocks = []
-    seen = set()
+    for item in data:
+        symbol = str(item.get("Code", "")).strip()
+        if not symbol.isdigit():
+            continue
+        stock = normalize_twse_item(item)
+        if stock["price"] <= 0:
+            continue
+        stocks.append(stock)
 
-    for code, name in matches:
-        if code.isdigit() and code not in seen:
-            seen.add(code)
-            stocks.append({"symbol": code, "name": name.strip()})
-
-    CACHE["list"]["time"] = now
-    CACHE["list"]["data"] = stocks
     return stocks
 
 
-def fetch_daily_close_map() -> Dict[str, Dict[str, Any]]:
-    """
-    收盤資料備援：
-    若 MIS 取不到，就至少用尾盤結果補上，不要全是 0
-    """
-    now = time.time()
-    if now - CACHE["daily"]["time"] < DAILY_CACHE_TIME:
-        return CACHE["daily"]["data"]
+def fetch_tpex_stocks():
+    urls = [
+        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
+        "https://www.tpex.org.tw/openapi/v1/tpex_esb_quotes",
+    ]
 
-    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-    try:
-        r = SESSION.get(url, timeout=20)
-        data = r.json()
-    except Exception:
-        return {}
-
-    result: Dict[str, Dict[str, Any]] = {}
-    for row in data:
-        code = str(row.get("Code", "")).strip()
-        price = safe_float(row.get("ClosingPrice"))
-        change = safe_float(row.get("Change"))
-        volume = safe_float(row.get("TradeVolume"))
-        open_price = safe_float(row.get("OpeningPrice"))
-        high = safe_float(row.get("HighestPrice"))
-        low = safe_float(row.get("LowestPrice"))
-
-        prev_close = price - change if price else 0
-        change_percent = round((change / prev_close) * 100, 2) if prev_close else 0
-
-        if code:
-            result[code] = {
-                "price": round(price, 2) if price > 0 else 0,
-                "change_percent": change_percent,
-                "volume": int(volume),
-                "prev_close": round(prev_close, 2) if prev_close > 0 else 0,
-                "open": round(open_price, 2) if open_price > 0 else 0,
-                "high": round(high, 2) if high > 0 else 0,
-                "low": round(low, 2) if low > 0 else 0,
-                "last_update": "13:30:00",
-            }
-
-    CACHE["daily"]["time"] = now
-    CACHE["daily"]["data"] = result
-    return result
-
-
-def warmup_mis_session() -> None:
-    """
-    先進 MIS 頁面與 warm-up request，提升 getStockInfo 成功率
-    """
-    try:
-        SESSION.get("https://mis.twse.com.tw/stock/index.jsp", timeout=20)
-    except Exception:
-        pass
-
-    try:
-        SESSION.get(
-            "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
-            "?ex_ch=tse_t00.tw|otc_o00.tw|tse_FRMSA.tw&json=1&delay=0"
-            f"&_={int(time.time() * 1000)}",
-            timeout=20,
-        )
-    except Exception:
-        pass
-
-
-def fetch_prices() -> Dict[str, Dict[str, Any]]:
-    now = time.time()
-    if now - CACHE["price"]["time"] < PRICE_CACHE_TIME:
-        return CACHE["price"]["data"]
-
-    stock_list = fetch_stock_list()
-    symbols = [s["symbol"] for s in stock_list]
-    daily_map = fetch_daily_close_map()
-
-    warmup_mis_session()
-
-    result: Dict[str, Dict[str, Any]] = {}
-
-    for batch in chunks(symbols, BATCH_SIZE):
-        ex_ch = "|".join([f"tse_{code}.tw" for code in batch])
-
-        url = (
-            "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
-            f"?ex_ch={ex_ch}&json=1&delay=0&_={int(time.time() * 1000)}"
-        )
-
-        rows = []
+    stocks = []
+    for url in urls:
         try:
-            r = SESSION.get(url, timeout=20)
-            data = r.json()
-            rows = data.get("msgArray", [])
+            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for item in data:
+                symbol = str(
+                    item.get("SecuritiesCompanyCode")
+                    or item.get("Code")
+                    or item.get("股票代號")
+                    or ""
+                ).strip()
+
+                if not symbol or not symbol.isdigit():
+                    continue
+
+                stock = normalize_tpex_item(item)
+                if stock["price"] <= 0:
+                    continue
+                stocks.append(stock)
         except Exception:
-            rows = []
+            continue
 
-        for row in rows:
-            code = str(row.get("c", "")).strip()
-            if not code:
-                continue
-
-            price = safe_float(row.get("z"))
-            if price <= 0:
-                price = safe_float(row.get("pz")) or safe_float(row.get("o"))
-
-            volume = safe_float(row.get("v"))
-            trade_volume = safe_float(row.get("tv"))
-
-            prev_close = safe_float(row.get("y"))
-            if prev_close <= 0:
-                prev_close = daily_map.get(code, {}).get("prev_close", 0)
-
-            change_percent = 0.0
-            if price > 0 and prev_close > 0:
-                change_percent = round((price - prev_close) / prev_close * 100, 2)
-
-            result[code] = {
-                "price": round(price, 2) if price > 0 else 0,
-                "change_percent": change_percent,
-                "volume": int(volume) if volume > 0 else int(trade_volume),
-                "prev_close": round(prev_close, 2) if prev_close > 0 else 0,
-                "open": safe_float(row.get("o")),
-                "high": safe_float(row.get("h")),
-                "low": safe_float(row.get("l")),
-                "last_update": get_market_last_update(row),
-            }
-
-        time.sleep(0.15)
-
-    # 如果 MIS 沒抓到，收盤後直接回尾盤結果
-    if not result:
-        CACHE["price"]["time"] = now
-        CACHE["price"]["data"] = daily_map
-        return daily_map
-
-    # 對於 MIS 漏掉的股票，也用 daily 補
-    merged = {}
-    for s in stock_list:
-        code = s["symbol"]
-        if code in result and result[code].get("price", 0) > 0:
-            merged[code] = result[code]
-        else:
-            merged[code] = daily_map.get(code, {
-                "price": 0,
-                "change_percent": 0,
-                "volume": 0,
-                "prev_close": 0,
-                "open": 0,
-                "high": 0,
-                "low": 0,
-                "last_update": "13:30:00" if is_after_close() else taipei_now_str(),
-            })
-
-    CACHE["price"]["time"] = now
-    CACHE["price"]["data"] = merged
-    return merged
+    return stocks
 
 
-def calc_score(change_percent: float, volume: int) -> int:
-    score = 50 + change_percent * 2
+def get_all_stocks():
+    all_stocks = []
 
-    if volume > 5_000_000:
-        score += 4
-    elif volume > 1_000_000:
-        score += 2
+    try:
+        all_stocks.extend(fetch_twse_stocks())
+    except Exception:
+        pass
 
-    return max(0, min(100, int(round(score))))
+    try:
+        all_stocks.extend(fetch_tpex_stocks())
+    except Exception:
+        pass
+
+    # 去重：相同代號保留第一筆
+    dedup = {}
+    for s in all_stocks:
+        if s["symbol"] not in dedup:
+            dedup[s["symbol"]] = s
+
+    results = list(dedup.values())
+
+    # 補上技術判斷欄位
+    results = [build_signal(s) for s in results]
+
+    # 依分數、成交量排序
+    results.sort(key=lambda x: (x["score"], x["volume"], x["change_percent"]), reverse=True)
+    return results
+
+
+def in_bucket(price: float, bucket: str) -> bool:
+    if bucket == "all":
+        return True
+    if bucket == "lt10":
+        return price < 10
+    if bucket == "10_20":
+        return 10 <= price < 20
+    if bucket == "20_50":
+        return 20 <= price < 50
+    if bucket == "50_100":
+        return 50 <= price < 100
+    if bucket == "100_200":
+        return 100 <= price < 200
+    if bucket == "200_500":
+        return 200 <= price < 500
+    if bucket == "500_1000":
+        return 500 <= price < 1000
+    if bucket == "gte1000":
+        return price >= 1000
+    return True
 
 
 @app.get("/")
 def root():
-    return {
-        "message": "backend running",
-        "mode": "MIS 5-second snapshot + daily fallback",
-    }
+    return {"message": "backend running"}
 
 
 @app.get("/health")
 def health():
-    return {
-        "ok": True,
-        "timestamp": int(time.time()),
-        "taipei_time": taipei_now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    return {"ok": True}
 
 
 @app.get("/stocks")
-def stocks():
-    stock_list = fetch_stock_list()
-    price_map = fetch_prices()
+def get_stocks(
+    q: str = Query(default=""),
+    bucket: str = Query(default="all"),
+    limit: Optional[int] = Query(default=None),
+):
+    try:
+        stocks = get_all_stocks()
 
-    result = []
+        q = q.strip().lower()
+        if q:
+            stocks = [
+                s for s in stocks
+                if q in s["symbol"].lower() or q in s["name"].lower()
+            ]
 
-    for s in stock_list:
-        p = price_map.get(s["symbol"], {})
+        stocks = [s for s in stocks if in_bucket(s["price"], bucket)]
 
-        price = p.get("price", 0)
-        change_percent = p.get("change_percent", 0)
-        volume = p.get("volume", 0)
+        total = len(stocks)
 
-        result.append({
-            "symbol": s["symbol"],
-            "name": s["name"],
-            "price": price,
-            "change_percent": change_percent,
-            "volume": volume,
-            "score": calc_score(change_percent, volume),
-            "prev_close": p.get("prev_close", 0),
-            "open": p.get("open", 0),
-            "high": p.get("high", 0),
-            "low": p.get("low", 0),
-            "last_update": p.get("last_update", "13:30:00" if is_after_close() else taipei_now_str()),
-        })
+        if limit and limit > 0:
+            stocks = stocks[:limit]
 
-    return {
-        "success": True,
-        "source": "TWSE MIS snapshot + daily fallback",
-        "cache_seconds": PRICE_CACHE_TIME,
-        "count": len(result),
-        "stocks": result,
-    }
+        return {
+            "success": True,
+            "source": "TWSE + TPEx official",
+            "count": total,
+            "stocks": stocks,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"抓取股票資料失敗：{str(e)}",
+            "count": 0,
+            "stocks": [],
+        }
+
+
+@app.post("/scan")
+def scan_stocks(payload: ScanRequest):
+    try:
+        stocks = get_all_stocks()
+
+        if isinstance(payload.stocks, str):
+            raw_items = payload.stocks.replace("，", ",").replace("\n", ",").split(",")
+            target_symbols = [x.strip() for x in raw_items if x.strip()]
+        else:
+            target_symbols = [str(x).strip() for x in payload.stocks if str(x).strip()]
+
+        target_set = set(target_symbols)
+        result = [s for s in stocks if s["symbol"] in target_set or s["name"] in target_set]
+
+        # 若使用者沒輸入，回傳推薦前10檔
+        if not target_symbols:
+            result = stocks[:10]
+
+        return result
+    except Exception as e:
+        return [{"error": f"掃描失敗：{str(e)}"}]
