@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 import requests
 import time
-import pandas as pd
+import re
 
 app = FastAPI(title="TW Stock Realtime Screener B")
 
@@ -31,6 +31,9 @@ CACHE_SECONDS_LIST = 60 * 60 * 6
 CACHE_SECONDS_PRICE = 30
 
 
+# ---------------------------
+# 工具
+# ---------------------------
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -83,7 +86,7 @@ def calc_score(price: float, change_percent: float, volume: int) -> int:
         score += 5
     elif price >= 300:
         score += 3
-    elif price <= 20:
+    elif 0 < price <= 20:
         score -= 2
 
     return max(1, min(100, int(score)))
@@ -128,8 +131,10 @@ def build_reason(price: float, change_percent: float, volume: int) -> str:
         reasons.append("高價股")
     elif price >= 100:
         reasons.append("中高價位")
-    else:
+    elif price > 0:
         reasons.append("低中價位")
+    else:
+        reasons.append("價格待補")
 
     return "、".join(reasons)
 
@@ -165,7 +170,14 @@ def build_trade_plan(price: float, signal: str) -> Dict[str, str]:
     }
 
 
-def build_stock_item(symbol: str, name: str, market: str, price: float, change_percent: float, volume: int) -> Dict[str, Any]:
+def build_stock_item(
+    symbol: str,
+    name: str,
+    market: str,
+    price: float,
+    change_percent: float,
+    volume: int
+) -> Dict[str, Any]:
     score = calc_score(price, change_percent, volume)
     signal = build_signal(score, change_percent)
     reason = build_reason(price, change_percent, volume)
@@ -187,47 +199,46 @@ def build_stock_item(symbol: str, name: str, market: str, price: float, change_p
     }
 
 
-def _parse_isin_table(url: str, target_market: str) -> List[Dict[str, str]]:
+# ---------------------------
+# 股票清單抓取
+# ---------------------------
+def parse_stock_list_from_isin(url: str, market_name: str) -> List[Dict[str, str]]:
+    """
+    直接解析 TWSE ISIN 頁面文字，避免 pandas.read_html 在 Render 失敗。
+    只抓 4 碼股票代號，排除 ETF / 權證 / 債券。
+    """
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.encoding = "big5"
 
-    tables = pd.read_html(r.text)
+    html = r.text
     stocks = []
 
-    for df in tables:
-        if df.shape[1] < 1:
+    # 抓出像這種格式：
+    # 1101　台泥
+    # 2330　台積電
+    # 中間是全形空白
+    matches = re.findall(r'>(\d{4})　([^<]+)<', html)
+
+    for symbol, name in matches:
+        symbol = symbol.strip()
+        name = name.strip()
+
+        if not symbol.isdigit():
             continue
 
-        # 有些表頭會是多層，先拍平成單層字串
-        df.columns = [str(c).strip() for c in df.columns]
+        if len(symbol) != 4:
+            continue
 
-        first_col = df.columns[0]
+        # 排除明顯非股票標題行
+        bad_words = ["股票", "上市認購", "上櫃認購", "臺灣存託憑證", "受益證券", "附認股權", "轉換公司債"]
+        if any(word in name for word in bad_words):
+            continue
 
-        for _, row in df.iterrows():
-            code_name = str(row.get(first_col, "")).strip()
-
-            if "　" not in code_name:
-                continue
-
-            parts = code_name.split("　")
-            if len(parts) < 2:
-                continue
-
-            symbol = parts[0].strip()
-            name = parts[1].strip()
-
-            if not symbol.isdigit():
-                continue
-
-            # 避免抓到 ETF / 債券 / 其他非一般股票
-            if len(symbol) != 4:
-                continue
-
-            stocks.append({
-                "symbol": symbol,
-                "name": name,
-                "market": target_market
-            })
+        stocks.append({
+            "symbol": symbol,
+            "name": name,
+            "market": market_name
+        })
 
     # 去重
     unique = {}
@@ -243,11 +254,11 @@ def fetch_twse_listed_stocks() -> List[Dict[str, str]]:
         return CACHE["listed_stocks"]["data"]
 
     try:
-        stocks = _parse_isin_table(
+        stocks = parse_stock_list_from_isin(
             "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
             "上市"
         )
-    except:
+    except Exception:
         stocks = []
 
     CACHE["listed_stocks"]["time"] = now
@@ -261,11 +272,11 @@ def fetch_tpex_otc_stocks() -> List[Dict[str, str]]:
         return CACHE["otc_stocks"]["data"]
 
     try:
-        stocks = _parse_isin_table(
+        stocks = parse_stock_list_from_isin(
             "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
             "上櫃"
         )
-    except:
+    except Exception:
         stocks = []
 
     CACHE["otc_stocks"]["time"] = now
@@ -273,6 +284,9 @@ def fetch_tpex_otc_stocks() -> List[Dict[str, str]]:
     return stocks
 
 
+# ---------------------------
+# 上市行情
+# ---------------------------
 def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
     now = time.time()
     if now - CACHE["twse_price"]["time"] < CACHE_SECONDS_PRICE and CACHE["twse_price"]["data"]:
@@ -294,7 +308,7 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
                 break
             if isinstance(data, dict) and data.get("data"):
                 break
-        except:
+        except Exception:
             continue
 
     if data is None:
@@ -302,6 +316,7 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
         CACHE["twse_price"]["data"] = {}
         return {}
 
+    # OpenAPI 版本
     if isinstance(data, list):
         for row in data:
             symbol = str(row.get("Code", "")).strip()
@@ -321,9 +336,10 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
                 "volume": volume,
             }
 
+    # 備援 JSON 版本
     elif isinstance(data, dict) and isinstance(data.get("data"), list):
         for row in data["data"]:
-            if len(row) < 7:
+            if len(row) < 8:
                 continue
 
             symbol = str(row[0]).strip()
@@ -332,7 +348,7 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
 
             volume = safe_int(row[2], 0)
             price = safe_float(row[6], 0)
-            change = safe_float(row[7], 0) if len(row) > 7 else 0
+            change = safe_float(row[7], 0)
 
             prev_close = price - change
             change_percent = (change / prev_close) * 100 if prev_close > 0 else 0
@@ -348,6 +364,9 @@ def fetch_twse_prices() -> Dict[str, Dict[str, Any]]:
     return result
 
 
+# ---------------------------
+# 上櫃行情
+# ---------------------------
 def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
     now = time.time()
     if now - CACHE["tpex_price"]["time"] < CACHE_SECONDS_PRICE and CACHE["tpex_price"]["data"]:
@@ -415,7 +434,8 @@ def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
                     "change_percent": round2(change_percent),
                     "volume": volume,
                 }
-        except:
+
+        except Exception:
             continue
 
     CACHE["tpex_price"]["time"] = now
@@ -423,6 +443,9 @@ def fetch_tpex_prices() -> Dict[str, Dict[str, Any]]:
     return result
 
 
+# ---------------------------
+# 組合完整股票資料
+# ---------------------------
 def get_all_stocks(market: str = "全部") -> List[Dict[str, Any]]:
     stocks: List[Dict[str, Any]] = []
 
@@ -434,6 +457,7 @@ def get_all_stocks(market: str = "全部") -> List[Dict[str, Any]]:
             symbol = item["symbol"]
             name = item["name"]
             p = listed_prices.get(symbol, {})
+
             stocks.append(
                 build_stock_item(
                     symbol=symbol,
@@ -453,6 +477,7 @@ def get_all_stocks(market: str = "全部") -> List[Dict[str, Any]]:
             symbol = item["symbol"]
             name = item["name"]
             p = otc_prices.get(symbol, {})
+
             stocks.append(
                 build_stock_item(
                     symbol=symbol,
@@ -467,6 +492,9 @@ def get_all_stocks(market: str = "全部") -> List[Dict[str, Any]]:
     return stocks
 
 
+# ---------------------------
+# API
+# ---------------------------
 @app.get("/")
 def root():
     return {"message": "TW Stock Realtime Screener B is running"}
