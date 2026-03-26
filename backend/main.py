@@ -4,6 +4,8 @@ import requests
 import time
 import re
 from typing import Dict, List, Any
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 app = FastAPI()
 
@@ -30,15 +32,13 @@ CACHE = {
 
 LIST_CACHE_TIME = 60 * 60 * 6   # 股票清單 6 小時
 PRICE_CACHE_TIME = 5            # 盤中價格快取 5 秒
-
-# 單次查詢過多代碼容易讓 URL 太長，分批抓
-BATCH_SIZE = 50
+BATCH_SIZE = 50                 # 分批抓，避免 URL 太長
 
 
 def safe_float(x: Any) -> float:
     try:
         s = str(x).replace(",", "").strip()
-        if s in ("", "-", "--", "X"):
+        if s in ("", "-", "--", "X", "除權息"):
             return 0.0
         return float(s)
     except Exception:
@@ -50,10 +50,45 @@ def chunks(lst: List[Any], size: int):
         yield lst[i:i + size]
 
 
+def taipei_now() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Taipei"))
+
+
+def taipei_now_str() -> str:
+    return taipei_now().strftime("%H:%M:%S")
+
+
+def is_after_close() -> bool:
+    now = taipei_now()
+    return now.hour > 13 or (now.hour == 13 and now.minute >= 30)
+
+
+def get_market_last_update(row: Dict[str, Any]) -> str:
+    """
+    MIS 有時候 t 會是空的，所以做 fallback。
+    優先順序：
+    1. t
+    2. time
+    3. 收盤後固定 13:30:00
+    4. 後端目前台北時間
+    """
+    t = str(row.get("t", "")).strip()
+    if t:
+        return t
+
+    alt = str(row.get("time", "")).strip()
+    if alt:
+        return alt
+
+    if is_after_close():
+        return "13:30:00"
+
+    return taipei_now_str()
+
+
 def fetch_stock_list() -> List[Dict[str, str]]:
     """
-    抓上市股票清單。
-    這裡沿用你原本的 ISIN 頁面做法。
+    抓上市股票清單
     """
     now = time.time()
     if now - CACHE["list"]["time"] < LIST_CACHE_TIME:
@@ -63,15 +98,18 @@ def fetch_stock_list() -> List[Dict[str, str]]:
     r = SESSION.get(url, timeout=20)
     r.encoding = "big5"
 
-    # 只抓 4 位數股票代碼
     matches = re.findall(r'>(\d{4})　([^<]+)<', r.text)
 
     stocks = []
     seen = set()
+
     for code, name in matches:
         if code.isdigit() and code not in seen:
             seen.add(code)
-            stocks.append({"symbol": code, "name": name.strip()})
+            stocks.append({
+                "symbol": code,
+                "name": name.strip(),
+            })
 
     CACHE["list"]["time"] = now
     CACHE["list"]["data"] = stocks
@@ -80,8 +118,7 @@ def fetch_stock_list() -> List[Dict[str, str]]:
 
 def fetch_prev_close_map() -> Dict[str, float]:
     """
-    當 MIS 沒提供昨收/參考價時，備援抓一次日資料。
-    這不是盤中價，只拿來輔助算漲跌幅。
+    當 MIS 沒提供昨收/參考價時，用日資料補昨收
     """
     url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
     try:
@@ -96,14 +133,13 @@ def fetch_prev_close_map() -> Dict[str, float]:
         close_price = safe_float(row.get("ClosingPrice"))
         if code:
             result[code] = close_price
+
     return result
 
 
 def fetch_prices() -> Dict[str, Dict[str, Any]]:
     """
-    用 TWSE MIS 盤中快照抓上市股票價格。
-    這裡使用的是 MIS JSON 端點，屬於實務可用做法，
-    但 JSON 規格並非官方正式文件化 API。
+    用 TWSE MIS 盤中快照抓上市股票價格
     """
     now = time.time()
     if now - CACHE["price"]["time"] < PRICE_CACHE_TIME:
@@ -111,8 +147,6 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
 
     stock_list = fetch_stock_list()
     symbols = [s["symbol"] for s in stock_list]
-
-    # 備援：當 MIS 某些欄位缺失時，用昨收補
     prev_close_map = fetch_prev_close_map()
 
     result: Dict[str, Dict[str, Any]] = {}
@@ -120,7 +154,6 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
     for batch in chunks(symbols, BATCH_SIZE):
         ex_ch = "|".join([f"tse_{code}.tw" for code in batch])
 
-        # 常見可用的 MIS JSON 端點
         url = (
             "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
             f"?ex_ch={ex_ch}&json=1&delay=0&_={int(time.time() * 1000)}"
@@ -138,17 +171,18 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
             if not code:
                 continue
 
-            # z = 成交價，若沒成交可能為 "-"
+            # z = 最新成交價
             price = safe_float(row.get("z"))
 
-            # 如果 z 取不到，嘗試用最新揭示價 / 模擬價欄位
+            # 沒成交時可能為 "-"
             if price <= 0:
                 price = safe_float(row.get("pz")) or safe_float(row.get("o"))
 
-            volume = safe_float(row.get("v"))     # 累積成交量
-            trade_volume = safe_float(row.get("tv"))  # 單筆成交量，可不一定需要
+            # 累積成交量 / 單筆成交量
+            volume = safe_float(row.get("v"))
+            trade_volume = safe_float(row.get("tv"))
 
-            # y 常是昨收/參考價
+            # 昨收 / 參考價
             prev_close = safe_float(row.get("y"))
             if prev_close <= 0:
                 prev_close = prev_close_map.get(code, 0)
@@ -165,10 +199,9 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
                 "open": safe_float(row.get("o")),
                 "high": safe_float(row.get("h")),
                 "low": safe_float(row.get("l")),
-                "last_update": row.get("t", ""),   # MIS 時間字串
+                "last_update": get_market_last_update(row),
             }
 
-        # 避免太猛
         time.sleep(0.15)
 
     CACHE["price"]["time"] = now
@@ -177,9 +210,6 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
 
 
 def calc_score(change_percent: float, volume: int) -> int:
-    """
-    簡單評分邏輯，先沿用可視化用途。
-    """
     score = 50 + change_percent * 2
 
     if volume > 5000000:
@@ -200,7 +230,11 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "timestamp": int(time.time())}
+    return {
+        "ok": True,
+        "timestamp": int(time.time()),
+        "taipei_time": taipei_now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 @app.get("/stocks")
@@ -209,6 +243,7 @@ def stocks():
     price_map = fetch_prices()
 
     result = []
+
     for s in stock_list:
         p = price_map.get(s["symbol"], {})
 
@@ -227,7 +262,7 @@ def stocks():
             "open": p.get("open", 0),
             "high": p.get("high", 0),
             "low": p.get("low", 0),
-            "last_update": p.get("last_update", ""),
+            "last_update": p.get("last_update", "13:30:00" if is_after_close() else taipei_now_str()),
         })
 
     return {
