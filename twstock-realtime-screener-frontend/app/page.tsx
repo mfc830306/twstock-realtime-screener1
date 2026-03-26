@@ -30,14 +30,21 @@ export default function Home() {
   const [selectedGroup, setSelectedGroup] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState<string>("--");
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    const loadStocks = async () => {
-      try {
-        setLoading(true);
-        setError("");
+    let mounted = true;
 
-        const res = await fetch(`${API}/stocks`, {
+    const loadStocks = async (silent = false) => {
+      try {
+        if (!silent) {
+          setLoading(true);
+        } else {
+          setIsRefreshing(true);
+        }
+
+        const res = await fetch(`${API}/stocks?ts=${Date.now()}`, {
           cache: "no-store",
         });
 
@@ -48,22 +55,43 @@ export default function Home() {
         const data = await res.json();
         const stockList: Stock[] = Array.isArray(data.stocks) ? data.stocks : [];
 
+        if (!mounted) return;
+
         setStocks(stockList);
 
         const sortedTop = [...stockList]
           .filter((s) => Number(s.price) > 0)
-          .sort((a, b) => (b.score || 0) - (a.score || 0))
+          .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))
           .slice(0, 10);
 
         setTop(sortedTop);
+
+        setError("");
+        setLastUpdated(
+          new Date().toLocaleTimeString("zh-TW", {
+            hour12: false,
+          })
+        );
       } catch (err: any) {
+        if (!mounted) return;
         setError(err?.message || "載入失敗");
       } finally {
+        if (!mounted) return;
         setLoading(false);
+        setIsRefreshing(false);
       }
     };
 
-    loadStocks();
+    loadStocks(false);
+
+    const timer = setInterval(() => {
+      loadStocks(true);
+    }, 5000); // 改 10000 就是每 10 秒更新
+
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
   }, []);
 
   const groupCounts = useMemo(() => {
@@ -120,16 +148,50 @@ export default function Home() {
       }}
     >
       <div style={{ maxWidth: 1500, margin: "0 auto" }}>
-        <div style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 8 }}>
-            台股選股系統
-          </h1>
-          <div style={{ color: "#b8c7e0", fontSize: 15 }}>
-            全部股票 / 價格分類 / 推薦TOP10
+        <div
+          style={{
+            marginBottom: 24,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 8 }}>
+              台股選股系統
+            </h1>
+            <div style={{ color: "#b8c7e0", fontSize: 15 }}>
+              準即時更新 / 全部股票 / 價格分類 / 推薦TOP10
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: "#132b4f",
+              border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 12,
+              padding: "10px 14px",
+              minWidth: 220,
+            }}
+          >
+            <div style={{ fontSize: 13, color: "#9fb4d6" }}>最後更新時間</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+              {lastUpdated}
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                marginTop: 4,
+                color: isRefreshing ? "#ffd76a" : "#7ee081",
+              }}
+            >
+              {isRefreshing ? "更新中..." : "每 5 秒自動刷新"}
+            </div>
           </div>
         </div>
 
-        {/* 搜尋框 */}
         <div style={{ ...cardStyle, marginBottom: 20 }}>
           <input
             placeholder="搜尋股票代碼或名稱，例如：2330 / 台積電"
@@ -148,7 +210,6 @@ export default function Home() {
           />
         </div>
 
-        {/* 價格分類移到搜尋框下方 */}
         <div style={{ ...cardStyle, marginBottom: 20 }}>
           <h2 style={{ fontSize: 22, marginBottom: 14 }}>💰 價格分類</h2>
           <div
@@ -186,7 +247,6 @@ export default function Home() {
         </div>
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-          {/* 左側 */}
           <div style={{ width: "320px", flexShrink: 0 }}>
             <div style={{ ...cardStyle, marginBottom: 20 }}>
               <h2 style={{ fontSize: 22, marginBottom: 14 }}>🔥 推薦 TOP10</h2>
@@ -209,9 +269,7 @@ export default function Home() {
                       <div style={{ fontSize: 16, fontWeight: 700 }}>
                         {s.symbol} {s.name}
                       </div>
-                      <div style={{ marginTop: 6, fontSize: 14 }}>
-                        價格：{s.price}
-                      </div>
+                      <div style={{ marginTop: 6, fontSize: 14 }}>價格：{s.price}</div>
                       <div
                         style={{
                           marginTop: 4,
@@ -231,7 +289,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* 右側 */}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={cardStyle}>
               <div
