@@ -86,7 +86,7 @@ export default function Home() {
 
     const timer = setInterval(() => {
       loadStocks(true);
-    }, 5000); // 改 10000 就是每 10 秒更新
+    }, 10000); // 改 10000 就是每 10 秒更新
 
     return () => {
       mounted = false;
