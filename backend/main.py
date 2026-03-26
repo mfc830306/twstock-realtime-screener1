@@ -1,136 +1,110 @@
-"use client";
-import { useEffect, useState } from "react";
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Dict, Any
+import requests
+import time
+import re
 
-export default function Home() {
-  const [stocks, setStocks] = useState<any[]>([]);
-  const [filtered, setFiltered] = useState<any[]>([]);
-  const [top, setTop] = useState<any[]>([]);
-  const [priceFilter, setPriceFilter] = useState<string>("全部");
-  const [search, setSearch] = useState("");
+app = FastAPI()
 
-  const API = "https://你的render網址";
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-  useEffect(() => {
-    fetch(`${API}/stocks?market=全部`)
-      .then(res => res.json())
-      .then(data => {
-        setStocks(data.stocks || []);
-        setFiltered(data.stocks || []);
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-        const sorted = [...(data.stocks || [])].sort((a, b) => (b.score || 0) - (a.score || 0));
-        setTop(sorted.slice(0, 10));
-      });
-  }, []);
-
-  useEffect(() => {
-    let result = [...stocks];
-
-    // 價位分類
-    if (priceFilter !== "全部") {
-      result = result.filter(s => {
-        const p = s.price || 0;
-        if (priceFilter === "10以下") return p < 10;
-        if (priceFilter === "10-50") return p >= 10 && p < 50;
-        if (priceFilter === "50-100") return p >= 50 && p < 100;
-        if (priceFilter === "100-500") return p >= 100 && p < 500;
-        if (priceFilter === "500以上") return p >= 500;
-      });
-    }
-
-    // 搜尋
-    if (search) {
-      result = result.filter(s =>
-        s.name?.includes(search) || s.symbol?.includes(search)
-      );
-    }
-
-    setFiltered(result);
-  }, [priceFilter, search, stocks]);
-
-  return (
-    <div style={{ background: "#0b1f3a", color: "white", minHeight: "100vh", padding: 20 }}>
-      <h1 style={{ fontSize: 28, marginBottom: 20 }}>📊 台股即時選股系統</h1>
-
-      {/* 搜尋 */}
-      <input
-        placeholder="輸入股票名稱或代號..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{
-          padding: 10,
-          width: "100%",
-          marginBottom: 20,
-          borderRadius: 8,
-          border: "none"
-        }}
-      />
-
-      {/* 價位分類 */}
-      <div style={{ marginBottom: 20 }}>
-        {["全部", "10以下", "10-50", "50-100", "100-500", "500以上"].map(p => (
-          <button
-            key={p}
-            onClick={() => setPriceFilter(p)}
-            style={{
-              marginRight: 10,
-              padding: "8px 12px",
-              borderRadius: 6,
-              border: "none",
-              background: priceFilter === p ? "#3b82f6" : "#1e3a5f",
-              color: "white",
-              cursor: "pointer"
-            }}
-          >
-            {p}
-          </button>
-        ))}
-      </div>
-
-      {/* 左右分欄 */}
-      <div style={{ display: "flex", gap: 20 }}>
-        
-        {/* 左：推薦 */}
-        <div style={{ width: "30%" }}>
-          <h2>🔥 推薦TOP10</h2>
-          {top.map((s, i) => (
-            <div key={i} style={{
-              background: "#132b4f",
-              padding: 10,
-              marginBottom: 10,
-              borderRadius: 8
-            }}>
-              <div>{s.symbol} {s.name}</div>
-              <div>價格：{s.price}</div>
-              <div>分數：{s.score}</div>
-              <div style={{ color: "#22c55e" }}>{s.signal}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* 右：全部股票 */}
-        <div style={{ width: "70%" }}>
-          <h2>📈 全部股票 ({filtered.length})</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            {filtered.map((s, i) => (
-              <div key={i} style={{
-                background: "#132b4f",
-                padding: 10,
-                borderRadius: 8
-              }}>
-                <div>{s.symbol}</div>
-                <div>{s.name}</div>
-                <div>💰 {s.price}</div>
-                <div style={{
-                  color: s.change_percent > 0 ? "#22c55e" : "#ef4444"
-                }}>
-                  {s.change_percent}%
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-      </div>
-    </div>
-  );
+CACHE = {
+    "list": {"time": 0, "data": []},
+    "price": {"time": 0, "data": {}},
 }
+
+CACHE_TIME = 60 * 60
+PRICE_CACHE = 30
+
+
+def safe_float(x):
+    try:
+        return float(str(x).replace(",", ""))
+    except:
+        return 0
+
+
+def fetch_stock_list():
+    now = time.time()
+    if now - CACHE["list"]["time"] < CACHE_TIME:
+        return CACHE["list"]["data"]
+
+    url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
+    r = requests.get(url, headers=HEADERS)
+    r.encoding = "big5"
+
+    matches = re.findall(r'>(\d{4})　([^<]+)<', r.text)
+
+    stocks = []
+    for code, name in matches:
+        if code.isdigit():
+            stocks.append({"symbol": code, "name": name})
+
+    CACHE["list"]["time"] = now
+    CACHE["list"]["data"] = stocks
+    return stocks
+
+
+def fetch_prices():
+    now = time.time()
+    if now - CACHE["price"]["time"] < PRICE_CACHE:
+        return CACHE["price"]["data"]
+
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    r = requests.get(url)
+    data = r.json()
+
+    result = {}
+    for row in data:
+        code = row.get("Code")
+        price = safe_float(row.get("ClosingPrice"))
+        change = safe_float(row.get("Change"))
+        volume = safe_float(row.get("TradeVolume"))
+
+        prev = price - change if price else 0
+        change_percent = (change / prev * 100) if prev else 0
+
+        result[code] = {
+            "price": price,
+            "change_percent": round(change_percent, 2),
+            "volume": volume,
+        }
+
+    CACHE["price"]["time"] = now
+    CACHE["price"]["data"] = result
+    return result
+
+
+@app.get("/")
+def root():
+    return {"message": "backend running"}
+
+
+@app.get("/stocks")
+def stocks():
+    stock_list = fetch_stock_list()
+    price_map = fetch_prices()
+
+    result = []
+
+    for s in stock_list:
+        p = price_map.get(s["symbol"], {})
+        result.append({
+            "symbol": s["symbol"],
+            "name": s["name"],
+            "price": p.get("price", 0),
+            "change_percent": p.get("change_percent", 0),
+            "volume": p.get("volume", 0),
+            "score": int((p.get("change_percent", 0) or 0) * 2 + 50),
+        })
+
+    return {"stocks": result}
