@@ -26,7 +26,6 @@ type OverviewData = {
 const API = "https://twstock-realtime-screener1.onrender.com";
 
 const PRICE_GROUPS = [
-  { key: "all", label: "全部", min: undefined, max: undefined },
   { key: "p1", label: "10元以下", min: 0, max: 10 },
   { key: "p2", label: "10~30元", min: 10, max: 30 },
   { key: "p3", label: "30~50元", min: 30, max: 50 },
@@ -189,7 +188,7 @@ export default function Home() {
   });
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
-  const [selectedGroup, setSelectedGroup] = useState("all");
+  const [selectedGroup, setSelectedGroup] = useState("p5");
   const [loading, setLoading] = useState(true);
   const [stocksLoading, setStocksLoading] = useState(false);
   const [error, setError] = useState("");
@@ -199,7 +198,7 @@ export default function Home() {
   const [rankTab, setRankTab] = useState<RankTab>("up");
 
   const selectedPriceGroup = useMemo(
-    () => PRICE_GROUPS.find((g) => g.key === selectedGroup) || PRICE_GROUPS[0],
+    () => PRICE_GROUPS.find((g) => g.key === selectedGroup) || PRICE_GROUPS[4],
     [selectedGroup]
   );
 
