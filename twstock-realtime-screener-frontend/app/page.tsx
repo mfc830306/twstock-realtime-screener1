@@ -21,7 +21,7 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ||
   "https://twstock-realtime-screener1.onrender.com";
 
-const BUCKETS = [
+const PRICE_BUCKETS = [
   { key: "all", label: "全部" },
   { key: "lt10", label: "10元以下" },
   { key: "10_20", label: "10-20元" },
@@ -44,12 +44,12 @@ function getBucket(price: number) {
   return "gte1000";
 }
 
-function formatPercent(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
-
 function formatVolume(value: number) {
   return new Intl.NumberFormat("zh-TW").format(value || 0);
+}
+
+function formatChange(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
 export default function Page() {
@@ -65,7 +65,9 @@ export default function Page() {
         setLoading(true);
         setError("");
 
-        const res = await fetch(`${API_BASE}/stocks`, { cache: "no-store" });
+        const res = await fetch(`${API_BASE}/stocks`, {
+          cache: "no-store",
+        });
         const data = await res.json();
 
         if (!res.ok || !data.success) {
@@ -85,268 +87,168 @@ export default function Page() {
   }, []);
 
   const filteredStocks = useMemo(() => {
+    let list = [...stocks];
+
+    if (bucket !== "all") {
+      list = list.filter((s) => getBucket(s.price) === bucket);
+    }
+
     const kw = keyword.trim().toLowerCase();
-
-    return [...stocks]
-      .filter((s) => {
-        const bucketOk = bucket === "all" || getBucket(s.price) === bucket;
-        const keywordOk =
-          !kw ||
+    if (kw) {
+      list = list.filter(
+        (s) =>
           s.symbol.toLowerCase().includes(kw) ||
-          s.name.toLowerCase().includes(kw);
+          s.name.toLowerCase().includes(kw)
+      );
+    }
 
-        return bucketOk && keywordOk;
-      })
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        if (b.change_percent !== a.change_percent) {
-          return b.change_percent - a.change_percent;
-        }
-        return b.volume - a.volume;
-      });
+    list.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.change_percent !== a.change_percent) return b.change_percent - a.change_percent;
+      return b.volume - a.volume;
+    });
+
+    return list;
   }, [stocks, bucket, keyword]);
 
   const top10 = useMemo(() => filteredStocks.slice(0, 10), [filteredStocks]);
 
-  const totalCount = stocks.length;
-  const bucketCount = filteredStocks.length;
-
   return (
-    <div className="page">
-      <div className="container">
-        <section className="hero">
-          <div className="badge">TW STOCK</div>
-          <h1 className="title">台股分類選股系統</h1>
-          <p className="subtitle">
-            顯示全部台股，依價格分類、搜尋與推薦前 10 檔
-          </p>
-          <div className="marketInfo">
-            全部股票：{totalCount} 檔　/　目前篩選：{bucketCount} 檔
-          </div>
+    <main className="min-h-screen bg-[#061a40] text-white">
+      <div className="mx-auto max-w-[1400px] px-4 py-6">
+        <h1 className="mb-2 text-3xl font-bold">台股分類選股系統</h1>
+        <p className="mb-6 text-blue-100">
+          顯示全部台股，依股價分類、搜尋，並提供推薦前 10 檔
+        </p>
 
-          <div className="searchRow">
-            <input
-              className="input"
-              placeholder="搜尋股票代碼 / 名稱，例如 2330 或 台積電"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-            />
-            <button
-              className="btn btnBlue"
-              onClick={() => window.location.reload()}
-              disabled={loading}
-            >
-              重新整理
-            </button>
-            <button
-              className="btn btnDark"
-              onClick={() => {
-                setKeyword("");
-                setBucket("all");
-              }}
-              disabled={loading}
-            >
-              清除篩選
-            </button>
-          </div>
-
-          {error ? <div className="errorBox">載入失敗：{error}</div> : null}
-        </section>
-
-        <section className="summaryGrid">
-          <div className="summaryCard">
-            <div className="summaryTitle">全部股票數</div>
-            <div className="summaryValue">{totalCount}</div>
-          </div>
-          <div className="summaryCard">
-            <div className="summaryTitle">目前分類</div>
-            <div className="summaryValue" style={{ fontSize: 24 }}>
-              {BUCKETS.find((b) => b.key === bucket)?.label ?? "全部"}
-            </div>
-          </div>
-          <div className="summaryCard">
-            <div className="summaryTitle">篩選後數量</div>
-            <div className="summaryValue">{bucketCount}</div>
-          </div>
-          <div className="summaryCard">
-            <div className="summaryTitle">搜尋關鍵字</div>
-            <div className="summaryValue" style={{ fontSize: 24 }}>
-              {keyword.trim() || "無"}
-            </div>
-          </div>
-        </section>
-
-        <section className="pricePanel">
-          <div className="panelHeader panelHeaderWrap">
-            <h2>價格分類</h2>
-            <span>點選價格區間切換股票清單</span>
-          </div>
-
-          <div className="tabs">
-            {BUCKETS.map((b) => (
-              <button
-                key={b.key}
-                onClick={() => setBucket(b.key)}
-                className={`tabBtn ${bucket === b.key ? "tabBtnActive" : ""}`}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <div className="mainGrid">
-          <section className="panel">
-            <div className="panelHeader">
-              <h2>推薦前 10 檔</h2>
-              <span>依分數、漲跌幅、成交量排序</span>
-            </div>
-
-            {loading ? (
-              <div className="emptyBox">載入中...</div>
-            ) : top10.length === 0 ? (
-              <div className="emptyBox">目前沒有可顯示的推薦股票</div>
-            ) : (
-              <div className="topList">
-                {top10.map((s) => (
-                  <div key={s.symbol} className="topCard">
-                    <div className="topCardHeader">
-                      <div>
-                        <div className="topName">{s.name}</div>
-                        <div className="topSymbol">
-                          {s.symbol} ・ {s.market}
-                        </div>
-                      </div>
-                      <div className="scoreBig">{s.score}</div>
-                    </div>
-
-                    <div className="metricGrid">
-                      <div className="metricBox">
-                        <div className="metricLabel">現價</div>
-                        <div className="metricValue">{s.price}</div>
-                      </div>
-                      <div className="metricBox">
-                        <div className="metricLabel">漲跌幅</div>
-                        <div className="metricValue">
-                          {formatPercent(s.change_percent)}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="strategyList">
-                      <div className="strategyRow">
-                        <span className="strategyLabel">進場</span>
-                        <span className="strategyValue">
-                          {s.entry_price || "-"}
-                        </span>
-                      </div>
-                      <div className="strategyRow">
-                        <span className="strategyLabel">目標</span>
-                        <span className="strategyValue">
-                          {s.target_price || "-"}
-                        </span>
-                      </div>
-                      <div className="strategyRow">
-                        <span className="strategyLabel">停損</span>
-                        <span className="strategyValue">
-                          {s.stop_loss || "-"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="panel panelWide">
-            <div className="panelHeader">
-              <h2>股票清單</h2>
-              <span>共 {filteredStocks.length} 檔</span>
-            </div>
-
-            {loading ? (
-              <div className="emptyBox">載入股票資料中...</div>
-            ) : filteredStocks.length === 0 ? (
-              <div className="emptyBox">查無符合條件的股票</div>
-            ) : (
-              <div className="cardGrid">
-                {filteredStocks.map((s) => {
-                  const trendClass =
-                    s.score >= 80
-                      ? "trendBadge trendStrong"
-                      : s.score >= 45
-                      ? "trendBadge trendNeutral"
-                      : "trendBadge trendWeak";
-
-                  return (
-                    <article key={s.symbol} className="stockCard">
-                      <div className="stockHeader">
-                        <div>
-                          <div className="stockName">{s.name}</div>
-                          <div className="stockSymbol">
-                            {s.symbol} ・ {s.market}
-                          </div>
-                        </div>
-                        <div className={trendClass}>{s.signal || "中性"}</div>
-                      </div>
-
-                      <div className="metricGrid">
-                        <div className="metricBox">
-                          <div className="metricLabel">現價</div>
-                          <div className="metricValue">{s.price}</div>
-                        </div>
-                        <div className="metricBox">
-                          <div className="metricLabel">漲跌幅</div>
-                          <div className="metricValue">
-                            {formatPercent(s.change_percent)}
-                          </div>
-                        </div>
-                        <div className="metricBox">
-                          <div className="metricLabel">成交量</div>
-                          <div className="metricValue">
-                            {formatVolume(s.volume)}
-                          </div>
-                        </div>
-                        <div className="metricBox">
-                          <div className="metricLabel">推薦分數</div>
-                          <div className="metricValue">{s.score}</div>
-                        </div>
-                      </div>
-
-                      <div className="strategyList">
-                        <div className="strategyRow">
-                          <span className="strategyLabel">進場價</span>
-                          <span className="strategyValue">
-                            {s.entry_price || "-"}
-                          </span>
-                        </div>
-                        <div className="strategyRow">
-                          <span className="strategyLabel">目標價</span>
-                          <span className="strategyValue">
-                            {s.target_price || "-"}
-                          </span>
-                        </div>
-                        <div className="strategyRow">
-                          <span className="strategyLabel">停損價</span>
-                          <span className="strategyValue">
-                            {s.stop_loss || "-"}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="reasonBox">
-                        <div className="reasonTitle">判斷說明</div>
-                        <div className="reasonText">{s.reason || "暫無說明"}</div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+        <div className="mb-4 flex flex-col gap-3 md:flex-row">
+          <input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜尋股票代碼 / 名稱，例如 2330 或 台積電"
+            className="w-full rounded-lg border border-blue-300/20 bg-[#0c2a5c] px-4 py-3 text-white placeholder:text-blue-100/50 outline-none md:w-[360px]"
+          />
+          <button
+            onClick={() => window.location.reload()}
+            className="rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white hover:bg-blue-400"
+          >
+            重新整理
+          </button>
         </div>
+
+        <div className="mb-6 flex flex-wrap gap-2">
+          {PRICE_BUCKETS.map((b) => (
+            <button
+              key={b.key}
+              onClick={() => setBucket(b.key)}
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${
+                bucket === b.key
+                  ? "bg-blue-500 text-white"
+                  : "bg-[#0c2a5c] text-white hover:bg-[#133673]"
+              }`}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+
+        <section className="mb-8">
+          <h2 className="mb-3 text-2xl font-bold">推薦前 10 檔</h2>
+
+          {loading ? (
+            <div className="rounded-xl bg-[#0c2a5c] p-6">載入中...</div>
+          ) : error ? (
+            <div className="rounded-xl bg-red-500/20 p-6 text-red-200">
+              載入失敗：{error}
+            </div>
+          ) : top10.length === 0 ? (
+            <div className="rounded-xl bg-[#0c2a5c] p-6">目前沒有資料</div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              {top10.map((s) => (
+                <div key={s.symbol} className="rounded-xl bg-[#0c2a5c] p-4">
+                  <div className="mb-2 text-lg font-bold">
+                    {s.name} <span className="text-blue-200">{s.symbol}</span>
+                  </div>
+                  <div className="space-y-1 text-sm">
+                    <div>市場：{s.market}</div>
+                    <div>現價：{s.price}</div>
+                    <div className={s.change_percent >= 0 ? "text-red-300" : "text-green-300"}>
+                      漲跌幅：{formatChange(s.change_percent)}
+                    </div>
+                    <div>成交量：{formatVolume(s.volume)}</div>
+                    <div>推薦分數：{s.score}</div>
+                    <div>訊號：{s.signal || "-"}</div>
+                    <div>進場價：{s.entry_price || "-"}</div>
+                    <div>目標價：{s.target_price || "-"}</div>
+                    <div>停損價：{s.stop_loss || "-"}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-2xl font-bold">股票清單</h2>
+
+          {loading ? (
+            <div className="rounded-xl bg-[#0c2a5c] p-6">載入股票資料中...</div>
+          ) : error ? (
+            <div className="rounded-xl bg-red-500/20 p-6 text-red-200">
+              載入失敗：{error}
+            </div>
+          ) : filteredStocks.length === 0 ? (
+            <div className="rounded-xl bg-[#0c2a5c] p-6">查無符合條件的股票</div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl bg-[#0c2a5c]">
+              <table className="min-w-full text-sm text-white">
+                <thead className="bg-[#12326d]">
+                  <tr>
+                    <th className="px-4 py-3 text-left">代碼</th>
+                    <th className="px-4 py-3 text-left">名稱</th>
+                    <th className="px-4 py-3 text-left">市場</th>
+                    <th className="px-4 py-3 text-right">現價</th>
+                    <th className="px-4 py-3 text-right">漲跌幅</th>
+                    <th className="px-4 py-3 text-right">成交量</th>
+                    <th className="px-4 py-3 text-right">分數</th>
+                    <th className="px-4 py-3 text-left">訊號</th>
+                    <th className="px-4 py-3 text-left">進場價</th>
+                    <th className="px-4 py-3 text-left">目標價</th>
+                    <th className="px-4 py-3 text-left">停損價</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStocks.map((s, i) => (
+                    <tr
+                      key={`${s.symbol}-${i}`}
+                      className="border-t border-blue-200/10 hover:bg-[#143872]"
+                    >
+                      <td className="px-4 py-3">{s.symbol}</td>
+                      <td className="px-4 py-3">{s.name}</td>
+                      <td className="px-4 py-3">{s.market}</td>
+                      <td className="px-4 py-3 text-right">{s.price}</td>
+                      <td
+                        className={`px-4 py-3 text-right ${
+                          s.change_percent >= 0 ? "text-red-300" : "text-green-300"
+                        }`}
+                      >
+                        {formatChange(s.change_percent)}
+                      </td>
+                      <td className="px-4 py-3 text-right">{formatVolume(s.volume)}</td>
+                      <td className="px-4 py-3 text-right">{s.score}</td>
+                      <td className="px-4 py-3">{s.signal || "-"}</td>
+                      <td className="px-4 py-3">{s.entry_price || "-"}</td>
+                      <td className="px-4 py-3">{s.target_price || "-"}</td>
+                      <td className="px-4 py-3">{s.stop_loss || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
