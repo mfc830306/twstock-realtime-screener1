@@ -3,14 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Union
 import requests
-import math
+import threading
+import time
 
 app = FastAPI(title="TW Stock Realtime Screener")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -21,6 +22,14 @@ HEADERS = {
 }
 
 TIMEOUT = 12
+CACHE_SECONDS = 60
+
+_stock_cache = {
+    "data": [],
+    "updated_at": 0,
+    "source": "TWSE + TPEx official",
+}
+_cache_lock = threading.Lock()
 
 
 class ScanRequest(BaseModel):
@@ -37,10 +46,7 @@ def safe_float(value, default=0.0):
     if s in {"", "--", "---", "----", "X", "除權息", "N/A", "null", "None"}:
         return default
 
-    # 去掉 + 號
     s = s.replace("+", "")
-
-    # 有些漲跌欄位可能帶箭頭或中文
     s = s.replace("△", "").replace("▲", "").replace("▽", "-").replace("▼", "-")
 
     try:
@@ -56,7 +62,6 @@ def safe_int(value, default=0):
 def score_stock(price, change_percent, volume, open_price, high_price, low_price):
     score = 50
 
-    # 漲跌幅
     if change_percent >= 6:
         score += 20
     elif change_percent >= 3:
@@ -70,7 +75,6 @@ def score_stock(price, change_percent, volume, open_price, high_price, low_price
     elif change_percent <= -1:
         score -= 6
 
-    # 成交量
     if volume >= 50000000:
         score += 16
     elif volume >= 10000000:
@@ -80,7 +84,6 @@ def score_stock(price, change_percent, volume, open_price, high_price, low_price
     elif volume <= 50000:
         score -= 6
 
-    # 日內位置
     if high_price > 0 and low_price > 0 and high_price != low_price:
         position = (price - low_price) / (high_price - low_price)
         if position >= 0.8:
@@ -88,7 +91,6 @@ def score_stock(price, change_percent, volume, open_price, high_price, low_price
         elif position <= 0.2:
             score -= 6
 
-    # 開盤後表現
     if open_price > 0:
         intraday_change = ((price - open_price) / open_price) * 100
         if intraday_change >= 2:
@@ -120,7 +122,6 @@ def build_signal(stock):
         signal = "偏空"
         reason = "價格弱勢，短線風險較高"
 
-    # 進出場區間
     if price > 0:
         entry_low = round(price * 0.985, 2)
         entry_high = round(price * 1.01, 2)
@@ -145,8 +146,10 @@ def build_signal(stock):
 def normalize_twse_item(item):
     symbol = str(item.get("Code", "")).strip()
     name = str(item.get("Name", "")).strip()
+
     price = safe_float(item.get("ClosingPrice"))
-    prev_close = price - safe_float(item.get("Change"))
+    change_value = safe_float(item.get("Change"))
+    prev_close = price - change_value
     if prev_close <= 0:
         prev_close = price
 
@@ -184,6 +187,7 @@ def normalize_tpex_item(item):
         or item.get("股票代號")
         or ""
     ).strip()
+
     name = str(
         item.get("CompanyName")
         or item.get("Name")
@@ -292,7 +296,7 @@ def fetch_tpex_stocks():
     return stocks
 
 
-def get_all_stocks():
+def get_all_stocks_fresh():
     all_stocks = []
 
     try:
@@ -305,20 +309,32 @@ def get_all_stocks():
     except Exception:
         pass
 
-    # 去重：相同代號保留第一筆
     dedup = {}
     for s in all_stocks:
         if s["symbol"] not in dedup:
             dedup[s["symbol"]] = s
 
     results = list(dedup.values())
-
-    # 補上技術判斷欄位
     results = [build_signal(s) for s in results]
-
-    # 依分數、成交量排序
     results.sort(key=lambda x: (x["score"], x["volume"], x["change_percent"]), reverse=True)
     return results
+
+
+def get_all_stocks_cached():
+    now = time.time()
+
+    with _cache_lock:
+        if _stock_cache["data"] and (now - _stock_cache["updated_at"] < CACHE_SECONDS):
+            return _stock_cache["data"], _stock_cache["source"], True
+
+    fresh_data = get_all_stocks_fresh()
+
+    with _cache_lock:
+        if fresh_data:
+            _stock_cache["data"] = fresh_data
+            _stock_cache["updated_at"] = now
+
+    return _stock_cache["data"], _stock_cache["source"], False
 
 
 def in_bucket(price: float, bucket: str) -> bool:
@@ -360,7 +376,7 @@ def get_stocks(
     limit: Optional[int] = Query(default=None),
 ):
     try:
-        stocks = get_all_stocks()
+        stocks, source, from_cache = get_all_stocks_cached()
 
         q = q.strip().lower()
         if q:
@@ -370,7 +386,6 @@ def get_stocks(
             ]
 
         stocks = [s for s in stocks if in_bucket(s["price"], bucket)]
-
         total = len(stocks)
 
         if limit and limit > 0:
@@ -378,7 +393,9 @@ def get_stocks(
 
         return {
             "success": True,
-            "source": "TWSE + TPEx official",
+            "source": source,
+            "from_cache": from_cache,
+            "cache_seconds": CACHE_SECONDS,
             "count": total,
             "stocks": stocks,
         }
@@ -394,7 +411,7 @@ def get_stocks(
 @app.post("/scan")
 def scan_stocks(payload: ScanRequest):
     try:
-        stocks = get_all_stocks()
+        stocks, _, _ = get_all_stocks_cached()
 
         if isinstance(payload.stocks, str):
             raw_items = payload.stocks.replace("，", ",").replace("\n", ",").split(",")
@@ -405,7 +422,6 @@ def scan_stocks(payload: ScanRequest):
         target_set = set(target_symbols)
         result = [s for s in stocks if s["symbol"] in target_set or s["name"] in target_set]
 
-        # 若使用者沒輸入，回傳推薦前10檔
         if not target_symbols:
             result = stocks[:10]
 
