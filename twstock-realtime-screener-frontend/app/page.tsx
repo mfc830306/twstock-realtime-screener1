@@ -28,6 +28,8 @@ const PRICE_GROUPS = [
   { key: "p7", label: "500元以上", min: 500, max: Infinity },
 ];
 
+type RankTab = "up" | "down" | "volume";
+
 function getTaipeiNowParts() {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat("en-GB", {
@@ -61,8 +63,8 @@ function isAfterCloseTime() {
 }
 
 function isBeforeOpenTime() {
-  const { hour, minute } = getTaipeiNowParts();
-  return hour < 9 || (hour === 8 && minute < 60);
+  const { hour } = getTaipeiNowParts();
+  return hour < 9;
 }
 
 function getDisplayTime() {
@@ -75,6 +77,16 @@ function getDisplayTime() {
   }).format(new Date());
 }
 
+function formatNumber(value: number | undefined) {
+  return Number(value || 0).toLocaleString();
+}
+
+function getPriceColor(value: number) {
+  if (value > 0) return "#ff6b6b";
+  if (value < 0) return "#4cd97b";
+  return "#d8e1f0";
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [top, setTop] = useState<Stock[]>([]);
@@ -85,6 +97,7 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<string>("--");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [marketMode, setMarketMode] = useState<"preopen" | "trading" | "closed">("trading");
+  const [rankTab, setRankTab] = useState<RankTab>("up");
 
   useEffect(() => {
     let mounted = true;
@@ -206,6 +219,26 @@ export default function Home() {
       .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
   }, [stocks, search, selectedGroup]);
 
+  const rankingList = useMemo(() => {
+    const valid = stocks.filter((s) => Number(s.price) > 0);
+
+    if (rankTab === "up") {
+      return [...valid]
+        .sort((a, b) => (Number(b.change_percent) || 0) - (Number(a.change_percent) || 0))
+        .slice(0, 20);
+    }
+
+    if (rankTab === "down") {
+      return [...valid]
+        .sort((a, b) => (Number(a.change_percent) || 0) - (Number(b.change_percent) || 0))
+        .slice(0, 20);
+    }
+
+    return [...valid]
+      .sort((a, b) => (Number(b.volume) || 0) - (Number(a.volume) || 0))
+      .slice(0, 20);
+  }, [stocks, rankTab]);
+
   const cardStyle: React.CSSProperties = {
     background: "#132b4f",
     borderRadius: 14,
@@ -228,7 +261,10 @@ export default function Home() {
       ? "#9fb4d6"
       : isRefreshing
       ? "#ffd76a"
-      : "#7ee081";
+      : "#4cd97b";
+
+  const rankTitle =
+    rankTab === "up" ? "📈 漲幅前 20" : rankTab === "down" ? "📉 跌幅前 20" : "📊 成交量前 20";
 
   return (
     <div
@@ -239,7 +275,7 @@ export default function Home() {
         padding: "24px",
       }}
     >
-      <div style={{ maxWidth: 1500, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1600, margin: "0 auto" }}>
         <div
           style={{
             marginBottom: 24,
@@ -255,7 +291,7 @@ export default function Home() {
               台股選股系統
             </h1>
             <div style={{ color: "#b8c7e0", fontSize: 15 }}>
-              全部股票 / 價格分類 / 推薦TOP10
+              全部股票 / 價格分類 / 推薦TOP10 / 即時排行
             </div>
           </div>
 
@@ -338,155 +374,279 @@ export default function Home() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-          <div style={{ width: "320px", flexShrink: 0 }}>
-            <div style={{ ...cardStyle, marginBottom: 20 }}>
-              <h2 style={{ fontSize: 22, marginBottom: 14 }}>🔥 推薦 TOP10</h2>
-              <div style={{ display: "grid", gap: 10 }}>
-                {top.map((s, i) => {
-                  const up = Number(s.change_percent) >= 0;
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "320px 360px minmax(0, 1fr)",
+            gap: 20,
+            alignItems: "start",
+          }}
+        >
+          {/* 左 1：TOP10 */}
+          <div style={cardStyle}>
+            <h2 style={{ fontSize: 22, marginBottom: 14 }}>🔥 推薦 TOP10</h2>
+            <div style={{ display: "grid", gap: 10 }}>
+              {top.map((s, i) => {
+                const cp = Number(s.change_percent) || 0;
+                return (
+                  <div
+                    key={`${s.symbol}-${i}`}
+                    style={{
+                      background: "#0d2340",
+                      padding: 12,
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.05)",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: "#9fb4d6", marginBottom: 6 }}>
+                      #{i + 1}
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>
+                      {s.symbol} {s.name}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 22, fontWeight: 700 }}>
+                      {s.price}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        fontSize: 14,
+                        color: getPriceColor(cp),
+                        fontWeight: 700,
+                      }}
+                    >
+                      {cp > 0 ? "+" : ""}
+                      {cp}%
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 13, color: "#9fb4d6" }}>
+                      昨收 {s.prev_close || 0} ｜ 開 {s.open || 0}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 13, color: "#9fb4d6" }}>
+                      高 {s.high || 0} ｜ 低 {s.low || 0}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 14, color: "#ffd76a" }}>
+                      推薦分數：{s.score}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 左 2：排行 */}
+          <div style={cardStyle}>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginBottom: 14,
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                onClick={() => setRankTab("up")}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "none",
+                  cursor: "pointer",
+                  background: rankTab === "up" ? "#ff6b6b" : "#0d2340",
+                  color: "white",
+                  fontWeight: 700,
+                }}
+              >
+                漲幅排行
+              </button>
+              <button
+                onClick={() => setRankTab("down")}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "none",
+                  cursor: "pointer",
+                  background: rankTab === "down" ? "#4cd97b" : "#0d2340",
+                  color: "white",
+                  fontWeight: 700,
+                }}
+              >
+                跌幅排行
+              </button>
+              <button
+                onClick={() => setRankTab("volume")}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "none",
+                  cursor: "pointer",
+                  background: rankTab === "volume" ? "#2a62ff" : "#0d2340",
+                  color: "white",
+                  fontWeight: 700,
+                }}
+              >
+                成交量排行
+              </button>
+            </div>
+
+            <h2 style={{ fontSize: 22, marginBottom: 14 }}>{rankTitle}</h2>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {rankingList.map((s, i) => {
+                const cp = Number(s.change_percent) || 0;
+                return (
+                  <div
+                    key={`${rankTab}-${s.symbol}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "36px 1fr auto",
+                      gap: 10,
+                      alignItems: "center",
+                      background: "#0d2340",
+                      borderRadius: 10,
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <div style={{ color: "#9fb4d6", fontWeight: 700 }}>
+                      {i + 1}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700 }}>
+                        {s.symbol} {s.name}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#9fb4d6", marginTop: 2 }}>
+                        價格 {s.price}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        textAlign: "right",
+                        fontWeight: 700,
+                        color:
+                          rankTab === "volume"
+                            ? "#ffd76a"
+                            : getPriceColor(cp),
+                      }}
+                    >
+                      {rankTab === "volume"
+                        ? formatNumber(s.volume)
+                        : `${cp > 0 ? "+" : ""}${cp}%`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 右：全部股票 */}
+          <div style={cardStyle}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 18,
+                flexWrap: "wrap",
+                gap: 12,
+              }}
+            >
+              <h2 style={{ fontSize: 24, margin: 0 }}>
+                全部股票 ({filtered.length})
+              </h2>
+              <div style={{ color: "#9fb4d6", fontSize: 14 }}>
+                目前分類：
+                {PRICE_GROUPS.find((g) => g.key === selectedGroup)?.label || "全部"}
+              </div>
+            </div>
+
+            {loading && (
+              <div style={{ padding: "30px 0", color: "#b8c7e0" }}>資料載入中...</div>
+            )}
+
+            {!loading && error && (
+              <div style={{ padding: "30px 0", color: "#ff9a9a" }}>
+                載入失敗：{error}
+              </div>
+            )}
+
+            {!loading && !error && filtered.length === 0 && (
+              <div style={{ padding: "30px 0", color: "#b8c7e0" }}>
+                找不到符合條件的股票
+              </div>
+            )}
+
+            {!loading && !error && filtered.length > 0 && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                {filtered.map((s) => {
+                  const cp = Number(s.change_percent) || 0;
+
                   return (
                     <div
-                      key={`${s.symbol}-${i}`}
+                      key={s.symbol}
                       style={{
                         background: "#0d2340",
-                        padding: 12,
-                        borderRadius: 12,
+                        borderRadius: 14,
+                        padding: 14,
                         border: "1px solid rgba(255,255,255,0.05)",
                       }}
                     >
-                      <div style={{ fontSize: 13, color: "#9fb4d6", marginBottom: 6 }}>
-                        #{i + 1}
-                      </div>
-                      <div style={{ fontSize: 16, fontWeight: 700 }}>
-                        {s.symbol} {s.name}
-                      </div>
-                      <div style={{ marginTop: 6, fontSize: 14 }}>價格：{s.price}</div>
                       <div
                         style={{
-                          marginTop: 4,
-                          fontSize: 14,
-                          color: up ? "#ff8080" : "#7ee081",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: 10,
                         }}
                       >
-                        漲跌幅：{s.change_percent}%
+                        <div style={{ fontSize: 18, fontWeight: 700 }}>{s.symbol}</div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            padding: "4px 8px",
+                            borderRadius: 999,
+                            background: "rgba(255,255,255,0.08)",
+                            color: "#ffd76a",
+                          }}
+                        >
+                          分數 {s.score}
+                        </div>
                       </div>
-                      <div style={{ marginTop: 4, fontSize: 14, color: "#ffd76a" }}>
-                        推薦分數：{s.score}
+
+                      <div style={{ fontSize: 16, marginBottom: 10 }}>{s.name}</div>
+
+                      <div style={{ fontSize: 26, fontWeight: 700, marginBottom: 8 }}>
+                        {s.price}
+                      </div>
+
+                      <div
+                        style={{
+                          color: getPriceColor(cp),
+                          fontWeight: 700,
+                          marginBottom: 10,
+                          fontSize: 16,
+                        }}
+                      >
+                        {cp > 0 ? "+" : ""}
+                        {cp}%
+                      </div>
+
+                      <div style={{ display: "grid", gap: 4, fontSize: 13, color: "#9fb4d6" }}>
+                        <div>昨收：{s.prev_close || 0}</div>
+                        <div>開盤：{s.open || 0}</div>
+                        <div>最高：{s.high || 0}</div>
+                        <div>最低：{s.low || 0}</div>
+                        <div>成交量：{formatNumber(s.volume)}</div>
+                        <div>更新：{s.last_update || "--"}</div>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          </div>
-
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={cardStyle}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 18,
-                  flexWrap: "wrap",
-                  gap: 12,
-                }}
-              >
-                <h2 style={{ fontSize: 24, margin: 0 }}>
-                  全部股票 ({filtered.length})
-                </h2>
-                <div style={{ color: "#9fb4d6", fontSize: 14 }}>
-                  目前分類：
-                  {PRICE_GROUPS.find((g) => g.key === selectedGroup)?.label || "全部"}
-                </div>
-              </div>
-
-              {loading && (
-                <div style={{ padding: "30px 0", color: "#b8c7e0" }}>資料載入中...</div>
-              )}
-
-              {!loading && error && (
-                <div style={{ padding: "30px 0", color: "#ff9a9a" }}>
-                  載入失敗：{error}
-                </div>
-              )}
-
-              {!loading && !error && filtered.length === 0 && (
-                <div style={{ padding: "30px 0", color: "#b8c7e0" }}>
-                  找不到符合條件的股票
-                </div>
-              )}
-
-              {!loading && !error && filtered.length > 0 && (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-                    gap: 14,
-                  }}
-                >
-                  {filtered.map((s) => {
-                    const up = Number(s.change_percent) >= 0;
-
-                    return (
-                      <div
-                        key={s.symbol}
-                        style={{
-                          background: "#0d2340",
-                          borderRadius: 14,
-                          padding: 14,
-                          border: "1px solid rgba(255,255,255,0.05)",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            marginBottom: 10,
-                          }}
-                        >
-                          <div style={{ fontSize: 18, fontWeight: 700 }}>{s.symbol}</div>
-                          <div
-                            style={{
-                              fontSize: 13,
-                              padding: "4px 8px",
-                              borderRadius: 999,
-                              background: "rgba(255,255,255,0.08)",
-                              color: "#ffd76a",
-                            }}
-                          >
-                            分數 {s.score}
-                          </div>
-                        </div>
-
-                        <div style={{ fontSize: 16, marginBottom: 10 }}>{s.name}</div>
-
-                        <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>
-                          {s.price}
-                        </div>
-
-                        <div
-                          style={{
-                            color: up ? "#ff8080" : "#7ee081",
-                            fontWeight: 600,
-                            marginBottom: 8,
-                          }}
-                        >
-                          {up ? "+" : ""}
-                          {s.change_percent}%
-                        </div>
-
-                        <div style={{ fontSize: 13, color: "#9fb4d6" }}>
-                          成交量：{Number(s.volume || 0).toLocaleString()}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </div>
