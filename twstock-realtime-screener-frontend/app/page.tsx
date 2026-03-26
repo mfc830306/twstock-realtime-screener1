@@ -86,7 +86,6 @@ export default function Home() {
     return stocks
       .filter((s) => {
         const price = Number(s.price) || 0;
-
         if (price <= 0) return false;
 
         const matchGroup =
@@ -130,6 +129,7 @@ export default function Home() {
           </div>
         </div>
 
+        {/* 搜尋框 */}
         <div style={{ ...cardStyle, marginBottom: 20 }}>
           <input
             placeholder="搜尋股票代碼或名稱，例如：2330 / 台積電"
@@ -146,6 +146,43 @@ export default function Home() {
               fontSize: 15,
             }}
           />
+        </div>
+
+        {/* 價格分類移到搜尋框下方 */}
+        <div style={{ ...cardStyle, marginBottom: 20 }}>
+          <h2 style={{ fontSize: 22, marginBottom: 14 }}>💰 價格分類</h2>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              gap: 10,
+            }}
+          >
+            {PRICE_GROUPS.map((group) => {
+              const active = selectedGroup === group.key;
+              return (
+                <button
+                  key={group.key}
+                  onClick={() => setSelectedGroup(group.key)}
+                  style={{
+                    background: active ? "#2a62ff" : "#0d2340",
+                    color: "white",
+                    border: active
+                      ? "1px solid #4d7bff"
+                      : "1px solid rgba(255,255,255,0.06)",
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontSize: 15,
+                    fontWeight: active ? 700 : 500,
+                  }}
+                >
+                  {group.label} ({groupCounts[group.key] || 0})
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
@@ -188,36 +225,6 @@ export default function Home() {
                         推薦分數：{s.score}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div style={cardStyle}>
-              <h2 style={{ fontSize: 22, marginBottom: 14 }}>💰 價格分類</h2>
-              <div style={{ display: "grid", gap: 10 }}>
-                {PRICE_GROUPS.map((group) => {
-                  const active = selectedGroup === group.key;
-                  return (
-                    <button
-                      key={group.key}
-                      onClick={() => setSelectedGroup(group.key)}
-                      style={{
-                        background: active ? "#2a62ff" : "#0d2340",
-                        color: "white",
-                        border: active
-                          ? "1px solid #4d7bff"
-                          : "1px solid rgba(255,255,255,0.06)",
-                        borderRadius: 10,
-                        padding: "12px 14px",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        fontSize: 15,
-                        fontWeight: active ? 700 : 500,
-                      }}
-                    >
-                      {group.label} ({groupCounts[group.key] || 0})
-                    </button>
                   );
                 })}
               </div>
