@@ -8,6 +8,11 @@ type Stock = {
   change_percent: number;
   volume: number;
   score: number;
+  prev_close?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  last_update?: string;
 };
 
 const API = "https://twstock-realtime-screener1.onrender.com";
@@ -23,6 +28,53 @@ const PRICE_GROUPS = [
   { key: "p7", label: "500元以上", min: 500, max: Infinity },
 ];
 
+function getTaipeiNowParts() {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Taipei",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  const parts = formatter.formatToParts(now);
+  const get = (type: string) =>
+    parts.find((p) => p.type === type)?.value || "00";
+
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    second: Number(get("second")),
+  };
+}
+
+function isAfterCloseTime() {
+  const { hour, minute } = getTaipeiNowParts();
+  return hour > 13 || (hour === 13 && minute >= 30);
+}
+
+function isBeforeOpenTime() {
+  const { hour, minute } = getTaipeiNowParts();
+  return hour < 9 || (hour === 8 && minute < 60);
+}
+
+function getDisplayTime() {
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date());
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [top, setTop] = useState<Stock[]>([]);
@@ -32,12 +84,26 @@ export default function Home() {
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<string>("--");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [marketMode, setMarketMode] = useState<"preopen" | "trading" | "closed">("trading");
 
   useEffect(() => {
     let mounted = true;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const updateMarketMode = () => {
+      if (isAfterCloseTime()) {
+        setMarketMode("closed");
+      } else if (isBeforeOpenTime()) {
+        setMarketMode("preopen");
+      } else {
+        setMarketMode("trading");
+      }
+    };
 
     const loadStocks = async (silent = false) => {
       try {
+        updateMarketMode();
+
         if (!silent) {
           setLoading(true);
         } else {
@@ -65,13 +131,8 @@ export default function Home() {
           .slice(0, 10);
 
         setTop(sortedTop);
-
         setError("");
-        setLastUpdated(
-          new Date().toLocaleTimeString("zh-TW", {
-            hour12: false,
-          })
-        );
+        setLastUpdated(getDisplayTime());
       } catch (err: any) {
         if (!mounted) return;
         setError(err?.message || "載入失敗");
@@ -82,15 +143,30 @@ export default function Home() {
       }
     };
 
-    loadStocks(false);
+    const init = async () => {
+      updateMarketMode();
+      await loadStocks(false);
 
-    const timer = setInterval(() => {
-      loadStocks(true);
-    }, 10000); // 改 10000 就是每 10 秒更新
+      if (!mounted) return;
+
+      if (!isAfterCloseTime() && !isBeforeOpenTime()) {
+        timer = setInterval(() => {
+          if (isAfterCloseTime()) {
+            if (timer) clearInterval(timer);
+            setMarketMode("closed");
+            setIsRefreshing(false);
+            return;
+          }
+          loadStocks(true);
+        }, 5000);
+      }
+    };
+
+    init();
 
     return () => {
       mounted = false;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     };
   }, []);
 
@@ -138,6 +214,22 @@ export default function Home() {
     border: "1px solid rgba(255,255,255,0.06)",
   };
 
+  const marketModeText =
+    marketMode === "closed"
+      ? "收盤後｜顯示尾盤結果"
+      : marketMode === "preopen"
+      ? "開盤前｜顯示前次收盤結果"
+      : "盤中｜每 5 秒自動更新";
+
+  const marketModeColor =
+    marketMode === "closed"
+      ? "#ffd76a"
+      : marketMode === "preopen"
+      ? "#9fb4d6"
+      : isRefreshing
+      ? "#ffd76a"
+      : "#7ee081";
+
   return (
     <div
       style={{
@@ -163,7 +255,7 @@ export default function Home() {
               台股選股系統
             </h1>
             <div style={{ color: "#b8c7e0", fontSize: 15 }}>
-              準即時更新 / 全部股票 / 價格分類 / 推薦TOP10
+              全部股票 / 價格分類 / 推薦TOP10
             </div>
           </div>
 
@@ -173,7 +265,7 @@ export default function Home() {
               border: "1px solid rgba(255,255,255,0.06)",
               borderRadius: 12,
               padding: "10px 14px",
-              minWidth: 220,
+              minWidth: 240,
             }}
           >
             <div style={{ fontSize: 13, color: "#9fb4d6" }}>最後更新時間</div>
@@ -184,10 +276,10 @@ export default function Home() {
               style={{
                 fontSize: 12,
                 marginTop: 4,
-                color: isRefreshing ? "#ffd76a" : "#7ee081",
+                color: marketModeColor,
               }}
             >
-              {isRefreshing ? "更新中..." : "每 5 秒自動刷新"}
+              {marketModeText}
             </div>
           </div>
         </div>
