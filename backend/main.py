@@ -1,9 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import time
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -34,7 +34,7 @@ CACHE = {
 LIST_CACHE_TIME = 60 * 60 * 6
 PRICE_CACHE_TIME = 5
 DAILY_CACHE_TIME = 60 * 10
-BATCH_SIZE = 50
+BATCH_SIZE = 80
 
 
 def safe_float(x: Any) -> float:
@@ -165,12 +165,20 @@ def warmup_mis_session() -> None:
 
 def fetch_prices() -> Dict[str, Dict[str, Any]]:
     now = time.time()
-    if now - CACHE["price"]["time"] < PRICE_CACHE_TIME:
+    cache_time = 300 if is_after_close() else PRICE_CACHE_TIME
+
+    if now - CACHE["price"]["time"] < cache_time:
         return CACHE["price"]["data"]
+
+    daily_map = fetch_daily_close_map()
+
+    if is_after_close():
+        CACHE["price"]["time"] = now
+        CACHE["price"]["data"] = daily_map
+        return daily_map
 
     stock_list = fetch_stock_list()
     symbols = [s["symbol"] for s in stock_list]
-    daily_map = fetch_daily_close_map()
 
     warmup_mis_session()
 
@@ -223,7 +231,7 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
                 "last_update": get_market_last_update(row),
             }
 
-        time.sleep(0.15)
+        time.sleep(0.03)
 
     if not result:
         CACHE["price"]["time"] = now
@@ -254,42 +262,20 @@ def fetch_prices() -> Dict[str, Dict[str, Any]]:
 
 def calc_score(change_percent: float, volume: int) -> int:
     score = 50 + change_percent * 2
-
     if volume > 5_000_000:
         score += 4
     elif volume > 1_000_000:
         score += 2
-
     return max(0, min(100, int(round(score))))
 
 
-@app.get("/")
-def root():
-    return {
-        "message": "backend running",
-        "mode": "MIS 5-second snapshot + daily fallback",
-    }
-
-
-@app.get("/health")
-def health():
-    return {
-        "ok": True,
-        "timestamp": int(time.time()),
-        "taipei_time": taipei_now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-
-@app.get("/stocks")
-def stocks():
+def build_stock_rows() -> List[Dict[str, Any]]:
     stock_list = fetch_stock_list()
     price_map = fetch_prices()
 
     result = []
-
     for s in stock_list:
         p = price_map.get(s["symbol"], {})
-
         price = p.get("price", 0)
         change_percent = p.get("change_percent", 0)
         volume = p.get("volume", 0)
@@ -308,10 +294,92 @@ def stocks():
             "last_update": p.get("last_update", "13:30:00" if is_after_close() else taipei_now_str()),
         })
 
+    return result
+
+
+def filter_rows(
+    rows: List[Dict[str, Any]],
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    keyword: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    keyword = (keyword or "").strip()
+
+    filtered = []
+    for row in rows:
+        price = float(row.get("price", 0) or 0)
+        symbol = str(row.get("symbol", ""))
+        name = str(row.get("name", ""))
+
+        if price <= 0:
+            continue
+        if min_price is not None and price < min_price:
+            continue
+        if max_price is not None and price > max_price:
+            continue
+        if keyword and keyword not in symbol and keyword not in name:
+            continue
+
+        filtered.append(row)
+
+    return filtered
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "backend running",
+        "mode": "MIS snapshot + daily fallback + server-side filtering",
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "ok": True,
+        "timestamp": int(time.time()),
+        "taipei_time": taipei_now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+@app.get("/market-overview")
+def market_overview():
+    rows = build_stock_rows()
+    valid = [r for r in rows if float(r.get("price", 0) or 0) > 0]
+
+    top10 = sorted(valid, key=lambda x: x.get("score", 0), reverse=True)[:10]
+    gainers = sorted(valid, key=lambda x: x.get("change_percent", 0), reverse=True)[:20]
+    losers = sorted(valid, key=lambda x: x.get("change_percent", 0))[:20]
+    volumes = sorted(valid, key=lambda x: x.get("volume", 0), reverse=True)[:20]
+
+    return {
+        "success": True,
+        "source": "overview",
+        "last_update": "13:30:00" if is_after_close() else taipei_now_str(),
+        "top10": top10,
+        "gainers": gainers,
+        "losers": losers,
+        "volumes": volumes,
+    }
+
+
+@app.get("/stocks")
+def stocks(
+    min_price: Optional[float] = Query(default=None),
+    max_price: Optional[float] = Query(default=None),
+    keyword: Optional[str] = Query(default=None),
+):
+    rows = build_stock_rows()
+    filtered = filter_rows(rows, min_price=min_price, max_price=max_price, keyword=keyword)
+
     return {
         "success": True,
         "source": "TWSE MIS snapshot + daily fallback",
-        "cache_seconds": PRICE_CACHE_TIME,
-        "count": len(result),
-        "stocks": result,
+        "count": len(filtered),
+        "filters": {
+            "min_price": min_price,
+            "max_price": max_price,
+            "keyword": keyword or "",
+        },
+        "stocks": filtered,
     }
