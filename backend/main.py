@@ -24,7 +24,7 @@ def to_float(value, default=0.0):
         if value == "":
             return default
         return float(value)
-    except:
+    except Exception:
         return default
 
 
@@ -36,7 +36,7 @@ def to_int(value, default=0):
         if value == "":
             return default
         return int(float(value))
-    except:
+    except Exception:
         return default
 
 
@@ -78,10 +78,9 @@ def calc_score(change_percent, volume, price):
 def calc_signal(change_percent, volume):
     if change_percent >= 2 and volume >= 1000000:
         return "偏多"
-    elif change_percent <= -2 and volume >= 1000000:
+    if change_percent <= -2 and volume >= 1000000:
         return "偏空"
-    else:
-        return "中性"
+    return "中性"
 
 
 def calc_entry_price(price):
@@ -138,6 +137,7 @@ def root():
 def get_stocks():
     try:
         res = requests.get(TWSE_URL, timeout=20)
+        res.raise_for_status()
         data = res.json()
 
         stocks = []
@@ -165,7 +165,6 @@ def get_stocks():
 
                 score = calc_score(change_percent, volume, price)
                 signal = calc_signal(change_percent, volume)
-
                 entry_price = calc_entry_price(price)
                 target_price = calc_target_price(price)
                 stop_loss = calc_stop_loss(price)
@@ -188,12 +187,19 @@ def get_stocks():
                     "open": 0,
                     "high": 0,
                     "low": 0,
-                    "update_time": "--",
+                    "update_time": last_update,
                 })
-            except:
+            except Exception:
                 continue
 
-        stocks.sort(key=lambda x: (x["score"], x["change_percent"], x["volume"]), reverse=True)
+        stocks.sort(
+            key=lambda x: (
+                x.get("score", 0),
+                x.get("change_percent", 0),
+                x.get("volume", 0),
+            ),
+            reverse=True,
+        )
 
         return {
             "success": True,
@@ -201,12 +207,12 @@ def get_stocks():
             "data_date": data_date,
             "last_update": last_update,
             "total": len(stocks),
-            "stocks": stocks
+            "stocks": stocks,
         }
 
     except Exception as e:
         return {
             "success": False,
             "message": f"讀取失敗: {str(e)}",
-            "stocks": []
+            "stocks": [],
         }
