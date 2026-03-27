@@ -85,6 +85,7 @@ img {
   font-weight: 800;
   line-height: 1.1;
   margin-bottom: 8px;
+  word-break: break-word;
 }
 
 .updateCard .status {
@@ -168,6 +169,10 @@ img {
   font-weight: 700;
   white-space: nowrap;
   transition: 0.2s ease;
+}
+
+.categoryBtn:hover {
+  background: #18406f;
 }
 
 .categoryBtn.active {
@@ -273,6 +278,10 @@ img {
   font-weight: 700;
 }
 
+.rankTab:hover {
+  background: #18406f;
+}
+
 .rankTab.active {
   background: #ff6c7a;
 }
@@ -306,6 +315,7 @@ img {
   font-size: 16px;
   font-weight: 800;
   line-height: 1.4;
+  word-break: break-word;
 }
 
 .rankPrice {
@@ -319,6 +329,7 @@ img {
   font-weight: 800;
   color: #ff7b90;
   white-space: nowrap;
+  align-self: flex-start;
 }
 
 .listHeader {
