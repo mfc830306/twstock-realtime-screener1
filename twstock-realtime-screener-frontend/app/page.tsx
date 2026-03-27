@@ -9,10 +9,11 @@ type Stock = {
   change_percent: number;
   volume?: number;
   score?: number;
-  prev_close?: number;
-  open?: number;
-  high?: number;
-  low?: number;
+  signal?: string;
+  entry_price?: string;
+  target_price?: string;
+  stop_loss?: string;
+  reason?: string;
   update_time?: string;
 };
 
@@ -55,10 +56,7 @@ export default function Home() {
   };
 
   const filteredStocks = useMemo(() => {
-    return searched
-      .filter(filterCategory)
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, 10);
+    return searched.filter(filterCategory);
   }, [searched, selectedCategory]);
 
   const top10 = useMemo(() => {
@@ -87,76 +85,181 @@ export default function Home() {
   ];
 
   return (
-    <div className="container">
+    <div className="page">
+      <div className="container">
 
-      {/* 搜尋 */}
-      <input
-        className="search"
-        placeholder="搜尋股票..."
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-      />
-
-      {/* 分類 */}
-      <div className="filter-bar">
-        {categories.map((c) => (
-          <button
-            key={c.key}
-            className="filter-btn"
-            onClick={() => setSelectedCategory(c.key)}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="layout">
-
-        {/* 🔥 TOP10 */}
-        <div>
-          <h3>🔥 推薦TOP10</h3>
-          {top10.map((s, i) => (
-            <div key={i} className="card">
-              <div>{s.symbol} {s.name}</div>
-              <div>{s.price}</div>
-              <div>{s.change_percent}%</div>
-              <div>分數：{s.score}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* 📊 排行 */}
-        <div>
-          <h3>📊 排行榜</h3>
-          <button onClick={() => setRankType("up")}>漲幅</button>
-          <button onClick={() => setRankType("down")}>跌幅</button>
-          <button onClick={() => setRankType("volume")}>成交量</button>
-
-          {ranked.slice(0, 10).map((s, i) => (
-            <div key={i} className="card">
-              {i + 1}. {s.symbol} {s.name} {s.change_percent}%
-            </div>
-          ))}
-        </div>
-
-        {/* 📈 主區 */}
-        <div>
-          <h3>股票 ({selectedCategory})</h3>
-
-          <div className="grid">
-            {filteredStocks.map((s, i) => (
-              <div key={i} className="card">
-                <div>{s.symbol} {s.name}</div>
-                <div>{s.price}</div>
-                <div>{s.change_percent}%</div>
-
-                <div>成交量：{(s.volume || 0).toLocaleString()}</div>
-                <div>更新：{s.update_time || "--"}</div>
-              </div>
-            ))}
+        {/* 標題 */}
+        <div className="topBar">
+          <div className="titleBlock">
+            <h1>台股即時選股系統</h1>
+            <p>依價格分類 + 即時排行 + 推薦策略</p>
           </div>
         </div>
 
+        {/* 搜尋 */}
+        <div className="searchWrap">
+          <input
+            className="searchInput"
+            placeholder="搜尋股票代號或名稱..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        {/* 分類 */}
+        <div className="sectionBox">
+          <div className="sectionTitle">分類</div>
+
+          <div className="categoryScroll">
+            <div className="categoryRow">
+              {categories.map((c) => (
+                <button
+                  key={c.key}
+                  className={`categoryBtn ${
+                    selectedCategory === c.key ? "active" : ""
+                  }`}
+                  onClick={() => setSelectedCategory(c.key)}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 主布局 */}
+        <div className="mainLayout">
+
+          {/* 🔥 TOP10 */}
+          <div className="leftPanel panelCard">
+            <div className="panelTitle">🔥 推薦TOP10</div>
+
+            <div className="top10List">
+              {top10.map((s, i) => (
+                <div key={i} className="top10Card">
+                  <div className="top10Rank">#{i + 1}</div>
+
+                  <div className="stockName">
+                    {s.symbol} {s.name}
+                  </div>
+
+                  <div className="stockPrice">{s.price}</div>
+
+                  <div
+                    className={
+                      s.change_percent >= 0
+                        ? "stockChangeUp"
+                        : "stockChangeDown"
+                    }
+                  >
+                    {s.change_percent}%
+                  </div>
+
+                  <div className="stockMeta">
+                    訊號：{s.signal || "--"}
+                  </div>
+
+                  <div className="stockScore">
+                    分數：{s.score}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 📊 排行 */}
+          <div className="rankPanel panelCard">
+            <div className="panelTitle">📊 排行榜</div>
+
+            <div className="rankTabs">
+              <button
+                className={`rankTab ${rankType === "up" ? "active" : ""}`}
+                onClick={() => setRankType("up")}
+              >
+                漲幅
+              </button>
+              <button
+                className={`rankTab ${rankType === "down" ? "active" : ""}`}
+                onClick={() => setRankType("down")}
+              >
+                跌幅
+              </button>
+              <button
+                className={`rankTab ${rankType === "volume" ? "active" : ""}`}
+                onClick={() => setRankType("volume")}
+              >
+                成交量
+              </button>
+            </div>
+
+            <div className="rankList">
+              {ranked.slice(0, 10).map((s, i) => (
+                <div key={i} className="rankItem">
+                  <div className="rankLeft">
+                    <div className="rankNum">#{i + 1}</div>
+                    <div className="rankName">
+                      {s.symbol} {s.name}
+                    </div>
+                    <div className="rankPrice">{s.price}</div>
+                  </div>
+
+                  <div className="rankRight">
+                    {s.change_percent}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 📈 主區 */}
+          <div className="listPanel panelCard">
+            <div className="listHeader">
+              <div className="listTitle">
+                股票列表（{selectedCategory}）
+              </div>
+              <div className="listSub">
+                共 {filteredStocks.length} 檔
+              </div>
+            </div>
+
+            <div className="stockGrid">
+              {filteredStocks.map((s, i) => (
+                <div key={i} className="stockCard">
+                  <div className="stockCardTop">
+                    <div className="stockCodeName">
+                      <div className="stockCode">{s.symbol}</div>
+                      <div className="stockTitle">{s.name}</div>
+                    </div>
+
+                    <div className="scoreBadge">
+                      {s.score}
+                    </div>
+                  </div>
+
+                  <div className="stockBigPrice">{s.price}</div>
+
+                  <div
+                    className={
+                      s.change_percent >= 0
+                        ? "stockChangeUp"
+                        : "stockChangeDown"
+                    }
+                  >
+                    {s.change_percent}%
+                  </div>
+
+                  <div className="stockInfo">
+                    訊號：{s.signal}<br />
+                    進場：{s.entry_price}<br />
+                    目標：{s.target_price}<br />
+                    停損：{s.stop_loss}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        </div>
       </div>
     </div>
   );
