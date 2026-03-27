@@ -27,8 +27,7 @@ type ApiResponse = {
   error?: string;
 };
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "https://你的-render-後端網址.onrender.com";
+const API_BASE = "https://你的-render-後端網址.onrender.com";
 
 const PRICE_RANGES = [
   { key: "0-50", label: "0 ~ 50", min: 0, max: 50 },
@@ -47,7 +46,6 @@ function formatDateString(twDate: string) {
 
   const value = String(twDate).trim();
 
-  // 民國年格式，例如 1140327
   if (/^\d{7}$/.test(value)) {
     const rocYear = Number(value.slice(0, 3));
     const month = value.slice(3, 5);
@@ -56,7 +54,6 @@ function formatDateString(twDate: string) {
     return `${year}/${month}/${day}`;
   }
 
-  // 西元格式，例如 20260327
   if (/^\d{8}$/.test(value)) {
     const year = value.slice(0, 4);
     const month = value.slice(4, 6);
@@ -87,6 +84,7 @@ export default function HomePage() {
       setError("");
 
       const url = `${API_BASE}/stocks?min_price=${selectedRange.min}&max_price=${selectedRange.max}`;
+
       const res = await fetch(url, {
         method: "GET",
         cache: "no-store",
@@ -149,7 +147,6 @@ export default function HomePage() {
   return (
     <main className="min-h-screen bg-[#061a2b] text-white">
       <div className="mx-auto flex min-h-screen max-w-[1600px] gap-5 px-4 py-5">
-        {/* 左側分類 */}
         <aside className="w-[240px] shrink-0 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
           <div className="mb-4">
             <h1 className="text-xl font-bold tracking-wide">台股智慧選股</h1>
@@ -199,9 +196,7 @@ export default function HomePage() {
           </div>
         </aside>
 
-        {/* 右側內容 */}
         <section className="min-w-0 flex-1">
-          {/* 上方工具列 */}
           <div className="mb-5 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -242,7 +237,6 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* 推薦前10 */}
           <div className="mb-5 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-bold">推薦前 10 檔</h3>
@@ -317,7 +311,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* 股票表格 */}
           <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg backdrop-blur">
             <div className="overflow-x-auto">
               <table className="min-w-full border-collapse">
