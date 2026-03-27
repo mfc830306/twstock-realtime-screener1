@@ -6,8 +6,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  overflow-x: hidden;
-  background: #041c33;
+  background: #031a2d;
   color: #ffffff;
   font-family: Arial, "Microsoft JhengHei", sans-serif;
 }
@@ -16,541 +15,365 @@ body {
   min-height: 100vh;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
 button,
 input {
   font: inherit;
 }
 
-img {
-  max-width: 100%;
-  height: auto;
-}
-
-.page {
-  width: 100%;
+.dashboard {
   min-height: 100vh;
-  background: linear-gradient(180deg, #03182c 0%, #062341 100%);
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  background: linear-gradient(180deg, #021525 0%, #05223a 100%);
 }
 
-.container {
-  width: 100%;
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 24px;
+.sidebar {
+  padding: 28px 18px;
+  border-right: 1px solid rgba(120, 170, 220, 0.18);
 }
 
-.topBar {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.titleBlock h1 {
-  margin: 0;
-  font-size: 52px;
-  font-weight: 800;
-  line-height: 1.1;
-}
-
-.titleBlock p {
-  margin: 10px 0 0;
-  font-size: 22px;
-  color: #b7c9e6;
-}
-
-.updateCard {
-  min-width: 260px;
-  max-width: 320px;
-  background: #173764;
+.brandCard,
+.sideCard {
+  background: rgba(18, 43, 69, 0.95);
   border-radius: 18px;
-  padding: 16px 18px;
-  flex-shrink: 0;
+  padding: 18px 16px;
+  margin-bottom: 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
-.updateCard .label {
-  font-size: 14px;
-  color: #c9d7ef;
-  margin-bottom: 8px;
-}
-
-.updateCard .time {
-  font-size: 34px;
+.brandTitle {
+  font-size: 20px;
   font-weight: 800;
-  line-height: 1.1;
-  margin-bottom: 8px;
-  word-break: break-word;
+  margin-bottom: 6px;
 }
 
-.updateCard .status {
-  font-size: 15px;
-  color: #ffd36b;
+.brandSub {
+  font-size: 14px;
+  color: #8fd7ff;
   font-weight: 700;
 }
 
-.searchWrap {
-  width: 100%;
-  background: #173764;
-  border-radius: 18px;
-  padding: 14px;
-  margin-bottom: 20px;
+.sideTitle {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 16px;
 }
 
-.searchInput {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid #335a93;
-  outline: none;
-  background: #14335d;
-  color: #ffffff;
-  border-radius: 14px;
-  padding: 16px 18px;
-  font-size: 20px;
-}
-
-.searchInput::placeholder {
-  color: #90a9cf;
-}
-
-.sectionBox {
-  width: 100%;
-  background: #173764;
-  border-radius: 18px;
-  padding: 16px;
-  margin-bottom: 20px;
-  overflow: hidden;
-}
-
-.sectionTitle {
+.statusRow {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 22px;
-  font-weight: 800;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
 }
 
-.categoryScroll {
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-}
-
-.categoryScroll::-webkit-scrollbar {
-  height: 8px;
-}
-
-.categoryScroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+.statusDot {
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
+  background: #63e29b;
+  box-shadow: 0 0 12px rgba(99, 226, 155, 0.7);
+  flex-shrink: 0;
 }
 
-.categoryRow {
+.statusText {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.sideLabel {
+  font-size: 13px;
+  color: #8db3d8;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.sideValue {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffffff;
+  word-break: break-word;
+}
+
+.categoryStack {
   display: flex;
+  flex-direction: column;
   gap: 10px;
-  min-width: max-content;
 }
 
-.categoryBtn {
+.sideCategoryBtn {
   border: none;
-  cursor: pointer;
-  background: #0f2d52;
+  background: #13395d;
   color: #ffffff;
   border-radius: 12px;
-  padding: 14px 18px;
-  font-size: 18px;
+  padding: 13px 14px;
+  text-align: left;
+  cursor: pointer;
   font-weight: 700;
-  white-space: nowrap;
   transition: 0.2s ease;
 }
 
-.categoryBtn:hover {
-  background: #18406f;
+.sideCategoryBtn:hover {
+  background: #194872;
 }
 
-.categoryBtn.active {
-  background: linear-gradient(135deg, #3d6dff 0%, #4c86ff 100%);
-}
-
-.mainLayout {
-  display: grid;
-  grid-template-columns: 280px 320px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.leftPanel,
-.rankPanel,
-.listPanel {
-  min-width: 0;
-}
-
-.panelCard {
-  background: #173764;
-  border-radius: 18px;
-  padding: 16px;
-}
-
-.panelTitle {
-  font-size: 22px;
-  font-weight: 800;
-  margin: 0 0 14px;
-}
-
-.top10List {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.top10Card {
-  background: #0f2d52;
-  border-radius: 16px;
-  padding: 14px;
-}
-
-.top10Rank {
-  font-size: 14px;
-  color: #8eb2e8;
-  margin-bottom: 8px;
-}
-
-.stockName {
-  font-size: 16px;
-  font-weight: 800;
-  line-height: 1.4;
-  margin-bottom: 8px;
-}
-
-.stockPrice {
-  font-size: 22px;
-  font-weight: 800;
-  margin-bottom: 6px;
-}
-
-.stockChangeUp {
-  color: #ff6b81;
-  font-weight: 800;
-  margin-bottom: 8px;
-}
-
-.stockChangeDown {
-  color: #55d38a;
-  font-weight: 800;
-  margin-bottom: 8px;
-}
-
-.stockMeta {
-  font-size: 13px;
-  color: #b9ccea;
-  line-height: 1.6;
-}
-
-.stockScore {
-  margin-top: 8px;
-  color: #ffd36b;
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.rankTabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-
-.rankTab {
-  border: none;
-  cursor: pointer;
-  background: #0f2d52;
+.sideCategoryBtn.active {
+  background: #19b7d3;
   color: #ffffff;
-  border-radius: 10px;
-  padding: 10px 12px;
+}
+
+.mainContent {
+  padding: 28px 20px;
+}
+
+.heroCard,
+.recommendCard,
+.tableCard {
+  background: rgba(18, 43, 69, 0.95);
+  border-radius: 18px;
+  padding: 18px;
+  margin-bottom: 22px;
+}
+
+.heroTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.pageTitle {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.pageDesc {
+  margin: 0;
+  color: #9bc4ea;
   font-size: 15px;
-  font-weight: 700;
 }
 
-.rankTab:hover {
-  background: #18406f;
-}
-
-.rankTab.active {
-  background: #ff6c7a;
-}
-
-.rankList {
+.searchArea {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.rankItem {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  background: #0f2d52;
-  border-radius: 14px;
-  padding: 12px;
-}
-
-.rankLeft {
-  min-width: 0;
-}
-
-.rankNum {
-  font-size: 14px;
-  color: #8eb2e8;
-  margin-bottom: 4px;
-}
-
-.rankName {
-  font-size: 16px;
-  font-weight: 800;
-  line-height: 1.4;
-  word-break: break-word;
-}
-
-.rankPrice {
-  font-size: 13px;
-  color: #b9ccea;
-  margin-top: 4px;
-}
-
-.rankRight {
-  font-size: 16px;
-  font-weight: 800;
-  color: #ff7b90;
-  white-space: nowrap;
-  align-self: flex-start;
-}
-
-.listHeader {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  min-width: 420px;
 }
 
-.listTitle {
-  font-size: 22px;
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #2d5a86;
+  background: #0f3152;
+  color: #ffffff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: #8db3d8;
+}
+
+.refreshBtn {
+  border: none;
+  background: #19b7d3;
+  color: #ffffff;
+  border-radius: 12px;
+  padding: 12px 18px;
   font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
-.listSub {
+.infoBar {
+  background: #114866;
+  color: #d6f5ff;
+  border-radius: 12px;
+  padding: 12px 14px;
   font-size: 14px;
-  color: #9bb7df;
-  text-align: right;
 }
 
-.stockGrid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.stockCard {
-  background: #0f2d52;
-  border-radius: 16px;
-  padding: 16px;
-  min-width: 0;
-}
-
-.stockCardTop {
+.sectionHeader {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  margin-bottom: 12px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
-.stockCodeName {
-  min-width: 0;
-}
-
-.stockCode {
+.sectionHeader h2 {
+  margin: 0;
   font-size: 18px;
   font-weight: 900;
-  margin-bottom: 6px;
 }
 
-.stockTitle {
-  font-size: 15px;
-  color: #d7e5ff;
-  line-height: 1.45;
-  word-break: break-word;
-}
-
-.scoreBadge {
-  flex-shrink: 0;
-  background: rgba(255, 211, 107, 0.12);
-  color: #ffd36b;
-  border-radius: 999px;
-  padding: 6px 10px;
+.sectionHeader span {
   font-size: 13px;
-  font-weight: 800;
+  color: #9bc4ea;
 }
 
-.stockBigPrice {
+.emptyBox {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 14px;
+  padding: 18px;
+  color: #d6e8fa;
+}
+
+.recommendList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.recommendItem {
+  display: grid;
+  grid-template-columns: 1.4fr 0.7fr 1fr;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.recommendRank {
+  font-size: 13px;
+  color: #8db3d8;
+  margin-bottom: 8px;
+}
+
+.recommendName {
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.recommendPrice {
   font-size: 24px;
   font-weight: 900;
   margin-bottom: 8px;
 }
 
-.stockInfo {
+.recommendChange {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.recommendRight {
   font-size: 14px;
-  line-height: 1.7;
-  color: #c3d5ef;
-  word-break: break-word;
+  line-height: 1.8;
+  color: #dcecff;
 }
 
-/* 平板 */
-@media (max-width: 1200px) {
-  .topBar {
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.stockTable {
+  width: 100%;
+  min-width: 1100px;
+  border-collapse: collapse;
+}
+
+.stockTable thead th {
+  background: #123c61;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+  text-align: left;
+  padding: 14px 12px;
+}
+
+.stockTable thead th:first-child {
+  border-top-left-radius: 12px;
+}
+
+.stockTable thead th:last-child {
+  border-top-right-radius: 12px;
+}
+
+.stockTable tbody td {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 14px 12px;
+  border-bottom: 1px solid rgba(130, 175, 220, 0.08);
+  color: #e8f3ff;
+  font-size: 14px;
+}
+
+.stockTable tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.emptyTd {
+  text-align: center;
+  color: #c9ddef;
+  padding: 36px 12px !important;
+}
+
+.up {
+  color: #ff6d8f;
+  font-weight: 800;
+}
+
+.down {
+  color: #65db9d;
+  font-weight: 800;
+}
+
+@media (max-width: 1100px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid rgba(120, 170, 220, 0.18);
+  }
+
+  .heroTop {
     flex-direction: column;
   }
 
-  .updateCard {
+  .searchArea {
+    min-width: 0;
     width: 100%;
-    max-width: 100%;
   }
 
-  .mainLayout {
+  .recommendItem {
     grid-template-columns: 1fr;
-  }
-
-  .stockGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-/* 手機 */
 @media (max-width: 768px) {
-  .container {
+  .sidebar,
+  .mainContent {
     padding: 14px;
   }
 
-  .topBar {
-    gap: 12px;
-    margin-bottom: 14px;
-  }
-
-  .titleBlock h1 {
-    font-size: 30px;
-  }
-
-  .titleBlock p {
-    font-size: 14px;
-    line-height: 1.5;
-  }
-
-  .updateCard {
+  .brandCard,
+  .sideCard,
+  .heroCard,
+  .recommendCard,
+  .tableCard {
     border-radius: 14px;
-    padding: 12px 14px;
-  }
-
-  .updateCard .time {
-    font-size: 24px;
-  }
-
-  .searchWrap {
-    padding: 10px;
-    border-radius: 14px;
-    margin-bottom: 14px;
-  }
-
-  .searchInput {
-    padding: 13px 14px;
-    font-size: 16px;
-    border-radius: 12px;
-  }
-
-  .sectionBox,
-  .panelCard {
-    border-radius: 14px;
-    padding: 12px;
-  }
-
-  .sectionTitle,
-  .panelTitle,
-  .listTitle {
-    font-size: 18px;
-  }
-
-  .categoryBtn {
-    font-size: 15px;
-    padding: 12px 14px;
-  }
-
-  .rankTabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-
-  .rankTabs::-webkit-scrollbar {
-    height: 6px;
-  }
-
-  .rankTab {
-    white-space: nowrap;
-    flex-shrink: 0;
-    font-size: 14px;
-    padding: 9px 12px;
-  }
-
-  .listHeader {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .listSub {
-    text-align: left;
-    font-size: 13px;
-  }
-
-  .stockGrid {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .stockCard {
     padding: 14px;
   }
 
-  .stockCode {
-    font-size: 17px;
-  }
-
-  .stockTitle {
-    font-size: 14px;
-  }
-
-  .stockBigPrice {
+  .pageTitle {
     font-size: 22px;
   }
 
-  .stockInfo {
-    font-size: 13px;
+  .searchArea {
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .top10Card {
-    padding: 12px;
+  .refreshBtn {
+    width: 100%;
   }
 
-  .stockName {
-    font-size: 15px;
-  }
-
-  .stockPrice {
-    font-size: 20px;
+  .stockTable {
+    min-width: 980px;
   }
 }
