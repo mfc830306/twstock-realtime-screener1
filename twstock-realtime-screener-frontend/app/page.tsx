@@ -468,14 +468,6 @@ export default function Home() {
                       </div>
 
                       <div className="stockInfo">
-                        昨收：{formatPrice(stock.prev_close)}
-                        <br />
-                        開盤：{formatPrice(stock.open)}
-                        <br />
-                        最高：{formatPrice(stock.high)}
-                        <br />
-                        最低：{formatPrice(stock.low)}
-                        <br />
                         成交量：{formatNumber(stock.volume)}
                         <br />
                         進場：{stock.entry_price || "--"}
