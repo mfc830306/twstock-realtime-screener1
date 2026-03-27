@@ -14,22 +14,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔥 即時資料快取
 live_cache = {}
-
-# 🔥 收盤資料快取
 close_cache = []
 
-# =========================
-# 工具
-# =========================
+
 def safe_float(v):
     try:
-        if v in ["-", "--", ""]:
+        if v in ["-", "--", "", None]:
             return None
-        return float(v)
+        return float(str(v).replace(",", ""))
     except:
         return None
+
+
+def safe_int(v):
+    try:
+        if v in ["-", "--", "", None]:
+            return 0
+        return int(float(str(v).replace(",", "")))
+    except:
+        return 0
+
 
 def get_market_mode():
     now = time.localtime()
@@ -38,9 +43,25 @@ def get_market_mode():
         return "live"
     return "close"
 
-# =========================
-# 🔥 MIS 即時資料（盤中）
-# =========================
+
+def build_stock_item(code, name, price, change, volume):
+    yesterday = price - change if price is not None else 0
+    change_percent = round((change / yesterday) * 100, 2) if yesterday else 0
+
+    return {
+        "symbol": code,
+        "name": name,
+        "price": round(price, 2),
+        "change": round(change, 2),
+        "change_percent": change_percent,
+        "volume": volume,
+        "score": round(abs(change_percent) * 10, 2),
+        "entry_price": f"{round(price * 0.99, 2)} ~ {round(price * 1.01, 2)}",
+        "target_price": str(round(price * 1.05, 2)),
+        "stop_loss": str(round(price * 0.97, 2)),
+    }
+
+
 def update_live_data():
     global live_cache
 
@@ -50,41 +71,30 @@ def update_live_data():
             res = requests.get(url, timeout=10)
             data = res.json()
 
-            if "msgArray" not in data:
-                time.sleep(5)
-                continue
-
+            msg_array = data.get("msgArray", [])
             temp = {}
 
-            for s in data["msgArray"]:
-                price = safe_float(s.get("z"))  # 最新成交價
-                if price is None:
-                    continue
-
+            for s in msg_array:
                 code = s.get("c")
                 name = s.get("n")
+                price = safe_float(s.get("z"))
+                yesterday = safe_float(s.get("y"))
+                volume = safe_int(s.get("v"))
 
-                y = safe_float(s.get("y"))  # 昨收
-                change = round(price - y, 2) if y else 0
-                change_percent = round((change / y) * 100, 2) if y else 0
+                if not code or not name or price is None:
+                    continue
 
-                volume = int(s.get("v", 0))
+                change = round(price - yesterday, 2) if yesterday is not None else 0.0
 
-                temp[code] = {
-                    "symbol": code,
-                    "name": name,
-                    "price": price,
-                    "change": change,
-                    "change_percent": change_percent,
-                    "volume": volume,
-                    "score": abs(change_percent) * 10,
-                    "entry_price": f"{round(price*0.99,2)} ~ {round(price*1.01,2)}",
-                    "target_price": str(round(price*1.05,2)),
-                    "stop_loss": str(round(price*0.97,2)),
-                }
+                temp[code] = build_stock_item(
+                    code=code,
+                    name=name,
+                    price=price,
+                    change=change,
+                    volume=volume,
+                )
 
             live_cache = temp
-
             print("更新即時資料:", len(live_cache))
 
         except Exception as e:
@@ -92,46 +102,41 @@ def update_live_data():
 
         time.sleep(3)
 
-# =========================
-# 🔥 TWSE 收盤資料
-# =========================
+
 def update_close_data():
     global close_cache
 
     while True:
         try:
-            url = "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json"
+            url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
             res = requests.get(url, timeout=20)
-            data = res.json()
-
-            if "data" not in data:
-                time.sleep(60)
-                continue
+            raw_data = res.json()
 
             temp = []
 
-            for s in data["data"]:
+            for s in raw_data:
                 try:
-                    code = s[0]
-                    name = s[1]
-                    price = float(s[7])
-                    change = float(s[8].replace("+", "").replace("-", "")) if s[8] not in ["--"] else 0
-                    volume = int(s[2].replace(",", ""))
+                    code = str(s.get("Code", "")).strip()
+                    name = str(s.get("Name", "")).strip()
+                    price = safe_float(s.get("ClosingPrice"))
+                    change = safe_float(s.get("Change"))
+                    volume = safe_int(s.get("TradeVolume"))
 
-                    change_percent = round((change / (price - change)) * 100, 2) if price else 0
+                    if not code or not name or price is None:
+                        continue
 
-                    temp.append({
-                        "symbol": code,
-                        "name": name,
-                        "price": price,
-                        "change": change,
-                        "change_percent": change_percent,
-                        "volume": volume,
-                        "score": abs(change_percent) * 10,
-                        "entry_price": f"{round(price*0.99,2)} ~ {round(price*1.01,2)}",
-                        "target_price": str(round(price*1.05,2)),
-                        "stop_loss": str(round(price*0.97,2)),
-                    })
+                    if change is None:
+                        change = 0.0
+
+                    temp.append(
+                        build_stock_item(
+                            code=code,
+                            name=name,
+                            price=price,
+                            change=change,
+                            volume=volume,
+                        )
+                    )
                 except:
                     continue
 
@@ -143,37 +148,38 @@ def update_close_data():
 
         time.sleep(600)
 
-# =========================
-# 🔥 API
-# =========================
+
+@app.get("/")
+def root():
+    return {"message": "backend running"}
+
+
 @app.get("/stocks")
 def get_stocks(
     min_price: float = Query(0),
-    max_price: float = Query(999999)
+    max_price: float = Query(999999),
 ):
     mode = get_market_mode()
 
-    data = live_cache if mode == "live" else close_cache
-
-    result = [
-        s for s in data.values() if mode == "live"
-        else data
-    ]
+    if mode == "live":
+        result = list(live_cache.values())
+    else:
+        result = close_cache
 
     filtered = [
         s for s in result
-        if min_price <= s["price"] <= max_price
+        if s.get("price") is not None and min_price <= s["price"] <= max_price
     ]
+
+    filtered.sort(key=lambda x: x["score"], reverse=True)
 
     return {
         "success": True,
         "mode": mode,
         "total": len(filtered),
-        "stocks": sorted(filtered, key=lambda x: x["score"], reverse=True)
+        "stocks": filtered,
     }
 
-# =========================
-# 啟動背景任務
-# =========================
+
 threading.Thread(target=update_live_data, daemon=True).start()
 threading.Thread(target=update_close_data, daemon=True).start()
