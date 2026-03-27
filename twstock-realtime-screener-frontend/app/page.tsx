@@ -27,10 +27,11 @@ type ApiResponse = {
   error?: string;
 };
 
-const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com";
-// 例：const BACKEND_URL = "https://xxx.onrender.com/stocks";
+const BACKEND_URL = "https://你的-render-後端網址/stocks";
+// 例：const BACKEND_URL = "https://tw-stock-backend.onrender.com/stocks";
 
 const priceRanges = [
+  { key: "ALL", label: "全部" },
   { key: "0-50", label: "0~50" },
   { key: "50-100", label: "50~100" },
   { key: "100-200", label: "100~200" },
@@ -38,6 +39,7 @@ const priceRanges = [
 ];
 
 function inRange(price: number, range: string) {
+  if (range === "ALL") return true;
   if (range === "0-50") return price >= 0 && price < 50;
   if (range === "50-100") return price >= 50 && price < 100;
   if (range === "100-200") return price >= 100 && price < 200;
@@ -52,7 +54,7 @@ export default function Home() {
   const [dataDate, setDataDate] = useState("");
   const [source, setSource] = useState("");
   const [search, setSearch] = useState("1802");
-  const [selectedRange, setSelectedRange] = useState("50-100");
+  const [selectedRange, setSelectedRange] = useState("ALL");
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -62,7 +64,15 @@ export default function Home() {
       setLoading(true);
       setErrorMsg("");
 
-      const res = await fetch(BACKEND_URL, { cache: "no-store" });
+      const res = await fetch(BACKEND_URL, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
       const data: ApiResponse = await res.json();
 
       if (!data.success) {
@@ -71,14 +81,16 @@ export default function Home() {
         return;
       }
 
-      setStocks(Array.isArray(data.stocks) ? data.stocks : []);
+      const list = Array.isArray(data.stocks) ? data.stocks : [];
+
+      setStocks(list);
       setMarketStatus(data.market_status || "未知");
       setLastUpdate(data.last_update || "");
       setDataDate(data.data_date || "");
       setSource(data.source || "");
-    } catch (err) {
+    } catch (error) {
       setStocks([]);
-      setErrorMsg("無法連接後端，請檢查 Render 是否啟動");
+      setErrorMsg("無法連接後端，請檢查 Render 是否正常啟動，以及 BACKEND_URL 是否正確");
     } finally {
       setLoading(false);
       setInitialized(true);
@@ -90,34 +102,37 @@ export default function Home() {
 
     const timer = setInterval(() => {
       fetchStocks();
-    }, 30000); // 改 30 秒，避免一直閃更新中
+    }, 30000);
 
     return () => clearInterval(timer);
   }, []);
 
   const filteredStocks = useMemo(() => {
-    let result = stocks.filter((s) => inRange(s.price, selectedRange));
+    let result = [...stocks];
+
+    result = result.filter((s) => inRange(s.price, selectedRange));
 
     const keyword = search.trim();
     if (keyword) {
       result = result.filter(
         (s) =>
-          s.symbol.includes(keyword) ||
-          s.name.includes(keyword)
+          s.symbol.toLowerCase().includes(keyword.toLowerCase()) ||
+          s.name.toLowerCase().includes(keyword.toLowerCase())
       );
     }
 
-    return result.sort((a, b) => b.score - a.score);
+    result.sort((a, b) => b.score - a.score);
+    return result;
   }, [stocks, selectedRange, search]);
 
-  const top10 = filteredStocks.slice(0, 10);
+  const top10 = useMemo(() => filteredStocks.slice(0, 10), [filteredStocks]);
 
   return (
     <main
       style={{
         minHeight: "100vh",
         background: "#031f36",
-        color: "#fff",
+        color: "#ffffff",
         padding: "18px",
       }}
     >
@@ -300,7 +315,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* 只有真的 loading 才顯示 */}
             {loading && (
               <div
                 style={{
@@ -364,12 +378,7 @@ export default function Home() {
                 {initialized ? "目前沒有符合條件的股票" : "載入中..."}
               </div>
             ) : (
-              <div
-                style={{
-                  display: "grid",
-                  gap: "10px",
-                }}
-              >
+              <div style={{ display: "grid", gap: "10px" }}>
                 {top10.map((s) => (
                   <div
                     key={s.symbol}
@@ -395,65 +404,73 @@ export default function Home() {
             style={{
               background: "#0b2b45",
               borderRadius: "18px",
-              overflow: "hidden",
+              overflowX: "auto",
             }}
           >
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "90px 120px 110px 110px 110px 140px 120px 160px 140px 140px",
-                background: "#113758",
-                padding: "14px 12px",
-                fontWeight: 800,
+                minWidth: "1250px",
               }}
             >
-              <div>代號</div>
-              <div>名稱</div>
-              <div>價格</div>
-              <div>漲跌</div>
-              <div>漲跌幅</div>
-              <div>成交量</div>
-              <div>推薦分數</div>
-              <div>進場價</div>
-              <div>出場價</div>
-              <div>停損價</div>
-            </div>
-
-            {filteredStocks.length === 0 ? (
               <div
                 style={{
-                  padding: "28px 16px",
-                  color: "#d2e3f0",
-                  textAlign: "center",
+                  display: "grid",
+                  gridTemplateColumns:
+                    "90px 120px 110px 110px 110px 140px 120px 160px 140px 140px",
+                  background: "#113758",
+                  padding: "14px 12px",
+                  fontWeight: 800,
                 }}
               >
-                {initialized ? "沒有符合條件的資料" : "載入中..."}
+                <div>代號</div>
+                <div>名稱</div>
+                <div>價格</div>
+                <div>漲跌</div>
+                <div>漲跌幅</div>
+                <div>成交量</div>
+                <div>推薦分數</div>
+                <div>進場價</div>
+                <div>出場價</div>
+                <div>停損價</div>
               </div>
-            ) : (
-              filteredStocks.map((s) => (
+
+              {filteredStocks.length === 0 ? (
                 <div
-                  key={s.symbol}
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "90px 120px 110px 110px 110px 140px 120px 160px 140px 140px",
-                    padding: "14px 12px",
-                    borderTop: "1px solid rgba(255,255,255,0.06)",
-                    alignItems: "center",
+                    padding: "28px 16px",
+                    color: "#d2e3f0",
+                    textAlign: "center",
                   }}
                 >
-                  <div>{s.symbol}</div>
-                  <div>{s.name}</div>
-                  <div>{s.price}</div>
-                  <div>{s.change}</div>
-                  <div>{s.change_percent}%</div>
-                  <div>{s.volume.toLocaleString()}</div>
-                  <div>{s.score}</div>
-                  <div>{s.entry_price}</div>
-                  <div>{s.target_price}</div>
-                  <div>{s.stop_loss}</div>
+                  {initialized ? "沒有符合條件的資料" : "載入中..."}
                 </div>
-              ))
-            )}
+              ) : (
+                filteredStocks.map((s) => (
+                  <div
+                    key={`${s.symbol}-${s.name}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "90px 120px 110px 110px 110px 140px 120px 160px 140px 140px",
+                      padding: "14px 12px",
+                      borderTop: "1px solid rgba(255,255,255,0.06)",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>{s.symbol}</div>
+                    <div>{s.name}</div>
+                    <div>{s.price}</div>
+                    <div>{s.change}</div>
+                    <div>{s.change_percent}%</div>
+                    <div>{s.volume.toLocaleString()}</div>
+                    <div>{s.score}</div>
+                    <div>{s.entry_price}</div>
+                    <div>{s.target_price}</div>
+                    <div>{s.stop_loss}</div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </section>
       </div>
