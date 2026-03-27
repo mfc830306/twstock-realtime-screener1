@@ -213,25 +213,31 @@ export default function Home() {
             <div className="recommendList">
               {recommendedTop10.map((s, i) => (
                 <div key={`${s.symbol}-${i}`} className="recommendItem">
-                  <div className="recommendLeft">
+                  <div className="recommendMain">
                     <div className="recommendRank">#{i + 1}</div>
                     <div className="recommendName">
                       {s.symbol} {s.name}
                     </div>
                   </div>
 
-                  <div className="recommendMiddle">
+                  <div className="recommendPriceBlock">
                     <div className="recommendPrice">{s.price}</div>
                     <div className={`recommendChange ${getPercentClass(s.change_percent)}`}>
                       {formatPercent(s.change_percent)}
                     </div>
+                    <div className="recommendSignal">訊號：{s.signal || "--"}</div>
                   </div>
 
-                  <div className="recommendRight">
+                  <div className="recommendPlan">
                     <div>分數：{s.score ?? "--"}</div>
                     <div>進場：{s.entry_price || "--"}</div>
                     <div>出場：{s.target_price || "--"}</div>
                     <div>停損：{s.stop_loss || "--"}</div>
+                  </div>
+
+                  <div className="recommendReason">
+                    <span className="reasonLabel">推薦原因</span>
+                    <div className="reasonText">{s.reason || "暫無推薦原因"}</div>
                   </div>
                 </div>
               ))}
