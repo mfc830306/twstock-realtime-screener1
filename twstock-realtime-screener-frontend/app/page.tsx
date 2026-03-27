@@ -40,6 +40,7 @@ export default function Home() {
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
   const [rankType, setRankType] = useState<"up" | "down" | "volume">("up");
 
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
@@ -100,19 +101,8 @@ export default function Home() {
   };
 
   const safeStocks = useMemo(() => {
-    return stocks.filter((s) => s.price > 0);
+    return stocks.filter((s) => Number(s.price) > 0);
   }, [stocks]);
-
-  const searchedStocks = useMemo(() => {
-    const keyword = searchTerm.trim().toLowerCase();
-    if (!keyword) return safeStocks;
-
-    return safeStocks.filter(
-      (stock) =>
-        stock.symbol.toLowerCase().includes(keyword) ||
-        stock.name.toLowerCase().includes(keyword)
-    );
-  }, [safeStocks, searchTerm]);
 
   const isETF = (stock: Stock) => {
     const name = (stock.name || "").toUpperCase();
@@ -132,6 +122,89 @@ export default function Home() {
       name.includes("金融")
     );
   };
+
+  const searchedStocks = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return safeStocks;
+
+    return safeStocks.filter(
+      (stock) =>
+        stock.symbol.toLowerCase().includes(keyword) ||
+        stock.name.toLowerCase().includes(keyword)
+    );
+  }, [safeStocks, searchTerm]);
+
+  const categoryCounts = useMemo(() => {
+    return {
+      all: searchedStocks.length,
+      etf: searchedStocks.filter((s) => isETF(s)).length,
+      under10: searchedStocks.filter((s) => !isETF(s) && s.price < 10).length,
+      "10to30": searchedStocks.filter((s) => !isETF(s) && s.price >= 10 && s.price < 30).length,
+      "30to50": searchedStocks.filter((s) => !isETF(s) && s.price >= 30 && s.price < 50).length,
+      "50to100": searchedStocks.filter((s) => !isETF(s) && s.price >= 50 && s.price < 100).length,
+      "100to200": searchedStocks.filter((s) => !isETF(s) && s.price >= 100 && s.price < 200).length,
+      "200to500": searchedStocks.filter((s) => !isETF(s) && s.price >= 200 && s.price < 500).length,
+      over500: searchedStocks.filter((s) => !isETF(s) && s.price >= 500).length,
+    };
+  }, [searchedStocks]);
+
+  const categories = useMemo(
+    () => [
+      { key: "all", label: `全部 (${categoryCounts.all})` },
+      { key: "etf", label: `ETF (${categoryCounts.etf})` },
+      { key: "under10", label: `10元以下 (${categoryCounts.under10})` },
+      { key: "10to30", label: `10~30元 (${categoryCounts["10to30"]})` },
+      { key: "30to50", label: `30~50元 (${categoryCounts["30to50"]})` },
+      { key: "50to100", label: `50~100元 (${categoryCounts["50to100"]})` },
+      { key: "100to200", label: `100~200元 (${categoryCounts["100to200"]})` },
+      { key: "200to500", label: `200~500元 (${categoryCounts["200to500"]})` },
+      { key: "over500", label: `500元以上 (${categoryCounts.over500})` },
+    ],
+    [categoryCounts]
+  );
+
+  const filteredStocks = useMemo(() => {
+    let result = searchedStocks;
+
+    switch (selectedCategory) {
+      case "etf":
+        result = result.filter((s) => isETF(s));
+        break;
+      case "under10":
+        result = result.filter((s) => !isETF(s) && s.price < 10);
+        break;
+      case "10to30":
+        result = result.filter((s) => !isETF(s) && s.price >= 10 && s.price < 30);
+        break;
+      case "30to50":
+        result = result.filter((s) => !isETF(s) && s.price >= 30 && s.price < 50);
+        break;
+      case "50to100":
+        result = result.filter((s) => !isETF(s) && s.price >= 50 && s.price < 100);
+        break;
+      case "100to200":
+        result = result.filter((s) => !isETF(s) && s.price >= 100 && s.price < 200);
+        break;
+      case "200to500":
+        result = result.filter((s) => !isETF(s) && s.price >= 200 && s.price < 500);
+        break;
+      case "over500":
+        result = result.filter((s) => !isETF(s) && s.price >= 500);
+        break;
+      default:
+        result = result;
+    }
+
+    return [...result]
+      .sort((a, b) => {
+        const scoreDiff = (b.score || 0) - (a.score || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        const volumeDiff = (b.volume || 0) - (a.volume || 0);
+        if (volumeDiff !== 0) return volumeDiff;
+        return b.change_percent - a.change_percent;
+      })
+      .slice(0, 10);
+  }, [searchedStocks, selectedCategory]);
 
   const top10Stocks = useMemo(() => {
     return [...safeStocks]
@@ -157,59 +230,17 @@ export default function Home() {
     return copied.sort((a, b) => (b.volume || 0) - (a.volume || 0));
   }, [safeStocks, rankType]);
 
-  const priceSections = useMemo(() => {
-    const makeSection = (
-      key: string,
-      title: string,
-      filterFn: (stock: Stock) => boolean
-    ) => {
-      const items = searchedStocks
-        .filter(filterFn)
-        .sort((a, b) => {
-          const scoreDiff = (b.score || 0) - (a.score || 0);
-          if (scoreDiff !== 0) return scoreDiff;
-          return (b.volume || 0) - (a.volume || 0);
-        })
-        .slice(0, 10);
-
-      return {
-        key,
-        title,
-        items,
-      };
-    };
-
-    return [
-      makeSection("etf", "ETF", isETF),
-      makeSection("under10", "10元以下", (s) => !isETF(s) && s.price < 10),
-      makeSection(
-        "10to30",
-        "10~30元",
-        (s) => !isETF(s) && s.price >= 10 && s.price < 30
-      ),
-      makeSection(
-        "30to50",
-        "30~50元",
-        (s) => !isETF(s) && s.price >= 30 && s.price < 50
-      ),
-      makeSection(
-        "50to100",
-        "50~100元",
-        (s) => !isETF(s) && s.price >= 50 && s.price < 100
-      ),
-      makeSection(
-        "100to200",
-        "100~200元",
-        (s) => !isETF(s) && s.price >= 100 && s.price < 200
-      ),
-      makeSection(
-        "200to500",
-        "200~500元",
-        (s) => !isETF(s) && s.price >= 200 && s.price < 500
-      ),
-      makeSection("over500", "500元以上", (s) => !isETF(s) && s.price >= 500),
-    ];
-  }, [searchedStocks]);
+  const categoryNameMap: Record<string, string> = {
+    all: "全部",
+    etf: "ETF",
+    under10: "10元以下",
+    "10to30": "10~30元",
+    "30to50": "30~50元",
+    "50to100": "50~100元",
+    "100to200": "100~200元",
+    "200to500": "200~500元",
+    over500: "500元以上",
+  };
 
   return (
     <div className="page">
@@ -217,7 +248,7 @@ export default function Home() {
         <div className="topBar">
           <div className="titleBlock">
             <h1>台股選股系統</h1>
-            <p>ETF / 各分價區代表股票 / 推薦TOP10 / 即時排行</p>
+            <p>全部股票 / ETF / 價格分類 / 推薦TOP10 / 即時排行</p>
             {dataDate ? (
               <p style={{ marginTop: 8, fontSize: 14, color: "#8fb2de" }}>
                 資料日期：{dataDate}
@@ -240,6 +271,25 @@ export default function Home() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
+        </div>
+
+        <div className="sectionBox">
+          <div className="sectionTitle">💰 價格分類</div>
+          <div className="categoryScroll">
+            <div className="categoryRow">
+              {categories.map((cat) => (
+                <button
+                  key={cat.key}
+                  className={`categoryBtn ${
+                    selectedCategory === cat.key ? "active" : ""
+                  }`}
+                  onClick={() => setSelectedCategory(cat.key)}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -314,7 +364,9 @@ export default function Home() {
                     跌幅排行
                   </button>
                   <button
-                    className={`rankTab ${rankType === "volume" ? "active" : ""}`}
+                    className={`rankTab ${
+                      rankType === "volume" ? "active" : ""
+                    }`}
                     onClick={() => setRankType("volume")}
                   >
                     成交量排行
@@ -348,85 +400,59 @@ export default function Home() {
             <div className="listPanel">
               <div className="panelCard">
                 <div className="listHeader">
-                  <div className="listTitle">各分類 10 檔股票</div>
+                  <div className="listTitle">
+                    {categoryNameMap[selectedCategory]}股票 ({filteredStocks.length})
+                  </div>
                   <div className="listSub">
-                    共顯示{" "}
-                    {priceSections.reduce(
-                      (sum, section) => sum + section.items.length,
-                      0
-                    )}{" "}
-                    檔
+                    目前分類：{categoryNameMap[selectedCategory]} / 顯示前 10 檔
                   </div>
                 </div>
 
-                {priceSections.map((section) => (
-                  <div key={section.key} style={{ marginBottom: 24 }}>
-                    <div
-                      style={{
-                        fontSize: 20,
-                        fontWeight: 800,
-                        marginBottom: 12,
-                        color: "#ffffff",
-                      }}
-                    >
-                      {section.title} ({section.items.length})
+                <div className="stockGrid">
+                  {filteredStocks.map((stock) => (
+                    <div key={stock.symbol} className="stockCard">
+                      <div className="stockCardTop">
+                        <div className="stockCodeName">
+                          <div className="stockCode">{stock.symbol}</div>
+                          <div className="stockTitle">{stock.name}</div>
+                        </div>
+                        <div className="scoreBadge">分數 {stock.score || 0}</div>
+                      </div>
+
+                      <div className="stockBigPrice">
+                        {formatPrice(stock.price)}
+                      </div>
+
+                      <div
+                        className={
+                          stock.change_percent >= 0
+                            ? "stockChangeUp"
+                            : "stockChangeDown"
+                        }
+                        style={{ marginBottom: 10 }}
+                      >
+                        {stock.change_percent >= 0 ? "+" : ""}
+                        {stock.change_percent.toFixed(2)}%
+                      </div>
+
+                      <div className="stockInfo">
+                        昨收：{formatPrice(stock.prev_close)}
+                        <br />
+                        開盤：{formatPrice(stock.open)}
+                        <br />
+                        最高：{formatPrice(stock.high)}
+                        <br />
+                        最低：{formatPrice(stock.low)}
+                        <br />
+                        成交量：{formatNumber(stock.volume)}
+                        <br />
+                        更新：{stock.update_time || "--"}
+                      </div>
                     </div>
+                  ))}
+                </div>
 
-                    {section.items.length > 0 ? (
-                      <div className="stockGrid">
-                        {section.items.map((stock) => (
-                          <div key={stock.symbol} className="stockCard">
-                            <div className="stockCardTop">
-                              <div className="stockCodeName">
-                                <div className="stockCode">{stock.symbol}</div>
-                                <div className="stockTitle">{stock.name}</div>
-                              </div>
-                              <div className="scoreBadge">
-                                分數 {stock.score || 0}
-                              </div>
-                            </div>
-
-                            <div className="stockBigPrice">
-                              {formatPrice(stock.price)}
-                            </div>
-
-                            <div
-                              className={
-                                stock.change_percent >= 0
-                                  ? "stockChangeUp"
-                                  : "stockChangeDown"
-                              }
-                              style={{ marginBottom: 10 }}
-                            >
-                              {stock.change_percent >= 0 ? "+" : ""}
-                              {stock.change_percent.toFixed(2)}%
-                            </div>
-
-                            <div className="stockInfo">
-                              昨收：{formatPrice(stock.prev_close)}
-                              <br />
-                              開盤：{formatPrice(stock.open)}
-                              <br />
-                              最高：{formatPrice(stock.high)}
-                              <br />
-                              最低：{formatPrice(stock.low)}
-                              <br />
-                              成交量：{formatNumber(stock.volume)}
-                              <br />
-                              更新：{stock.update_time || "--"}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ color: "#b9ccea", paddingTop: 4 }}>
-                        此分類沒有符合條件的股票
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {priceSections.every((section) => section.items.length === 0) && (
+                {filteredStocks.length === 0 && (
                   <div style={{ color: "#b9ccea", paddingTop: 8 }}>
                     找不到符合條件的股票
                   </div>
