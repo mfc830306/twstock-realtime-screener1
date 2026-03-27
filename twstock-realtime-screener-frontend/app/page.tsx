@@ -32,8 +32,7 @@ type ApiResponse = {
   message?: string;
 };
 
-const BACKEND_URL =
-  "https://twstock-realtime-screener1.onrender.com/stocks";
+const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
 
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
@@ -41,7 +40,6 @@ export default function Home() {
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
   const [rankType, setRankType] = useState<"up" | "down" | "volume">("up");
 
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
@@ -92,72 +90,42 @@ export default function Home() {
     fetchStocks();
   }, []);
 
-  const categories = useMemo(() => {
-    const countByRange = (min: number, max: number | null) => {
-      return stocks.filter((s) => {
-        if (max === null) return s.price >= min;
-        return s.price >= min && s.price < max;
-      }).length;
-    };
-
-    return [
-      { key: "all", label: `全部 (${stocks.length})` },
-      { key: "under10", label: `10元以下 (${countByRange(0, 10)})` },
-      { key: "10to30", label: `10~30元 (${countByRange(10, 30)})` },
-      { key: "30to50", label: `30~50元 (${countByRange(30, 50)})` },
-      { key: "50to100", label: `50~100元 (${countByRange(50, 100)})` },
-      { key: "100to200", label: `100~200元 (${countByRange(100, 200)})` },
-      { key: "200to500", label: `200~500元 (${countByRange(200, 500)})` },
-      { key: "over500", label: `500元以上 (${countByRange(500, null)})` },
-    ];
-  }, [stocks]);
-
-  const filterByCategory = (stock: Stock) => {
-    switch (selectedCategory) {
-      case "under10":
-        return stock.price < 10;
-      case "10to30":
-        return stock.price >= 10 && stock.price < 30;
-      case "30to50":
-        return stock.price >= 30 && stock.price < 50;
-      case "50to100":
-        return stock.price >= 50 && stock.price < 100;
-      case "100to200":
-        return stock.price >= 100 && stock.price < 200;
-      case "200to500":
-        return stock.price >= 200 && stock.price < 500;
-      case "over500":
-        return stock.price >= 500;
-      default:
-        return true;
-    }
+  const formatNumber = (num?: number) => {
+    return Number(num || 0).toLocaleString("zh-TW");
   };
 
-  const filteredStocks = useMemo(() => {
-    return stocks.filter((stock) => {
-      const keyword = searchTerm.trim().toLowerCase();
+  const formatPrice = (num?: number) => {
+    const n = Number(num || 0);
+    return n % 1 === 0 ? String(n) : n.toFixed(2);
+  };
 
-      const matchSearch =
-        !keyword ||
+  const safeStocks = useMemo(() => {
+    return stocks.filter((s) => s.price > 0);
+  }, [stocks]);
+
+  const searchedStocks = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return safeStocks;
+
+    return safeStocks.filter(
+      (stock) =>
         stock.symbol.toLowerCase().includes(keyword) ||
-        stock.name.toLowerCase().includes(keyword);
-
-      return matchSearch && filterByCategory(stock);
-    });
-  }, [stocks, searchTerm, selectedCategory]);
+        stock.name.toLowerCase().includes(keyword)
+    );
+  }, [safeStocks, searchTerm]);
 
   const top10Stocks = useMemo(() => {
-    return [...stocks]
+    return [...safeStocks]
       .sort((a, b) => {
         const scoreDiff = (b.score || 0) - (a.score || 0);
         if (scoreDiff !== 0) return scoreDiff;
         return b.change_percent - a.change_percent;
       })
       .slice(0, 10);
-  }, [stocks]);
+  }, [safeStocks]);
 
   const rankedStocks = useMemo(() => {
-    const copied = [...stocks];
+    const copied = [...safeStocks];
 
     if (rankType === "up") {
       return copied.sort((a, b) => b.change_percent - a.change_percent);
@@ -168,27 +136,40 @@ export default function Home() {
     }
 
     return copied.sort((a, b) => (b.volume || 0) - (a.volume || 0));
-  }, [stocks, rankType]);
+  }, [safeStocks, rankType]);
 
-  const categoryLabelMap: Record<string, string> = {
-    all: "全部",
-    under10: "10元以下",
-    "10to30": "10~30元",
-    "30to50": "30~50元",
-    "50to100": "50~100元",
-    "100to200": "100~200元",
-    "200to500": "200~500元",
-    over500: "500元以上",
-  };
+  const priceSections = useMemo(() => {
+    const makeSection = (
+      key: string,
+      title: string,
+      filterFn: (stock: Stock) => boolean
+    ) => {
+      const items = searchedStocks
+        .filter(filterFn)
+        .sort((a, b) => {
+          const scoreDiff = (b.score || 0) - (a.score || 0);
+          if (scoreDiff !== 0) return scoreDiff;
+          return (b.volume || 0) - (a.volume || 0);
+        })
+        .slice(0, 10);
 
-  const formatNumber = (num?: number) => {
-    return Number(num || 0).toLocaleString("zh-TW");
-  };
+      return {
+        key,
+        title,
+        items,
+      };
+    };
 
-  const formatPrice = (num?: number) => {
-    const n = Number(num || 0);
-    return n % 1 === 0 ? String(n) : n.toFixed(2);
-  };
+    return [
+      makeSection("under10", "10元以下", (s) => s.price < 10),
+      makeSection("10to30", "10~30元", (s) => s.price >= 10 && s.price < 30),
+      makeSection("30to50", "30~50元", (s) => s.price >= 30 && s.price < 50),
+      makeSection("50to100", "50~100元", (s) => s.price >= 50 && s.price < 100),
+      makeSection("100to200", "100~200元", (s) => s.price >= 100 && s.price < 200),
+      makeSection("200to500", "200~500元", (s) => s.price >= 200 && s.price < 500),
+      makeSection("over500", "500元以上", (s) => s.price >= 500),
+    ];
+  }, [searchedStocks]);
 
   return (
     <div className="page">
@@ -196,7 +177,7 @@ export default function Home() {
         <div className="topBar">
           <div className="titleBlock">
             <h1>台股選股系統</h1>
-            <p>全部股票 / 價格分類 / 推薦TOP10 / 即時排行</p>
+            <p>各分價區代表股票 / 推薦TOP10 / 即時排行</p>
             {dataDate ? (
               <p style={{ marginTop: 8, fontSize: 14, color: "#8fb2de" }}>
                 資料日期：{dataDate}
@@ -219,25 +200,6 @@ export default function Home() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
-        </div>
-
-        <div className="sectionBox">
-          <div className="sectionTitle">💰 價格分類</div>
-          <div className="categoryScroll">
-            <div className="categoryRow">
-              {categories.map((cat) => (
-                <button
-                  key={cat.key}
-                  className={`categoryBtn ${
-                    selectedCategory === cat.key ? "active" : ""
-                  }`}
-                  onClick={() => setSelectedCategory(cat.key)}
-                >
-                  {cat.label}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         {loading ? (
@@ -312,9 +274,7 @@ export default function Home() {
                     跌幅排行
                   </button>
                   <button
-                    className={`rankTab ${
-                      rankType === "volume" ? "active" : ""
-                    }`}
+                    className={`rankTab ${rankType === "volume" ? "active" : ""}`}
                     onClick={() => setRankType("volume")}
                   >
                     成交量排行
@@ -348,59 +308,80 @@ export default function Home() {
             <div className="listPanel">
               <div className="panelCard">
                 <div className="listHeader">
-                  <div className="listTitle">
-                    全部股票 ({filteredStocks.length})
-                  </div>
+                  <div className="listTitle">各分價區 10 檔股票</div>
                   <div className="listSub">
-                    目前分類：{categoryLabelMap[selectedCategory]}
+                    共顯示 {priceSections.reduce((sum, sec) => sum + sec.items.length, 0)} 檔
                   </div>
                 </div>
 
-                <div className="stockGrid">
-                  {filteredStocks.map((stock) => (
-                    <div key={stock.symbol} className="stockCard">
-                      <div className="stockCardTop">
-                        <div className="stockCodeName">
-                          <div className="stockCode">{stock.symbol}</div>
-                          <div className="stockTitle">{stock.name}</div>
-                        </div>
-                        <div className="scoreBadge">分數 {stock.score || 0}</div>
-                      </div>
-
-                      <div className="stockBigPrice">
-                        {formatPrice(stock.price)}
-                      </div>
-
-                      <div
-                        className={
-                          stock.change_percent >= 0
-                            ? "stockChangeUp"
-                            : "stockChangeDown"
-                        }
-                        style={{ marginBottom: 10 }}
-                      >
-                        {stock.change_percent >= 0 ? "+" : ""}
-                        {stock.change_percent.toFixed(2)}%
-                      </div>
-
-                      <div className="stockInfo">
-                        昨收：{formatPrice(stock.prev_close)}
-                        <br />
-                        開盤：{formatPrice(stock.open)}
-                        <br />
-                        最高：{formatPrice(stock.high)}
-                        <br />
-                        最低：{formatPrice(stock.low)}
-                        <br />
-                        成交量：{formatNumber(stock.volume)}
-                        <br />
-                        更新：{stock.update_time || "--"}
-                      </div>
+                {priceSections.map((section) => (
+                  <div key={section.key} style={{ marginBottom: 24 }}>
+                    <div
+                      style={{
+                        fontSize: 20,
+                        fontWeight: 800,
+                        marginBottom: 12,
+                        color: "#ffffff",
+                      }}
+                    >
+                      {section.title} ({section.items.length})
                     </div>
-                  ))}
-                </div>
 
-                {filteredStocks.length === 0 && (
+                    {section.items.length > 0 ? (
+                      <div className="stockGrid">
+                        {section.items.map((stock) => (
+                          <div key={stock.symbol} className="stockCard">
+                            <div className="stockCardTop">
+                              <div className="stockCodeName">
+                                <div className="stockCode">{stock.symbol}</div>
+                                <div className="stockTitle">{stock.name}</div>
+                              </div>
+                              <div className="scoreBadge">
+                                分數 {stock.score || 0}
+                              </div>
+                            </div>
+
+                            <div className="stockBigPrice">
+                              {formatPrice(stock.price)}
+                            </div>
+
+                            <div
+                              className={
+                                stock.change_percent >= 0
+                                  ? "stockChangeUp"
+                                  : "stockChangeDown"
+                              }
+                              style={{ marginBottom: 10 }}
+                            >
+                              {stock.change_percent >= 0 ? "+" : ""}
+                              {stock.change_percent.toFixed(2)}%
+                            </div>
+
+                            <div className="stockInfo">
+                              昨收：{formatPrice(stock.prev_close)}
+                              <br />
+                              開盤：{formatPrice(stock.open)}
+                              <br />
+                              最高：{formatPrice(stock.high)}
+                              <br />
+                              最低：{formatPrice(stock.low)}
+                              <br />
+                              成交量：{formatNumber(stock.volume)}
+                              <br />
+                              更新：{stock.update_time || "--"}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: "#b9ccea", paddingTop: 4 }}>
+                        此價格區間沒有符合條件的股票
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {priceSections.every((section) => section.items.length === 0) && (
                   <div style={{ color: "#b9ccea", paddingTop: 8 }}>
                     找不到符合條件的股票
                   </div>
