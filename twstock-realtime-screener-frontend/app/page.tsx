@@ -1,803 +1,406 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Stock = {
+  date: string;
+  market: string;
   symbol: string;
   name: string;
   price: number;
+  change: number;
   change_percent: number;
   volume: number;
   score: number;
-  prev_close?: number;
-  open?: number;
-  high?: number;
-  low?: number;
-  last_update?: string;
+  signal?: string;
+  entry_price?: string;
+  target_price?: string;
+  stop_loss?: string;
 };
 
-type OverviewData = {
-  top10: Stock[];
-  gainers: Stock[];
-  losers: Stock[];
-  volumes: Stock[];
-  last_update?: string;
+type ApiResponse = {
+  success: boolean;
+  source?: string;
+  market?: string;
+  total?: number;
+  stocks: Stock[];
+  error?: string;
 };
 
-const API = "https://twstock-realtime-screener1.onrender.com";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || "https://你的-render-後端網址.onrender.com";
 
-const PRICE_GROUPS = [
-  { key: "p1", label: "10元以下", min: 0, max: 10 },
-  { key: "p2", label: "10~30元", min: 10, max: 30 },
-  { key: "p3", label: "30~50元", min: 30, max: 50 },
-  { key: "p4", label: "50~100元", min: 50, max: 100 },
-  { key: "p5", label: "100~200元", min: 100, max: 200 },
-  { key: "p6", label: "200~500元", min: 200, max: 500 },
-  { key: "p7", label: "500元以上", min: 500, max: undefined },
+const PRICE_RANGES = [
+  { key: "0-50", label: "0 ~ 50", min: 0, max: 50 },
+  { key: "50-100", label: "50 ~ 100", min: 50, max: 100 },
+  { key: "100-200", label: "100 ~ 200", min: 100, max: 200 },
+  { key: "200-500", label: "200 ~ 500", min: 200, max: 500 },
+  { key: "500+", label: "500+", min: 500, max: 999999 },
 ];
 
-type RankTab = "up" | "down" | "volume";
-
-function getTaipeiNowParts() {
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Taipei",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-
-  const parts = formatter.formatToParts(now);
-  const get = (type: string) =>
-    parts.find((p) => p.type === type)?.value || "00";
-
-  return {
-    hour: Number(get("hour")),
-    minute: Number(get("minute")),
-    second: Number(get("second")),
-  };
+function formatNumber(num: number) {
+  return new Intl.NumberFormat("zh-TW").format(num);
 }
 
-function isAfterCloseTime() {
-  const { hour, minute } = getTaipeiNowParts();
-  return hour > 13 || (hour === 13 && minute >= 30);
-}
+function formatDateString(twDate: string) {
+  if (!twDate) return "-";
 
-function isBeforeOpenTime() {
-  const { hour } = getTaipeiNowParts();
-  return hour < 9;
-}
+  const value = String(twDate).trim();
 
-function getDisplayTime() {
-  return new Intl.DateTimeFormat("zh-TW", {
-    timeZone: "Asia/Taipei",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date());
-}
-
-function formatNumber(value: number | undefined) {
-  return Number(value || 0).toLocaleString();
-}
-
-function getPriceColor(value: number) {
-  if (value > 0) return "#ff6b6b";
-  if (value < 0) return "#4cd97b";
-  return "#d8e1f0";
-}
-
-function getTickSize(price: number) {
-  if (price < 10) return 0.01;
-  if (price < 50) return 0.05;
-  if (price < 100) return 0.1;
-  if (price < 500) return 0.5;
-  if (price < 1000) return 1;
-  return 5;
-}
-
-function normalizeToTick(price: number) {
-  const tick = getTickSize(price);
-  return Math.round(price / tick) * tick;
-}
-
-function formatPrice(price: number | undefined) {
-  const n = Number(price || 0);
-  if (!n) return "--";
-  return (Math.round(normalizeToTick(n) * 100) / 100).toString();
-}
-
-function getTradePlan(stock: Stock) {
-  const price = Number(stock.price || 0);
-  const prevClose = Number(stock.prev_close || 0);
-  const open = Number(stock.open || 0);
-  const high = Number(stock.high || 0);
-  const low = Number(stock.low || 0);
-  const cp = Number(stock.change_percent || 0);
-
-  if (price <= 0) {
-    return {
-      entryMin: 0,
-      entryMax: 0,
-      target: 0,
-      stopLoss: 0,
-      signal: "觀望",
-      reason: "目前無有效價格",
-    };
+  // 民國年格式，例如 1140327
+  if (/^\d{7}$/.test(value)) {
+    const rocYear = Number(value.slice(0, 3));
+    const month = value.slice(3, 5);
+    const day = value.slice(5, 7);
+    const year = rocYear + 1911;
+    return `${year}/${month}/${day}`;
   }
 
-  const refBase = open > 0 ? open : prevClose > 0 ? prevClose : price;
-  const intradayRange =
-    high > 0 && low > 0 && high >= low ? Math.max(high - low, price * 0.02) : price * 0.02;
-
-  let entryMin = price * 0.99;
-  let entryMax = price * 1.01;
-  let target = price + intradayRange * 0.8;
-  let stopLoss = Math.max(price - intradayRange * 0.6, low > 0 ? low * 0.995 : price * 0.97);
-  let signal = "中性";
-  let reason = "以現價與日內波動估算";
-
-  if (cp >= 3) {
-    entryMin = Math.max(price * 0.985, refBase);
-    entryMax = price * 1.005;
-    target = price + intradayRange;
-    stopLoss = Math.max(refBase * 0.99, price - intradayRange * 0.7);
-    signal = "偏多";
-    reason = "股價偏強，建議等小拉回分批布局";
-  } else if (cp > 0) {
-    entryMin = price * 0.985;
-    entryMax = price * 1.005;
-    target = price + intradayRange * 0.75;
-    stopLoss = Math.max(price - intradayRange * 0.65, low > 0 ? low * 0.995 : price * 0.975);
-    signal = "偏多";
-    reason = "維持強勢，可用小區間進場";
-  } else if (cp <= -3) {
-    entryMin = price * 0.97;
-    entryMax = price * 0.985;
-    target = price + intradayRange * 0.6;
-    stopLoss = price * 0.96;
-    signal = "保守";
-    reason = "跌幅較大，建議等待止穩再考慮";
-  } else {
-    entryMin = price * 0.98;
-    entryMax = price * 1.0;
-    target = price + intradayRange * 0.65;
-    stopLoss = Math.max(price * 0.97, low > 0 ? low * 0.995 : price * 0.97);
-    signal = "中性";
-    reason = "震盪格局，建議靠近支撐再進";
+  // 西元格式，例如 20260327
+  if (/^\d{8}$/.test(value)) {
+    const year = value.slice(0, 4);
+    const month = value.slice(4, 6);
+    const day = value.slice(6, 8);
+    return `${year}/${month}/${day}`;
   }
 
-  return {
-    entryMin: Math.round(normalizeToTick(entryMin) * 100) / 100,
-    entryMax: Math.round(normalizeToTick(entryMax) * 100) / 100,
-    target: Math.round(normalizeToTick(target) * 100) / 100,
-    stopLoss: Math.round(normalizeToTick(stopLoss) * 100) / 100,
-    signal,
-    reason,
-  };
+  return value;
 }
 
-export default function Home() {
+export default function HomePage() {
   const [stocks, setStocks] = useState<Stock[]>([]);
-  const [overview, setOverview] = useState<OverviewData>({
-    top10: [],
-    gainers: [],
-    losers: [],
-    volumes: [],
-  });
-  const [search, setSearch] = useState("");
-  const [searchInput, setSearchInput] = useState("");
-  const [selectedGroup, setSelectedGroup] = useState("p5");
-  const [loading, setLoading] = useState(true);
-  const [stocksLoading, setStocksLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activeRange, setActiveRange] = useState("50-100");
+  const [searchText, setSearchText] = useState("");
+  const [lastUpdated, setLastUpdated] = useState("");
+  const [apiSource, setApiSource] = useState("TWSE");
+  const [apiMarket, setApiMarket] = useState("上市");
   const [error, setError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState<string>("--");
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [marketMode, setMarketMode] = useState<"preopen" | "trading" | "closed">("trading");
-  const [rankTab, setRankTab] = useState<RankTab>("up");
 
-  const selectedPriceGroup = useMemo(
-    () => PRICE_GROUPS.find((g) => g.key === selectedGroup) || PRICE_GROUPS[4],
-    [selectedGroup]
-  );
+  const selectedRange = useMemo(() => {
+    return PRICE_RANGES.find((item) => item.key === activeRange) || PRICE_RANGES[1];
+  }, [activeRange]);
 
-  const rankingList = useMemo(() => {
-    if (rankTab === "up") return overview.gainers;
-    if (rankTab === "down") return overview.losers;
-    return overview.volumes;
-  }, [overview, rankTab]);
+  const fetchStocks = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const url = `${API_BASE}/stocks?min_price=${selectedRange.min}&max_price=${selectedRange.max}`;
+      const res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const data: ApiResponse = await res.json();
+
+      if (!data.success) {
+        throw new Error(data.error || "後端回傳失敗");
+      }
+
+      setStocks(Array.isArray(data.stocks) ? data.stocks : []);
+      setApiSource(data.source || "TWSE");
+      setApiMarket(data.market || "上市");
+      setLastUpdated(
+        new Date().toLocaleString("zh-TW", {
+          hour12: false,
+        })
+      );
+    } catch (err) {
+      console.error("fetchStocks error:", err);
+      setError("資料更新失敗，請稍後再試");
+      setStocks([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedRange]);
 
   useEffect(() => {
-    let mounted = true;
-    let timer: ReturnType<typeof setInterval> | null = null;
+    fetchStocks();
 
-    const updateMarketMode = () => {
-      if (isAfterCloseTime()) {
-        setMarketMode("closed");
-      } else if (isBeforeOpenTime()) {
-        setMarketMode("preopen");
-      } else {
-        setMarketMode("trading");
-      }
-    };
+    const timer = setInterval(() => {
+      fetchStocks();
+    }, 10000);
 
-    const loadOverview = async (silent = false) => {
-      try {
-        updateMarketMode();
-        if (silent) setIsRefreshing(true);
-        else setLoading(true);
+    return () => clearInterval(timer);
+  }, [fetchStocks]);
 
-        const res = await fetch(`${API}/market-overview?ts=${Date.now()}`, {
-          cache: "no-store",
-        });
+  const filteredStocks = useMemo(() => {
+    const keyword = searchText.trim().toLowerCase();
 
-        if (!res.ok) {
-          throw new Error(`Overview API 錯誤：${res.status}`);
-        }
+    if (!keyword) return stocks;
 
-        const data = await res.json();
-        if (!mounted) return;
+    return stocks.filter((stock) => {
+      return (
+        stock.symbol.toLowerCase().includes(keyword) ||
+        stock.name.toLowerCase().includes(keyword)
+      );
+    });
+  }, [stocks, searchText]);
 
-        setOverview({
-          top10: Array.isArray(data.top10) ? data.top10 : [],
-          gainers: Array.isArray(data.gainers) ? data.gainers : [],
-          losers: Array.isArray(data.losers) ? data.losers : [],
-          volumes: Array.isArray(data.volumes) ? data.volumes : [],
-        });
-
-        setLastUpdated(getDisplayTime());
-        setError("");
-      } catch (err: any) {
-        if (!mounted) return;
-        setError(err?.message || "載入失敗");
-      } finally {
-        if (!mounted) return;
-        setLoading(false);
-        setIsRefreshing(false);
-      }
-    };
-
-    const init = async () => {
-      await loadOverview(false);
-
-      if (!mounted) return;
-
-      if (!isAfterCloseTime() && !isBeforeOpenTime()) {
-        timer = setInterval(() => {
-          if (isAfterCloseTime()) {
-            if (timer) clearInterval(timer);
-            setMarketMode("closed");
-            setIsRefreshing(false);
-            return;
-          }
-          loadOverview(true);
-        }, 10000);
-      }
-    };
-
-    init();
-
-    return () => {
-      mounted = false;
-      if (timer) clearInterval(timer);
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const fetchFilteredStocks = async () => {
-      try {
-        setStocksLoading(true);
-        setError("");
-
-        const params = new URLSearchParams();
-
-        if (selectedPriceGroup.min !== undefined) {
-          params.set("min_price", String(selectedPriceGroup.min));
-        }
-        if (selectedPriceGroup.max !== undefined) {
-          params.set("max_price", String(selectedPriceGroup.max));
-        }
-        if (search.trim()) {
-          params.set("keyword", search.trim());
-        }
-
-        const url = `${API}/stocks?${params.toString()}&ts=${Date.now()}`;
-        const res = await fetch(url, { cache: "no-store" });
-
-        if (!res.ok) {
-          throw new Error(`Stocks API 錯誤：${res.status}`);
-        }
-
-        const data = await res.json();
-        if (!mounted) return;
-
-        setStocks(Array.isArray(data.stocks) ? data.stocks : []);
-      } catch (err: any) {
-        if (!mounted) return;
-        setError(err?.message || "載入失敗");
-        setStocks([]);
-      } finally {
-        if (!mounted) return;
-        setStocksLoading(false);
-      }
-    };
-
-    fetchFilteredStocks();
-
-    return () => {
-      mounted = false;
-    };
-  }, [selectedPriceGroup, search]);
-
-  const cardStyle: React.CSSProperties = {
-    background: "#132b4f",
-    borderRadius: 14,
-    padding: 14,
-    boxShadow: "0 4px 14px rgba(0,0,0,0.2)",
-    border: "1px solid rgba(255,255,255,0.06)",
-  };
-
-  const marketModeText =
-    marketMode === "closed"
-      ? "收盤後｜顯示尾盤結果"
-      : marketMode === "preopen"
-      ? "開盤前｜顯示前次收盤結果"
-      : "盤中｜總覽每 10 秒更新";
-
-  const marketModeColor =
-    marketMode === "closed"
-      ? "#ffd76a"
-      : marketMode === "preopen"
-      ? "#9fb4d6"
-      : isRefreshing
-      ? "#ffd76a"
-      : "#4cd97b";
-
-  const rankTitle =
-    rankTab === "up" ? "📈 漲幅前 20" : rankTab === "down" ? "📉 跌幅前 20" : "📊 成交量前 20";
+  const top10 = useMemo(() => {
+    return [...filteredStocks].sort((a, b) => b.score - a.score).slice(0, 10);
+  }, [filteredStocks]);
 
   return (
-    <div
-      style={{
-        background: "linear-gradient(180deg, #07162b 0%, #0b1f3a 100%)",
-        color: "white",
-        minHeight: "100vh",
-        padding: "24px",
-      }}
-    >
-      <div style={{ maxWidth: 1600, margin: "0 auto" }}>
-        <div
-          style={{
-            marginBottom: 24,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-end",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
+    <main className="min-h-screen bg-[#061a2b] text-white">
+      <div className="mx-auto flex min-h-screen max-w-[1600px] gap-5 px-4 py-5">
+        {/* 左側分類 */}
+        <aside className="w-[240px] shrink-0 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
+          <div className="mb-4">
+            <h1 className="text-xl font-bold tracking-wide">台股智慧選股</h1>
+            <p className="mt-1 text-sm text-white/70">TWSE 上市股票</p>
+          </div>
+
+          <div className="mb-5 rounded-xl bg-white/5 p-3">
+            <div className="text-sm text-white/70">資料來源</div>
+            <div className="mt-1 font-semibold">
+              {apiSource} / {apiMarket}
+            </div>
+
+            <div className="mt-3 text-sm text-white/70">最後更新</div>
+            <div className="mt-1 text-sm">{lastUpdated || "尚未更新"}</div>
+
+            <div className="mt-3 text-sm text-white/70">更新頻率</div>
+            <div className="mt-1 text-sm">每 10 秒刷新一次</div>
+          </div>
+
           <div>
-            <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 8 }}>
-              台股選股系統
-            </h1>
-            <div style={{ color: "#b8c7e0", fontSize: 15 }}>
-              先選價格區間，再搜尋股票 / 推薦TOP10 / 即時排行 / 進出場規劃
+            <div className="mb-3 text-sm font-semibold text-white/80">價格分類</div>
+
+            <div className="space-y-2">
+              {PRICE_RANGES.map((range) => {
+                const isActive = activeRange === range.key;
+
+                return (
+                  <button
+                    key={range.key}
+                    onClick={() => setActiveRange(range.key)}
+                    className={`w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition ${
+                      isActive
+                        ? "bg-cyan-500 text-white shadow-md"
+                        : "bg-white/5 text-white/85 hover:bg-white/10"
+                    }`}
+                  >
+                    {range.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div
-            style={{
-              background: "#132b4f",
-              border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 12,
-              padding: "10px 14px",
-              minWidth: 240,
-            }}
-          >
-            <div style={{ fontSize: 13, color: "#9fb4d6" }}>最後更新時間</div>
-            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
-              {lastUpdated}
-            </div>
-            <div style={{ fontSize: 12, marginTop: 4, color: marketModeColor }}>
-              {marketModeText}
-            </div>
+          <div className="mt-5 rounded-xl bg-white/5 p-3 text-sm text-white/75">
+            <div>目前區間：{selectedRange.label}</div>
+            <div className="mt-2">目前筆數：{formatNumber(filteredStocks.length)}</div>
           </div>
-        </div>
+        </aside>
 
-        <div style={{ ...cardStyle, marginBottom: 20 }}>
-          <h2 style={{ fontSize: 22, marginBottom: 14 }}>💰 價格分類</h2>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-              gap: 10,
-            }}
-          >
-            {PRICE_GROUPS.map((group) => {
-              const active = selectedGroup === group.key;
-              return (
+        {/* 右側內容 */}
+        <section className="min-w-0 flex-1">
+          {/* 上方工具列 */}
+          <div className="mb-5 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-2xl font-bold">上市股票清單</h2>
+                <p className="mt-1 text-sm text-white/70">
+                  顯示收盤資料、推薦分數、進出場價位與停損價位
+                </p>
+              </div>
+
+              <div className="flex w-full flex-col gap-3 sm:flex-row lg:w-auto">
+                <input
+                  type="text"
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="搜尋股票代號 / 名稱"
+                  className="w-full rounded-xl border border-white/10 bg-[#0b2740] px-4 py-3 text-white outline-none placeholder:text-white/40 focus:border-cyan-400 sm:w-[300px]"
+                />
+
                 <button
-                  type="button"
-                  key={group.key}
-                  onClick={() => setSelectedGroup(group.key)}
-                  style={{
-                    background: active ? "#2a62ff" : "#0d2340",
-                    color: "white",
-                    border: active
-                      ? "1px solid #4d7bff"
-                      : "1px solid rgba(255,255,255,0.06)",
-                    borderRadius: 10,
-                    padding: "12px 14px",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontSize: 15,
-                    fontWeight: active ? 700 : 500,
-                  }}
+                  onClick={fetchStocks}
+                  className="rounded-xl bg-cyan-500 px-5 py-3 font-semibold text-white transition hover:bg-cyan-400"
                 >
-                  {group.label}
+                  立即更新
                 </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div style={{ ...cardStyle, marginBottom: 20 }}>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input
-              placeholder="先選價格區間，再搜尋股票代碼或名稱"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") setSearch(searchInput);
-              }}
-              style={{
-                padding: "12px 14px",
-                flex: 1,
-                minWidth: 260,
-                borderRadius: 10,
-                border: "1px solid #28476f",
-                background: "#0d2340",
-                color: "white",
-                outline: "none",
-                fontSize: 15,
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => setSearch(searchInput)}
-              style={{
-                padding: "12px 18px",
-                borderRadius: 10,
-                background: "#2a62ff",
-                color: "white",
-                fontWeight: 700,
-              }}
-            >
-              搜尋
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSearchInput("");
-                setSearch("");
-              }}
-              style={{
-                padding: "12px 18px",
-                borderRadius: 10,
-                background: "#0d2340",
-                color: "white",
-                fontWeight: 700,
-                border: "1px solid rgba(255,255,255,0.08)",
-              }}
-            >
-              清除
-            </button>
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "320px 360px minmax(0, 1fr)",
-            gap: 20,
-            alignItems: "start",
-          }}
-        >
-          <div style={cardStyle}>
-            <h2 style={{ fontSize: 22, marginBottom: 14 }}>🔥 推薦 TOP10</h2>
-            <div style={{ display: "grid", gap: 10 }}>
-              {overview.top10.map((s, i) => {
-                const cp = Number(s.change_percent) || 0;
-                const plan = getTradePlan(s);
-
-                return (
-                  <div
-                    key={`${s.symbol}-${i}`}
-                    style={{
-                      background: "#0d2340",
-                      padding: 12,
-                      borderRadius: 12,
-                      border: "1px solid rgba(255,255,255,0.05)",
-                    }}
-                  >
-                    <div style={{ fontSize: 13, color: "#9fb4d6", marginBottom: 6 }}>
-                      #{i + 1}
-                    </div>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>
-                      {s.symbol} {s.name}
-                    </div>
-                    <div style={{ marginTop: 8, fontSize: 22, fontWeight: 700 }}>
-                      {formatPrice(s.price)}
-                    </div>
-                    <div
-                      style={{
-                        marginTop: 4,
-                        fontSize: 14,
-                        color: getPriceColor(cp),
-                        fontWeight: 700,
-                      }}
-                    >
-                      {cp > 0 ? "+" : ""}
-                      {cp}%
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 14, color: "#ffd76a" }}>
-                      推薦分數：{s.score}
-                    </div>
-                    <div style={{ marginTop: 8, fontSize: 13, color: "#7fd0ff" }}>
-                      進場：{formatPrice(plan.entryMin)} ~ {formatPrice(plan.entryMax)}
-                    </div>
-                    <div style={{ marginTop: 4, fontSize: 13, color: "#ffb86b" }}>
-                      出場：{formatPrice(plan.target)}
-                    </div>
-                    <div style={{ marginTop: 4, fontSize: 13, color: "#7ee081" }}>
-                      止損：{formatPrice(plan.stopLoss)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div style={cardStyle}>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => setRankTab("up")}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "none",
-                  cursor: "pointer",
-                  background: rankTab === "up" ? "#ff6b6b" : "#0d2340",
-                  color: "white",
-                  fontWeight: 700,
-                }}
-              >
-                漲幅排行
-              </button>
-              <button
-                type="button"
-                onClick={() => setRankTab("down")}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "none",
-                  cursor: "pointer",
-                  background: rankTab === "down" ? "#4cd97b" : "#0d2340",
-                  color: "white",
-                  fontWeight: 700,
-                }}
-              >
-                跌幅排行
-              </button>
-              <button
-                type="button"
-                onClick={() => setRankTab("volume")}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "none",
-                  cursor: "pointer",
-                  background: rankTab === "volume" ? "#2a62ff" : "#0d2340",
-                  color: "white",
-                  fontWeight: 700,
-                }}
-              >
-                成交量排行
-              </button>
-            </div>
-
-            <h2 style={{ fontSize: 22, marginBottom: 14 }}>{rankTitle}</h2>
-
-            <div style={{ display: "grid", gap: 8 }}>
-              {rankingList.map((s, i) => {
-                const cp = Number(s.change_percent) || 0;
-                return (
-                  <div
-                    key={`${rankTab}-${s.symbol}`}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "36px 1fr auto",
-                      gap: 10,
-                      alignItems: "center",
-                      background: "#0d2340",
-                      borderRadius: 10,
-                      padding: "10px 12px",
-                    }}
-                  >
-                    <div style={{ color: "#9fb4d6", fontWeight: 700 }}>{i + 1}</div>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>
-                        {s.symbol} {s.name}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#9fb4d6", marginTop: 2 }}>
-                        價格 {formatPrice(s.price)}
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        textAlign: "right",
-                        fontWeight: 700,
-                        color: rankTab === "volume" ? "#ffd76a" : getPriceColor(cp),
-                      }}
-                    >
-                      {rankTab === "volume"
-                        ? formatNumber(s.volume)
-                        : `${cp > 0 ? "+" : ""}${cp}%`}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div style={cardStyle}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 18,
-                flexWrap: "wrap",
-                gap: 12,
-              }}
-            >
-              <h2 style={{ fontSize: 24, margin: 0 }}>
-                區間股票 ({stocks.length})
-              </h2>
-              <div style={{ color: "#9fb4d6", fontSize: 14 }}>
-                目前分類：{selectedPriceGroup.label}
-                {search ? ` ｜ 搜尋：${search}` : ""}
               </div>
             </div>
 
-            {loading && overview.top10.length === 0 && (
-              <div style={{ padding: "30px 0", color: "#b8c7e0" }}>資料載入中...</div>
-            )}
-
-            {stocksLoading && (
-              <div style={{ paddingBottom: 14, color: "#ffd76a", fontSize: 14 }}>
-                區間資料載入中...
+            {loading && (
+              <div className="mt-4 rounded-xl bg-cyan-500/10 px-4 py-3 text-sm text-cyan-200">
+                資料更新中...
               </div>
             )}
 
             {error && (
-              <div style={{ padding: "30px 0", color: "#ff9a9a" }}>
-                載入失敗：{error}
+              <div className="mt-4 rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                {error}
               </div>
             )}
+          </div>
 
-            {!error && !stocksLoading && stocks.length === 0 && (
-              <div style={{ padding: "30px 0", color: "#b8c7e0" }}>
-                找不到符合條件的股票
-              </div>
-            )}
+          {/* 推薦前10 */}
+          <div className="mb-5 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold">推薦前 10 檔</h3>
+              <span className="text-sm text-white/60">依推薦分數排序</span>
+            </div>
 
-            {!error && stocks.length > 0 && (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-                  gap: 14,
-                }}
-              >
-                {stocks.map((s) => {
-                  const cp = Number(s.change_percent) || 0;
-                  const plan = getTradePlan(s);
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              {top10.length > 0 ? (
+                top10.map((stock) => {
+                  const isUp = stock.change_percent > 0;
+                  const isDown = stock.change_percent < 0;
 
                   return (
                     <div
-                      key={s.symbol}
-                      style={{
-                        background: "#0d2340",
-                        borderRadius: 14,
-                        padding: 14,
-                        border: "1px solid rgba(255,255,255,0.05)",
-                      }}
+                      key={`top-${stock.symbol}`}
+                      className="rounded-2xl border border-white/10 bg-[#0b2740] p-4"
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: 10,
-                        }}
-                      >
-                        <div style={{ fontSize: 18, fontWeight: 700 }}>{s.symbol}</div>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            padding: "4px 8px",
-                            borderRadius: 999,
-                            background: "rgba(255,255,255,0.08)",
-                            color: "#ffd76a",
-                          }}
-                        >
-                          分數 {s.score}
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-lg font-bold">
+                            {stock.symbol} {stock.name}
+                          </div>
+                          <div className="mt-1 text-sm text-white/60">
+                            資料日期：{formatDateString(stock.date)}
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-cyan-500/15 px-3 py-2 text-sm font-semibold text-cyan-200">
+                          分數 {stock.score}
                         </div>
                       </div>
 
-                      <div style={{ fontSize: 16, marginBottom: 10 }}>{s.name}</div>
-
-                      <div style={{ fontSize: 26, fontWeight: 700, marginBottom: 8 }}>
-                        {formatPrice(s.price)}
-                      </div>
-
-                      <div
-                        style={{
-                          color: getPriceColor(cp),
-                          fontWeight: 700,
-                          marginBottom: 10,
-                          fontSize: 16,
-                        }}
-                      >
-                        {cp > 0 ? "+" : ""}
-                        {cp}%
-                      </div>
-
-                      <div style={{ display: "grid", gap: 4, fontSize: 13, color: "#9fb4d6" }}>
-                        <div>昨收：{formatPrice(s.prev_close)}</div>
-                        <div>開盤：{formatPrice(s.open)}</div>
-                        <div>最高：{formatPrice(s.high)}</div>
-                        <div>最低：{formatPrice(s.low)}</div>
-                        <div>成交量：{formatNumber(s.volume)}</div>
-                        <div>更新：{s.last_update || "--"}</div>
-                      </div>
-
-                      <div
-                        style={{
-                          marginTop: 12,
-                          paddingTop: 10,
-                          borderTop: "1px solid rgba(255,255,255,0.08)",
-                          display: "grid",
-                          gap: 6,
-                        }}
-                      >
-                        <div style={{ fontSize: 13, color: "#ffd76a", fontWeight: 700 }}>
-                          訊號：{plan.signal}
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                        <div className="rounded-xl bg-white/5 p-3">
+                          <div className="text-white/60">收盤價</div>
+                          <div className="mt-1 text-base font-bold">{stock.price}</div>
                         </div>
-                        <div style={{ fontSize: 12, color: "#b8c7e0" }}>{plan.reason}</div>
-                        <div style={{ fontSize: 13, color: "#7fd0ff" }}>
-                          進場價位：{formatPrice(plan.entryMin)} ~ {formatPrice(plan.entryMax)}
+
+                        <div className="rounded-xl bg-white/5 p-3">
+                          <div className="text-white/60">漲跌幅</div>
+                          <div
+                            className={`mt-1 text-base font-bold ${
+                              isUp
+                                ? "text-emerald-400"
+                                : isDown
+                                ? "text-rose-400"
+                                : "text-white"
+                            }`}
+                          >
+                            {stock.change_percent > 0 ? "+" : ""}
+                            {stock.change_percent}%
+                          </div>
                         </div>
-                        <div style={{ fontSize: 13, color: "#ffb86b" }}>
-                          出場價位：{formatPrice(plan.target)}
+
+                        <div className="rounded-xl bg-white/5 p-3">
+                          <div className="text-white/60">進場價</div>
+                          <div className="mt-1 font-semibold">{stock.entry_price || "-"}</div>
                         </div>
-                        <div style={{ fontSize: 13, color: "#7ee081" }}>
-                          止損價位：{formatPrice(plan.stopLoss)}
+
+                        <div className="rounded-xl bg-white/5 p-3">
+                          <div className="text-white/60">停損價</div>
+                          <div className="mt-1 font-semibold">{stock.stop_loss || "-"}</div>
                         </div>
                       </div>
                     </div>
                   );
-                })}
-              </div>
-            )}
+                })
+              ) : (
+                <div className="rounded-xl bg-white/5 p-4 text-sm text-white/70">
+                  目前沒有符合條件的股票
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+
+          {/* 股票表格 */}
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg backdrop-blur">
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse">
+                <thead className="bg-white/10 text-left text-sm text-white/80">
+                  <tr>
+                    <th className="px-4 py-4">代號</th>
+                    <th className="px-4 py-4">名稱</th>
+                    <th className="px-4 py-4">日期</th>
+                    <th className="px-4 py-4">收盤價</th>
+                    <th className="px-4 py-4">漲跌</th>
+                    <th className="px-4 py-4">漲跌幅</th>
+                    <th className="px-4 py-4">成交量</th>
+                    <th className="px-4 py-4">推薦分數</th>
+                    <th className="px-4 py-4">訊號</th>
+                    <th className="px-4 py-4">進場價</th>
+                    <th className="px-4 py-4">出場價</th>
+                    <th className="px-4 py-4">停損價</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {filteredStocks.length > 0 ? (
+                    filteredStocks.map((stock) => {
+                      const isUp = stock.change_percent > 0;
+                      const isDown = stock.change_percent < 0;
+
+                      return (
+                        <tr
+                          key={stock.symbol}
+                          className="border-t border-white/10 text-sm transition hover:bg-white/5"
+                        >
+                          <td className="px-4 py-4 font-bold">{stock.symbol}</td>
+                          <td className="px-4 py-4">{stock.name}</td>
+                          <td className="px-4 py-4 text-white/70">
+                            {formatDateString(stock.date)}
+                          </td>
+                          <td className="px-4 py-4 font-semibold">{stock.price}</td>
+                          <td
+                            className={`px-4 py-4 font-semibold ${
+                              stock.change > 0
+                                ? "text-emerald-400"
+                                : stock.change < 0
+                                ? "text-rose-400"
+                                : "text-white"
+                            }`}
+                          >
+                            {stock.change > 0 ? "+" : ""}
+                            {stock.change}
+                          </td>
+                          <td
+                            className={`px-4 py-4 font-semibold ${
+                              isUp
+                                ? "text-emerald-400"
+                                : isDown
+                                ? "text-rose-400"
+                                : "text-white"
+                            }`}
+                          >
+                            {stock.change_percent > 0 ? "+" : ""}
+                            {stock.change_percent}%
+                          </td>
+                          <td className="px-4 py-4">{formatNumber(stock.volume)}</td>
+                          <td className="px-4 py-4">{stock.score}</td>
+                          <td className="px-4 py-4">{stock.signal || "-"}</td>
+                          <td className="px-4 py-4">{stock.entry_price || "-"}</td>
+                          <td className="px-4 py-4">{stock.target_price || "-"}</td>
+                          <td className="px-4 py-4">{stock.stop_loss || "-"}</td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={12} className="px-4 py-10 text-center text-white/60">
+                        沒有符合條件的資料
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
