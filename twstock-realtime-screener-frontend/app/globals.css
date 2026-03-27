@@ -229,11 +229,16 @@ input {
 
 .recommendItem {
   display: grid;
-  grid-template-columns: 1.4fr 0.7fr 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(180px, 1.2fr) 180px 240px;
+  gap: 18px;
+  align-items: center;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 14px;
-  padding: 16px;
+  padding: 16px 18px;
+}
+
+.recommendMain {
+  min-width: 0;
 }
 
 .recommendRank {
@@ -246,23 +251,58 @@ input {
   font-size: 17px;
   font-weight: 800;
   line-height: 1.4;
+  word-break: break-word;
+}
+
+.recommendPriceBlock {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
 }
 
 .recommendPrice {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 900;
-  margin-bottom: 8px;
+  line-height: 1.1;
 }
 
 .recommendChange {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 900;
+  line-height: 1.1;
 }
 
-.recommendRight {
+.recommendSignal {
+  font-size: 13px;
+  color: #b8d3ee;
+}
+
+.recommendPlan {
   font-size: 14px;
-  line-height: 1.8;
+  line-height: 1.75;
   color: #dcecff;
+}
+
+.recommendReason {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(140, 182, 221, 0.12);
+}
+
+.reasonLabel {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  color: #8fd7ff;
+  margin-bottom: 6px;
+}
+
+.reasonText {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #dbeafd;
 }
 
 .tableWrap {
@@ -341,7 +381,16 @@ input {
   }
 
   .recommendItem {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+
+  .recommendPlan {
+    grid-column: 1 / -1;
+  }
+
+  .recommendReason {
+    grid-column: 1 / -1;
   }
 }
 
@@ -371,6 +420,17 @@ input {
 
   .refreshBtn {
     width: 100%;
+  }
+
+  .recommendItem {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .recommendPlan,
+  .recommendReason {
+    grid-column: auto;
   }
 
   .stockTable {
