@@ -13,7 +13,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TWSE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+TWSE_DAY_ALL_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 
 
 def to_float(value, default=0.0):
@@ -21,7 +21,7 @@ def to_float(value, default=0.0):
         if value is None:
             return default
         value = str(value).replace(",", "").replace("X", "").replace("--", "").strip()
-        if value == "":
+        if value in ("", "-", "—"):
             return default
         return float(value)
     except Exception:
@@ -33,7 +33,7 @@ def to_int(value, default=0):
         if value is None:
             return default
         value = str(value).replace(",", "").replace("--", "").strip()
-        if value == "":
+        if value in ("", "-", "—"):
             return default
         return int(float(value))
     except Exception:
@@ -136,7 +136,7 @@ def root():
 @app.get("/stocks")
 def get_stocks():
     try:
-        res = requests.get(TWSE_URL, timeout=20)
+        res = requests.get(TWSE_DAY_ALL_URL, timeout=20)
         res.raise_for_status()
         data = res.json()
 
@@ -160,8 +160,12 @@ def get_stocks():
                 if price <= 0:
                     continue
 
-                change_percent = round((change / price) * 100, 2) if price != 0 else 0.0
                 prev_close = round(price - change, 2)
+
+                if prev_close > 0:
+                    change_percent = round((change / prev_close) * 100, 2)
+                else:
+                    change_percent = 0.0
 
                 score = calc_score(change_percent, volume, price)
                 signal = calc_signal(change_percent, volume)
