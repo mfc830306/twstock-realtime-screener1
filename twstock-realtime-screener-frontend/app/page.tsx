@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Stock = {
   symbol: string;
@@ -10,368 +10,289 @@ type Stock = {
   change_percent: number;
   volume: number;
   score: number;
-  entry_price?: string;
-  target_price?: string;
-  stop_loss?: string;
+  signal: string;
+  entry_price: string;
+  target_price: string;
+  stop_loss: string;
 };
 
 type ApiResponse = {
   success: boolean;
-  mode: "live" | "close";
+  market_status: string;
+  data_date: string;
+  last_update: string;
   total: number;
   stocks: Stock[];
+  source: string;
+  error?: string;
 };
 
-const API_BASE = "https://twstock-realtime-screener1.onrender.com";
+const BACKEND_URL = "https://你的-render-後端網址/stocks";
+// 例：const BACKEND_URL = "https://xxx.onrender.com/stocks";
 
-const PRICE_RANGES = [
-  { key: "all", label: "全部股票", min: 0, max: 999999 },
-  { key: "0-50", label: "0~50", min: 0, max: 50 },
-  { key: "50-100", label: "50~100", min: 50, max: 100 },
-  { key: "100-200", label: "100~200", min: 100, max: 200 },
-  { key: "200+", label: "200+", min: 200, max: 999999 },
+const priceRanges = [
+  { key: "0-50", label: "0~50" },
+  { key: "50-100", label: "50~100" },
+  { key: "100-200", label: "100~200" },
+  { key: "200+", label: "200+" },
 ];
 
-function formatNumber(value: number) {
-  return new Intl.NumberFormat("zh-TW").format(value);
+function inRange(price: number, range: string) {
+  if (range === "0-50") return price >= 0 && price < 50;
+  if (range === "50-100") return price >= 50 && price < 100;
+  if (range === "100-200") return price >= 100 && price < 200;
+  if (range === "200+") return price >= 200;
+  return true;
 }
 
-function getModeText(mode: "live" | "close") {
-  return mode === "live" ? "🟢 盤中（準即時）" : "🔴 收盤（官方）";
-}
-
-export default function HomePage() {
+export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
-  const [activeRange, setActiveRange] = useState<string>("all");
-  const [searchText, setSearchText] = useState<string>("");
-  const [marketMode, setMarketMode] = useState<"live" | "close">("close");
-  const [lastUpdated, setLastUpdated] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string>("");
-
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const selectedRange = useMemo(() => {
-    return PRICE_RANGES.find((r) => r.key === activeRange) || PRICE_RANGES[0];
-  }, [activeRange]);
+  const [marketStatus, setMarketStatus] = useState("讀取中");
+  const [lastUpdate, setLastUpdate] = useState("");
+  const [dataDate, setDataDate] = useState("");
+  const [source, setSource] = useState("");
+  const [search, setSearch] = useState("1802");
+  const [selectedRange, setSelectedRange] = useState("50-100");
+  const [loading, setLoading] = useState(false);
+  const [initialized, setInitialized] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
   const fetchStocks = async () => {
     try {
       setLoading(true);
-      setError("");
+      setErrorMsg("");
 
-      const isAll = selectedRange.key === "all";
-
-      const url = isAll
-        ? `${API_BASE}/stocks?t=${Date.now()}`
-        : `${API_BASE}/stocks?min_price=${selectedRange.min}&max_price=${selectedRange.max}&t=${Date.now()}`;
-
-      const res = await fetch(url, { cache: "no-store" });
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
+      const res = await fetch(BACKEND_URL, { cache: "no-store" });
       const data: ApiResponse = await res.json();
 
       if (!data.success) {
-        throw new Error("後端回傳失敗");
+        setStocks([]);
+        setErrorMsg(data.error || "抓取資料失敗");
+        return;
       }
 
       setStocks(Array.isArray(data.stocks) ? data.stocks : []);
-      setMarketMode(data.mode || "close");
-      setLastUpdated(
-        new Date().toLocaleString("zh-TW", {
-          hour12: false,
-        })
-      );
+      setMarketStatus(data.market_status || "未知");
+      setLastUpdate(data.last_update || "");
+      setDataDate(data.data_date || "");
+      setSource(data.source || "");
     } catch (err) {
-      console.error("fetchStocks error:", err);
       setStocks([]);
-      setError("資料更新失敗，請檢查後端 API");
+      setErrorMsg("無法連接後端，請檢查 Render 是否啟動");
     } finally {
       setLoading(false);
+      setInitialized(true);
     }
   };
 
   useEffect(() => {
     fetchStocks();
 
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-
-    timerRef.current = setInterval(() => {
+    const timer = setInterval(() => {
       fetchStocks();
-    }, marketMode === "live" ? 3000 : 60000);
+    }, 30000); // 改 30 秒，避免一直閃更新中
 
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRange, marketMode]);
+    return () => clearInterval(timer);
+  }, []);
 
   const filteredStocks = useMemo(() => {
-    const keyword = searchText.trim().toLowerCase();
+    let result = stocks.filter((s) => inRange(s.price, selectedRange));
 
-    if (!keyword) return stocks;
-
-    return stocks.filter((stock) => {
-      return (
-        stock.symbol.toLowerCase().includes(keyword) ||
-        stock.name.toLowerCase().includes(keyword)
+    const keyword = search.trim();
+    if (keyword) {
+      result = result.filter(
+        (s) =>
+          s.symbol.includes(keyword) ||
+          s.name.includes(keyword)
       );
-    });
-  }, [stocks, searchText]);
+    }
 
-  const top10Stocks = useMemo(() => {
-    return [...filteredStocks].sort((a, b) => b.score - a.score).slice(0, 10);
-  }, [filteredStocks]);
+    return result.sort((a, b) => b.score - a.score);
+  }, [stocks, selectedRange, search]);
+
+  const top10 = filteredStocks.slice(0, 10);
 
   return (
     <main
       style={{
         minHeight: "100vh",
-        background: "#061a2b",
-        color: "#ffffff",
+        background: "#031f36",
+        color: "#fff",
+        padding: "18px",
       }}
     >
       <div
         style={{
-          display: "flex",
+          display: "grid",
+          gridTemplateColumns: "240px 1fr",
           gap: "20px",
-          maxWidth: "1600px",
-          margin: "0 auto",
-          padding: "20px",
-          minHeight: "100vh",
-          boxSizing: "border-box",
         }}
       >
+        {/* 左側 */}
         <aside
           style={{
-            width: "240px",
-            flexShrink: 0,
-            borderRight: "1px solid rgba(255,255,255,0.12)",
-            paddingRight: "20px",
+            borderRight: "1px solid rgba(255,255,255,0.08)",
+            paddingRight: "18px",
           }}
         >
           <div
             style={{
-              marginBottom: "20px",
-              padding: "16px",
-              borderRadius: "14px",
-              background: "rgba(255,255,255,0.05)",
+              background: "#0b2b45",
+              borderRadius: "16px",
+              padding: "18px",
+              marginBottom: "18px",
             }}
           >
-            <div
-              style={{
-                fontSize: "24px",
-                fontWeight: 700,
-                marginBottom: "6px",
-              }}
-            >
-              台股智慧選股
-            </div>
-            <div
-              style={{
-                fontSize: "14px",
-                color: "rgba(255,255,255,0.7)",
-              }}
-            >
+            <div style={{ fontSize: "20px", fontWeight: 800 }}>台股智慧選股</div>
+            <div style={{ marginTop: "6px", color: "#c8d7e6", fontSize: "14px" }}>
               盤中選股系統
             </div>
           </div>
 
           <div
             style={{
-              marginBottom: "20px",
-              padding: "16px",
-              borderRadius: "14px",
-              background: "rgba(255,255,255,0.05)",
-              lineHeight: 1.8,
+              background: "#0b2b45",
+              borderRadius: "16px",
+              padding: "18px",
+              marginBottom: "18px",
             }}
           >
-            <div style={{ fontSize: "14px", color: "rgba(255,255,255,0.7)" }}>
-              狀態
-            </div>
-            <div style={{ fontSize: "16px", fontWeight: 700 }}>
-              {getModeText(marketMode)}
+            <div style={{ marginBottom: "10px", color: "#d7e8f5" }}>狀態</div>
+            <div style={{ fontSize: "28px", fontWeight: 800, marginBottom: "14px" }}>
+              {marketStatus}
             </div>
 
-            <div
-              style={{
-                marginTop: "12px",
-                fontSize: "14px",
-                color: "rgba(255,255,255,0.7)",
-              }}
-            >
+            <div style={{ color: "#b7cadb", fontSize: "14px", marginBottom: "4px" }}>
               最後更新
             </div>
-            <div style={{ fontSize: "14px" }}>{lastUpdated || "-"}</div>
-
-            <div
-              style={{
-                marginTop: "12px",
-                fontSize: "14px",
-                color: "rgba(255,255,255,0.7)",
-              }}
-            >
-              更新頻率
+            <div style={{ fontWeight: 700, marginBottom: "14px" }}>
+              {lastUpdate || "-"}
             </div>
-            <div style={{ fontSize: "14px" }}>
-              {marketMode === "live" ? "每 3 秒" : "每 60 秒"}
+
+            <div style={{ color: "#b7cadb", fontSize: "14px", marginBottom: "4px" }}>
+              資料日期
+            </div>
+            <div style={{ fontWeight: 700, marginBottom: "14px" }}>
+              {dataDate || "-"}
+            </div>
+
+            <div style={{ color: "#b7cadb", fontSize: "14px", marginBottom: "4px" }}>
+              資料來源
+            </div>
+            <div style={{ fontWeight: 700 }}>
+              {source || "-"}
             </div>
           </div>
 
           <div
             style={{
-              marginBottom: "20px",
-              padding: "16px",
-              borderRadius: "14px",
-              background: "rgba(255,255,255,0.05)",
+              background: "#0b2b45",
+              borderRadius: "16px",
+              padding: "18px",
+              marginBottom: "18px",
             }}
           >
-            <div
-              style={{
-                fontSize: "15px",
-                fontWeight: 700,
-                marginBottom: "12px",
-              }}
-            >
-              價格分類
+            <div style={{ marginBottom: "14px", fontWeight: 700 }}>價格分類</div>
+
+            <div style={{ display: "grid", gap: "10px" }}>
+              {priceRanges.map((item) => {
+                const active = selectedRange === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() => setSelectedRange(item.key)}
+                    style={{
+                      border: "none",
+                      borderRadius: "12px",
+                      padding: "12px 14px",
+                      textAlign: "left",
+                      cursor: "pointer",
+                      background: active ? "#18b9d4" : "#12395c",
+                      color: "#fff",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
             </div>
-
-            {PRICE_RANGES.map((range) => {
-              const active = range.key === activeRange;
-
-              return (
-                <button
-                  key={range.key}
-                  onClick={() => setActiveRange(range.key)}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "12px 14px",
-                    marginBottom: "10px",
-                    border: "none",
-                    borderRadius: "10px",
-                    background: active ? "#00bcd4" : "#12304a",
-                    color: "#ffffff",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    fontWeight: active ? 700 : 500,
-                  }}
-                >
-                  {range.label}
-                </button>
-              );
-            })}
           </div>
 
           <div
             style={{
-              padding: "16px",
-              borderRadius: "14px",
-              background: "rgba(255,255,255,0.05)",
-              lineHeight: 1.8,
+              background: "#0b2b45",
+              borderRadius: "16px",
+              padding: "18px",
             }}
           >
-            <div style={{ fontSize: "14px", color: "rgba(255,255,255,0.7)" }}>
+            <div style={{ color: "#b7cadb", fontSize: "14px", marginBottom: "6px" }}>
               目前區間
             </div>
-            <div>{selectedRange.label}</div>
+            <div style={{ fontSize: "28px", fontWeight: 800, marginBottom: "14px" }}>
+              {priceRanges.find((p) => p.key === selectedRange)?.label}
+            </div>
 
-            <div
-              style={{
-                marginTop: "12px",
-                fontSize: "14px",
-                color: "rgba(255,255,255,0.7)",
-              }}
-            >
+            <div style={{ color: "#b7cadb", fontSize: "14px", marginBottom: "6px" }}>
               目前筆數
             </div>
-            <div>{formatNumber(filteredStocks.length)}</div>
+            <div style={{ fontSize: "28px", fontWeight: 800 }}>
+              {filteredStocks.length}
+            </div>
           </div>
         </aside>
 
-        <section
-          style={{
-            flex: 1,
-            minWidth: 0,
-          }}
-        >
+        {/* 右側 */}
+        <section>
           <div
             style={{
+              background: "#0b2b45",
+              borderRadius: "18px",
+              padding: "20px",
               marginBottom: "20px",
-              padding: "18px",
-              borderRadius: "16px",
-              background: "rgba(255,255,255,0.05)",
             }}
           >
             <div
               style={{
                 display: "flex",
-                gap: "12px",
                 justifyContent: "space-between",
+                gap: "12px",
                 alignItems: "center",
                 flexWrap: "wrap",
               }}
             >
               <div>
-                <div
-                  style={{
-                    fontSize: "28px",
-                    fontWeight: 700,
-                    marginBottom: "6px",
-                  }}
-                >
-                  股票列表
-                </div>
-                <div
-                  style={{
-                    fontSize: "14px",
-                    color: "rgba(255,255,255,0.7)",
-                  }}
-                >
-                  盤中顯示準即時資料，13:30 後顯示收盤結果
+                <div style={{ fontSize: "22px", fontWeight: 800 }}>股票列表</div>
+                <div style={{ marginTop: "6px", fontSize: "14px", color: "#c1d5e6" }}>
+                  盤中顯示準即時資料，13:30 後顯示當日收盤結果
                 </div>
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  gap: "10px",
-                  flexWrap: "wrap",
-                }}
-              >
+              <div style={{ display: "flex", gap: "10px" }}>
                 <input
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  placeholder="搜尋股票代號 / 名稱"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="輸入股票代號或名稱"
                   style={{
-                    width: "280px",
-                    maxWidth: "100%",
-                    padding: "12px 14px",
-                    borderRadius: "10px",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    background: "#0b2740",
+                    width: "250px",
+                    background: "#0a2740",
                     color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    borderRadius: "12px",
+                    padding: "12px 14px",
                     outline: "none",
                   }}
                 />
-
                 <button
                   onClick={fetchStocks}
                   style={{
-                    padding: "12px 16px",
-                    borderRadius: "10px",
                     border: "none",
-                    background: "#00bcd4",
+                    borderRadius: "12px",
+                    background: "#19c3de",
                     color: "#fff",
+                    fontWeight: 800,
+                    padding: "12px 18px",
                     cursor: "pointer",
-                    fontWeight: 700,
                   }}
                 >
                   立即更新
@@ -379,14 +300,15 @@ export default function HomePage() {
               </div>
             </div>
 
+            {/* 只有真的 loading 才顯示 */}
             {loading && (
               <div
                 style={{
                   marginTop: "14px",
-                  padding: "10px 12px",
-                  borderRadius: "10px",
-                  background: "rgba(0,188,212,0.12)",
-                  color: "#9eeaf5",
+                  background: "#10435c",
+                  borderRadius: "12px",
+                  padding: "12px 14px",
+                  color: "#d8edf7",
                   fontSize: "14px",
                 }}
               >
@@ -394,314 +316,144 @@ export default function HomePage() {
               </div>
             )}
 
-            {error && (
+            {!loading && errorMsg && (
               <div
                 style={{
                   marginTop: "14px",
-                  padding: "10px 12px",
-                  borderRadius: "10px",
-                  background: "rgba(255,80,80,0.12)",
-                  color: "#ffb3b3",
+                  background: "#5a1f28",
+                  borderRadius: "12px",
+                  padding: "12px 14px",
+                  color: "#ffd9df",
                   fontSize: "14px",
                 }}
               >
-                {error}
+                {errorMsg}
               </div>
             )}
           </div>
 
           <div
             style={{
+              background: "#0b2b45",
+              borderRadius: "18px",
+              padding: "20px",
               marginBottom: "20px",
-              padding: "18px",
-              borderRadius: "16px",
-              background: "rgba(255,255,255,0.05)",
             }}
           >
             <div
               style={{
                 display: "flex",
                 justifyContent: "space-between",
-                alignItems: "center",
                 marginBottom: "14px",
-                gap: "10px",
-                flexWrap: "wrap",
+                alignItems: "center",
               }}
             >
-              <div style={{ fontSize: "20px", fontWeight: 700 }}>推薦前 10 檔</div>
-              <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)" }}>
-                依推薦分數排序
-              </div>
+              <div style={{ fontSize: "18px", fontWeight: 800 }}>推薦前 10 檔</div>
+              <div style={{ color: "#c1d5e6", fontSize: "14px" }}>依推薦分數排序</div>
             </div>
 
-            {top10Stocks.length === 0 ? (
+            {top10.length === 0 ? (
               <div
                 style={{
-                  padding: "16px",
+                  background: "#16334b",
                   borderRadius: "12px",
-                  background: "rgba(255,255,255,0.04)",
-                  color: "rgba(255,255,255,0.7)",
+                  padding: "16px",
+                  color: "#d4e4f3",
                 }}
               >
-                目前沒有符合條件的股票
+                {initialized ? "目前沒有符合條件的股票" : "載入中..."}
               </div>
             ) : (
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: "12px",
+                  gap: "10px",
                 }}
               >
-                {top10Stocks.map((stock) => {
-                  const up = stock.change_percent > 0;
-                  const down = stock.change_percent < 0;
-
-                  return (
-                    <div
-                      key={`top-${stock.symbol}`}
-                      style={{
-                        background: "#0b2740",
-                        borderRadius: "14px",
-                        padding: "16px",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: "12px",
-                          marginBottom: "12px",
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontSize: "18px", fontWeight: 700 }}>
-                            {stock.symbol} {stock.name}
-                          </div>
-                          <div
-                            style={{
-                              marginTop: "4px",
-                              fontSize: "13px",
-                              color: "rgba(255,255,255,0.65)",
-                            }}
-                          >
-                            推薦分數：{stock.score.toFixed(2)}
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            alignSelf: "flex-start",
-                            padding: "6px 10px",
-                            borderRadius: "8px",
-                            background: "rgba(0,188,212,0.15)",
-                            color: "#9eeaf5",
-                            fontSize: "13px",
-                            fontWeight: 700,
-                          }}
-                        >
-                          TOP
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                          gap: "10px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            background: "rgba(255,255,255,0.05)",
-                            borderRadius: "10px",
-                            padding: "10px",
-                          }}
-                        >
-                          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                            價格
-                          </div>
-                          <div style={{ marginTop: "4px", fontWeight: 700 }}>{stock.price}</div>
-                        </div>
-
-                        <div
-                          style={{
-                            background: "rgba(255,255,255,0.05)",
-                            borderRadius: "10px",
-                            padding: "10px",
-                          }}
-                        >
-                          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                            漲跌幅
-                          </div>
-                          <div
-                            style={{
-                              marginTop: "4px",
-                              fontWeight: 700,
-                              color: up ? "#00e676" : down ? "#ff6b6b" : "#ffffff",
-                            }}
-                          >
-                            {stock.change_percent > 0 ? "+" : ""}
-                            {stock.change_percent}%
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            background: "rgba(255,255,255,0.05)",
-                            borderRadius: "10px",
-                            padding: "10px",
-                          }}
-                        >
-                          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                            進場
-                          </div>
-                          <div style={{ marginTop: "4px", fontWeight: 700 }}>
-                            {stock.entry_price || "-"}
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            background: "rgba(255,255,255,0.05)",
-                            borderRadius: "10px",
-                            padding: "10px",
-                          }}
-                        >
-                          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                            停損
-                          </div>
-                          <div style={{ marginTop: "4px", fontWeight: 700 }}>
-                            {stock.stop_loss || "-"}
-                          </div>
-                        </div>
-                      </div>
+                {top10.map((s) => (
+                  <div
+                    key={s.symbol}
+                    style={{
+                      background: "#16334b",
+                      borderRadius: "12px",
+                      padding: "14px 16px",
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, fontSize: "16px" }}>
+                      {s.symbol} {s.name}
                     </div>
-                  );
-                })}
+                    <div style={{ marginTop: "8px", color: "#d7e6f2", fontSize: "14px" }}>
+                      價格 {s.price}　/　推薦分數 {s.score}　/　進場價 {s.entry_price}　/　出場價 {s.target_price}　/　停損價 {s.stop_loss}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
           <div
             style={{
-              borderRadius: "16px",
-              background: "rgba(255,255,255,0.05)",
+              background: "#0b2b45",
+              borderRadius: "18px",
               overflow: "hidden",
             }}
           >
             <div
               style={{
-                overflowX: "auto",
+                display: "grid",
+                gridTemplateColumns: "90px 120px 110px 110px 110px 140px 120px 160px 140px 140px",
+                background: "#113758",
+                padding: "14px 12px",
+                fontWeight: 800,
               }}
             >
-              <table
+              <div>代號</div>
+              <div>名稱</div>
+              <div>價格</div>
+              <div>漲跌</div>
+              <div>漲跌幅</div>
+              <div>成交量</div>
+              <div>推薦分數</div>
+              <div>進場價</div>
+              <div>出場價</div>
+              <div>停損價</div>
+            </div>
+
+            {filteredStocks.length === 0 ? (
+              <div
                 style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  minWidth: "1100px",
+                  padding: "28px 16px",
+                  color: "#d2e3f0",
+                  textAlign: "center",
                 }}
               >
-                <thead>
-                  <tr
-                    style={{
-                      background: "#12304a",
-                      textAlign: "left",
-                    }}
-                  >
-                    {[
-                      "代號",
-                      "名稱",
-                      "價格",
-                      "漲跌",
-                      "漲跌幅",
-                      "成交量",
-                      "推薦分數",
-                      "進場價",
-                      "出場價",
-                      "停損價",
-                    ].map((title) => (
-                      <th
-                        key={title}
-                        style={{
-                          padding: "14px 12px",
-                          fontSize: "14px",
-                          color: "rgba(255,255,255,0.9)",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {title}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {filteredStocks.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={10}
-                        style={{
-                          padding: "28px 12px",
-                          textAlign: "center",
-                          color: "rgba(255,255,255,0.65)",
-                        }}
-                      >
-                        沒有符合條件的資料
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredStocks.map((stock) => {
-                      const up = stock.change_percent > 0;
-                      const down = stock.change_percent < 0;
-
-                      return (
-                        <tr
-                          key={stock.symbol}
-                          style={{
-                            borderTop: "1px solid rgba(255,255,255,0.08)",
-                          }}
-                        >
-                          <td style={{ padding: "12px", fontWeight: 700 }}>{stock.symbol}</td>
-                          <td style={{ padding: "12px" }}>{stock.name}</td>
-                          <td style={{ padding: "12px", fontWeight: 700 }}>{stock.price}</td>
-                          <td
-                            style={{
-                              padding: "12px",
-                              color:
-                                stock.change > 0
-                                  ? "#00e676"
-                                  : stock.change < 0
-                                  ? "#ff6b6b"
-                                  : "#ffffff",
-                              fontWeight: 700,
-                            }}
-                          >
-                            {stock.change > 0 ? "+" : ""}
-                            {stock.change}
-                          </td>
-                          <td
-                            style={{
-                              padding: "12px",
-                              color: up ? "#00e676" : down ? "#ff6b6b" : "#ffffff",
-                              fontWeight: 700,
-                            }}
-                          >
-                            {stock.change_percent > 0 ? "+" : ""}
-                            {stock.change_percent}%
-                          </td>
-                          <td style={{ padding: "12px" }}>{formatNumber(stock.volume)}</td>
-                          <td style={{ padding: "12px" }}>{stock.score.toFixed(2)}</td>
-                          <td style={{ padding: "12px" }}>{stock.entry_price || "-"}</td>
-                          <td style={{ padding: "12px" }}>{stock.target_price || "-"}</td>
-                          <td style={{ padding: "12px" }}>{stock.stop_loss || "-"}</td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                {initialized ? "沒有符合條件的資料" : "載入中..."}
+              </div>
+            ) : (
+              filteredStocks.map((s) => (
+                <div
+                  key={s.symbol}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "90px 120px 110px 110px 110px 140px 120px 160px 140px 140px",
+                    padding: "14px 12px",
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                    alignItems: "center",
+                  }}
+                >
+                  <div>{s.symbol}</div>
+                  <div>{s.name}</div>
+                  <div>{s.price}</div>
+                  <div>{s.change}</div>
+                  <div>{s.change_percent}%</div>
+                  <div>{s.volume.toLocaleString()}</div>
+                  <div>{s.score}</div>
+                  <div>{s.entry_price}</div>
+                  <div>{s.target_price}</div>
+                  <div>{s.stop_loss}</div>
+                </div>
+              ))
+            )}
           </div>
         </section>
       </div>
