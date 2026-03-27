@@ -114,6 +114,25 @@ export default function Home() {
     );
   }, [safeStocks, searchTerm]);
 
+  const isETF = (stock: Stock) => {
+    const name = (stock.name || "").toUpperCase();
+    const symbol = stock.symbol || "";
+
+    return (
+      symbol.startsWith("00") ||
+      name.includes("ETF") ||
+      name.includes("槓桿") ||
+      name.includes("反1") ||
+      name.includes("正2") ||
+      name.includes("高股息") ||
+      name.includes("台灣50") ||
+      name.includes("中型100") ||
+      name.includes("科技") ||
+      name.includes("半導體") ||
+      name.includes("金融")
+    );
+  };
+
   const top10Stocks = useMemo(() => {
     return [...safeStocks]
       .sort((a, b) => {
@@ -161,13 +180,34 @@ export default function Home() {
     };
 
     return [
-      makeSection("under10", "10元以下", (s) => s.price < 10),
-      makeSection("10to30", "10~30元", (s) => s.price >= 10 && s.price < 30),
-      makeSection("30to50", "30~50元", (s) => s.price >= 30 && s.price < 50),
-      makeSection("50to100", "50~100元", (s) => s.price >= 50 && s.price < 100),
-      makeSection("100to200", "100~200元", (s) => s.price >= 100 && s.price < 200),
-      makeSection("200to500", "200~500元", (s) => s.price >= 200 && s.price < 500),
-      makeSection("over500", "500元以上", (s) => s.price >= 500),
+      makeSection("etf", "ETF", isETF),
+      makeSection("under10", "10元以下", (s) => !isETF(s) && s.price < 10),
+      makeSection(
+        "10to30",
+        "10~30元",
+        (s) => !isETF(s) && s.price >= 10 && s.price < 30
+      ),
+      makeSection(
+        "30to50",
+        "30~50元",
+        (s) => !isETF(s) && s.price >= 30 && s.price < 50
+      ),
+      makeSection(
+        "50to100",
+        "50~100元",
+        (s) => !isETF(s) && s.price >= 50 && s.price < 100
+      ),
+      makeSection(
+        "100to200",
+        "100~200元",
+        (s) => !isETF(s) && s.price >= 100 && s.price < 200
+      ),
+      makeSection(
+        "200to500",
+        "200~500元",
+        (s) => !isETF(s) && s.price >= 200 && s.price < 500
+      ),
+      makeSection("over500", "500元以上", (s) => !isETF(s) && s.price >= 500),
     ];
   }, [searchedStocks]);
 
@@ -177,7 +217,7 @@ export default function Home() {
         <div className="topBar">
           <div className="titleBlock">
             <h1>台股選股系統</h1>
-            <p>各分價區代表股票 / 推薦TOP10 / 即時排行</p>
+            <p>ETF / 各分價區代表股票 / 推薦TOP10 / 即時排行</p>
             {dataDate ? (
               <p style={{ marginTop: 8, fontSize: 14, color: "#8fb2de" }}>
                 資料日期：{dataDate}
@@ -196,7 +236,7 @@ export default function Home() {
           <input
             className="searchInput"
             type="text"
-            placeholder="搜尋股票代碼或名稱，例如：2330 / 台積電"
+            placeholder="搜尋股票代碼或名稱，例如：2330 / 台積電 / 0050"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -308,9 +348,14 @@ export default function Home() {
             <div className="listPanel">
               <div className="panelCard">
                 <div className="listHeader">
-                  <div className="listTitle">各分價區 10 檔股票</div>
+                  <div className="listTitle">各分類 10 檔股票</div>
                   <div className="listSub">
-                    共顯示 {priceSections.reduce((sum, sec) => sum + sec.items.length, 0)} 檔
+                    共顯示{" "}
+                    {priceSections.reduce(
+                      (sum, section) => sum + section.items.length,
+                      0
+                    )}{" "}
+                    檔
                   </div>
                 </div>
 
@@ -375,7 +420,7 @@ export default function Home() {
                       </div>
                     ) : (
                       <div style={{ color: "#b9ccea", paddingTop: 4 }}>
-                        此價格區間沒有符合條件的股票
+                        此分類沒有符合條件的股票
                       </div>
                     )}
                   </div>
