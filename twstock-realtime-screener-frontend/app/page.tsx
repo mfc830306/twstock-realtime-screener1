@@ -24,7 +24,6 @@ type ApiResponse = {
   total: number;
   stocks: Stock[];
   source: string;
-  error?: string;
 };
 
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
@@ -39,7 +38,7 @@ const priceRanges = [
 
 function inRange(price: number, range: string) {
   if (range === "ALL") return true;
-  if (range === "0-50") return price >= 0 && price < 50;
+  if (range === "0-50") return price < 50;
   if (range === "50-100") return price >= 50 && price < 100;
   if (range === "100-200") return price >= 100 && price < 200;
   if (range === "200+") return price >= 200;
@@ -48,56 +47,38 @@ function inRange(price: number, range: string) {
 
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
-  const [marketStatus, setMarketStatus] = useState("讀取中");
+  const [marketStatus, setMarketStatus] = useState("");
   const [lastUpdate, setLastUpdate] = useState("");
   const [dataDate, setDataDate] = useState("");
-  const [source, setSource] = useState("");
   const [search, setSearch] = useState("");
   const [selectedRange, setSelectedRange] = useState("ALL");
   const [loading, setLoading] = useState(false);
-  const [initialized, setInitialized] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
 
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    const check = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
+    const check = () => setIsMobile(window.innerWidth < 768);
     check();
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
   }, []);
 
   const fetchStocks = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      setErrorMsg("");
-
-      const res = await fetch(BACKEND_URL, {
-        method: "GET",
-        cache: "no-store",
-      });
-
+      const res = await fetch(BACKEND_URL, { cache: "no-store" });
       const data: ApiResponse = await res.json();
 
-      if (!data.success) {
-        setStocks([]);
-        setErrorMsg("抓取資料失敗");
-        return;
+      if (data.success) {
+        setStocks(data.stocks || []);
+        setMarketStatus(data.market_status);
+        setLastUpdate(data.last_update);
+        setDataDate(data.data_date);
       }
-
-      setStocks(data.stocks || []);
-      setMarketStatus(data.market_status || "");
-      setLastUpdate(data.last_update || "");
-      setDataDate(data.data_date || "");
-      setSource(data.source || "");
     } catch {
-      setErrorMsg("無法連接後端");
-    } finally {
-      setLoading(false);
-      setInitialized(true);
+      console.log("API error");
     }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -107,9 +88,7 @@ export default function Home() {
   }, []);
 
   const filteredStocks = useMemo(() => {
-    let result = [...stocks];
-
-    result = result.filter((s) => inRange(s.price, selectedRange));
+    let result = stocks.filter((s) => inRange(s.price, selectedRange));
 
     if (search.trim()) {
       result = result.filter(
@@ -136,7 +115,7 @@ export default function Home() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: isMobile ? "1fr" : "240px 1fr",
+          gridTemplateColumns: isMobile ? "1fr" : "260px 1fr",
           gap: "20px",
         }}
       >
@@ -162,12 +141,13 @@ export default function Home() {
                 style={{
                   display: "block",
                   width: "100%",
-                  marginBottom: "8px",
+                  marginBottom: "10px",
                   padding: "10px",
                   background:
                     selectedRange === item.key ? "#18b9d4" : "#12395c",
                   color: "#fff",
                   border: "none",
+                  borderRadius: "8px",
                 }}
               >
                 {item.label}
@@ -183,12 +163,16 @@ export default function Home() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="搜尋股票"
-              style={{ padding: "10px", width: "200px" }}
+              style={{
+                padding: "10px",
+                width: "260px",
+                borderRadius: "8px",
+                border: "none",
+              }}
             />
           </div>
 
-          {loading && <div>資料更新中...</div>}
-          {errorMsg && <div>{errorMsg}</div>}
+          {loading && <div style={{ marginBottom: "10px" }}>資料更新中...</div>}
 
           {/* 推薦 */}
           <div style={{ marginBottom: "20px" }}>
@@ -202,10 +186,25 @@ export default function Home() {
 
           {/* 表格 */}
           <div style={{ overflowX: "auto" }}>
-            <div style={{ minWidth: "100%" }}>
+            <div style={{ minWidth: isMobile ? "700px" : "100%" }}>
+              <div style={{ fontWeight: "bold", marginBottom: "10px" }}>
+                股票列表（{filteredStocks.length}）
+              </div>
+
               {filteredStocks.map((s) => (
-                <div key={s.symbol} style={{ padding: "10px" }}>
-                  {s.symbol} {s.name} {s.price}
+                <div
+                  key={s.symbol}
+                  style={{
+                    padding: "10px",
+                    borderBottom: "1px solid #1a3b5d",
+                  }}
+                >
+                  {s.symbol} {s.name}　
+                  價格:{s.price}　
+                  分數:{s.score}　
+                  進場:{s.entry_price}　
+                  出場:{s.target_price}　
+                  停損:{s.stop_loss}
                 </div>
               ))}
             </div>
