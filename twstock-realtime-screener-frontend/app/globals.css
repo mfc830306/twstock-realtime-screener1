@@ -1,98 +1,27 @@
-/* =========================
-   Reset & Base
-========================= */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+@import "tailwindcss";
 
 html,
 body {
   margin: 0;
   padding: 0;
+  min-height: 100%;
 }
 
-/* =========================
-   Theme (整體風格)
-========================= */
+* {
+  box-sizing: border-box;
+}
+
 body {
-  background: #0b1f3a;
-  color: white;
-
-  font-family: Arial, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
-
-  /* 提升文字顯示品質 */
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  background: #061a2b;
+  color: #ffffff;
+  font-family: Arial, "Microsoft JhengHei", "PingFang TC", sans-serif;
 }
 
-/* =========================
-   Links
-========================= */
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-/* =========================
-   Form Elements
-========================= */
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-
-/* 移除預設 outline（你已用 UI 控制） */
-input,
-textarea {
-  outline: none;
-}
-
-/* =========================
-   Button Reset（避免瀏覽器預設干擾）
-========================= */
 button {
-  border: none;
-  background: none;
   cursor: pointer;
 }
 
-/* =========================
-   Scrollbar（美化）
-========================= */
-::-webkit-scrollbar {
-  width: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #07162b;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #1f3c6d;
-  border-radius: 6px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #2a62ff;
-}
-
-/* =========================
-   Selection（選取文字顏色）
-========================= */
-::selection {
-  background: #2a62ff;
-  color: white;
-}
-
-/* =========================
-   Prevent layout issues
-========================= */
-img {
-  max-width: 100%;
-  display: block;
+input,
+button {
+  font: inherit;
 }
