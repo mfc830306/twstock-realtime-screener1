@@ -27,7 +27,7 @@ type ApiResponse = {
   error?: string;
 };
 
-const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com";
+const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
 // 例：const BACKEND_URL = "https://tw-stock-backend.onrender.com/stocks";
 
 const priceRanges = [
