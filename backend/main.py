@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 app = FastAPI()
 
@@ -14,317 +13,200 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+TWSE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 
 
-def tw_now():
-    return datetime.now(TAIPEI_TZ)
-
-
-def today_ymd():
-    return tw_now().strftime("%Y%m%d")
-
-
-def today_roc():
-    now = tw_now()
-    return f"{now.year - 1911}/{now.month:02d}/{now.day:02d}"
-
-
-def safe_float(v, default=0.0):
+def to_float(value, default=0.0):
     try:
-        if v is None:
+        if value is None:
             return default
-        s = str(v).replace(",", "").strip()
-        if s in ["", "-", "--", "---", "null", "None"]:
+        value = str(value).replace(",", "").replace("X", "").replace("--", "").strip()
+        if value == "":
             return default
-        return float(s)
+        return float(value)
     except:
         return default
 
 
-def safe_int(v, default=0):
+def to_int(value, default=0):
     try:
-        if v is None:
+        if value is None:
             return default
-        s = str(v).replace(",", "").strip()
-        if s in ["", "-", "--", "---", "null", "None"]:
+        value = str(value).replace(",", "").replace("--", "").strip()
+        if value == "":
             return default
-        return int(float(s))
+        return int(float(value))
     except:
         return default
 
 
-def calc_plan(price, change_percent, volume):
+def calc_score(change_percent, volume, price):
     score = 50
 
-    if change_percent > 0:
-        score += min(change_percent * 8, 20)
+    if change_percent >= 6:
+        score += 20
+    elif change_percent >= 4:
+        score += 16
+    elif change_percent >= 2:
+        score += 12
+    elif change_percent >= 0:
+        score += 6
+    elif change_percent <= -4:
+        score -= 8
 
-    if volume > 3000000:
-        score += 15
-    elif volume > 1000000:
+    if volume >= 30000000:
+        score += 18
+    elif volume >= 10000000:
+        score += 14
+    elif volume >= 3000000:
         score += 10
-    elif volume > 300000:
+    elif volume >= 1000000:
+        score += 6
+
+    if price >= 500:
         score += 5
+    elif price >= 100:
+        score += 4
+    elif price >= 30:
+        score += 3
+    elif price >= 10:
+        score += 2
 
-    score = round(min(score, 99), 1)
+    return max(1, min(99, round(score)))
 
-    if score >= 80:
-        signal = "偏多"
-        target_ratio = 1.06
-        stop_ratio = 0.97
-    elif score >= 65:
-        signal = "中性偏多"
-        target_ratio = 1.04
-        stop_ratio = 0.975
-    elif score >= 50:
-        signal = "中性"
-        target_ratio = 1.03
-        stop_ratio = 0.98
+
+def calc_signal(change_percent, volume):
+    if change_percent >= 2 and volume >= 1000000:
+        return "偏多"
+    elif change_percent <= -2 and volume >= 1000000:
+        return "偏空"
     else:
-        signal = "保守"
-        target_ratio = 1.02
-        stop_ratio = 0.985
-
-    entry_low = round(price * 0.99, 2)
-    entry_high = round(price * 1.01, 2)
-    target_price = round(price * target_ratio, 2)
-    stop_loss = round(price * stop_ratio, 2)
-
-    return {
-        "score": score,
-        "signal": signal,
-        "entry_price": f"{entry_low} ~ {entry_high}",
-        "target_price": f"{target_price}",
-        "stop_loss": f"{stop_loss}",
-    }
+        return "中性"
 
 
-def normalize_stock(symbol, name, price, change, volume):
-    if price <= 0:
-        return None
-
-    change_percent = round((change / price) * 100, 2) if price != 0 else 0.0
-    plan = calc_plan(price, change_percent, volume)
-
-    return {
-        "symbol": str(symbol).strip(),
-        "name": str(name).strip(),
-        "price": round(price, 2),
-        "change": round(change, 2),
-        "change_percent": change_percent,
-        "volume": int(volume),
-        "score": plan["score"],
-        "signal": plan["signal"],
-        "entry_price": plan["entry_price"],
-        "target_price": plan["target_price"],
-        "stop_loss": plan["stop_loss"],
-    }
+def calc_entry_price(price):
+    low = round(price * 0.99, 2)
+    high = round(price * 1.01, 2)
+    return f"{low} ~ {high}"
 
 
-def market_status():
-    now = tw_now()
-    hhmm = now.hour * 100 + now.minute
-
-    # 台股一般盤約 09:00 ~ 13:30
-    if now.weekday() >= 5:
-        return "休市"
-
-    if 900 <= hhmm <= 1330:
-        return "盤中（準即時）"
-    return "收盤"
+def calc_target_price(price):
+    return str(round(price * 1.06, 2))
 
 
-def fetch_twse_realtime():
-    url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw|otc_o00.tw&json=1&delay=0"
-    res = requests.get(url, timeout=15)
-    data = res.json()
-
-    stocks = []
-    msg_array = data.get("msgArray", [])
-
-    for s in msg_array:
-        symbol = s.get("c", "")
-        name = s.get("n", "")
-        price = safe_float(s.get("z", 0))
-        if price <= 0:
-            price = safe_float(s.get("y", 0))
-
-        prev_close = safe_float(s.get("y", 0))
-        volume = safe_int(s.get("v", 0)) or safe_int(s.get("tv", 0))
-
-        change = 0.0
-        if price > 0 and prev_close > 0:
-            change = round(price - prev_close, 2)
-
-        item = normalize_stock(symbol, name, price, change, volume)
-        if item:
-            stocks.append(item)
-
-    return {
-        "source": "TWSE MIS",
-        "source_date": today_ymd(),
-        "stocks": stocks,
-    }
+def calc_stop_loss(price):
+    return str(round(price * 0.97, 2))
 
 
-def fetch_twse_close_today():
-    date_str = today_ymd()
-    url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={date_str}&type=ALLBUT0999"
-    res = requests.get(url, timeout=20)
-    data = res.json()
+def calc_reason(change_percent, volume, score, signal, price):
+    if signal == "偏多":
+        if change_percent >= 4 and volume >= 10000000:
+            return "漲幅強勢、成交量明顯放大，短線多方動能強"
+        elif change_percent >= 3 and volume >= 3000000:
+            return "股價走強且量能配合，短線續強機率較高"
+        elif change_percent >= 2:
+            return "股價維持強勢，短線技術面偏多"
+        elif score >= 85:
+            return "綜合分數高，量價結構穩定，具續攻條件"
+        else:
+            return "走勢偏多，可觀察是否延續上攻"
 
-    tables = data.get("tables", [])
-    stocks = []
+    if signal == "偏空":
+        if change_percent <= -4 and volume >= 10000000:
+            return "跌幅擴大且量能放大，賣壓偏重"
+        elif change_percent <= -2:
+            return "股價轉弱，短線走勢偏空"
+        else:
+            return "技術面偏弱，建議保守觀察"
 
-    for table in tables:
-        title = table.get("title", "")
-        fields = table.get("fields", [])
-        rows = table.get("data", [])
-
-        if "證券代號" in fields and "收盤價" in fields:
-            idx_code = fields.index("證券代號")
-            idx_name = fields.index("證券名稱")
-            idx_volume = fields.index("成交股數") if "成交股數" in fields else -1
-            idx_close = fields.index("收盤價")
-            idx_change = fields.index("漲跌價差") if "漲跌價差" in fields else -1
-
-            for row in rows:
-                try:
-                    symbol = row[idx_code]
-                    name = row[idx_name]
-                    price = safe_float(row[idx_close], 0)
-                    change = safe_float(row[idx_change], 0) if idx_change >= 0 else 0
-                    volume = safe_int(row[idx_volume], 0) if idx_volume >= 0 else 0
-
-                    item = normalize_stock(symbol, name, price, change, volume)
-                    if item:
-                        stocks.append(item)
-                except:
-                    continue
-
-    stat = data.get("stat", "")
-    return {
-        "ok": len(stocks) > 0 and ("很抱歉" not in stat),
-        "source": "TWSE MI_INDEX",
-        "source_date": date_str,
-        "stocks": stocks,
-        "stat": stat,
-    }
-
-
-def fetch_tpex_close_today():
-    # 這個 openapi 通常會提供當日上櫃報價
-    url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
-    res = requests.get(url, timeout=20)
-    rows = res.json()
-
-    stocks = []
-    detected_date = ""
-
-    for row in rows:
-        symbol = row.get("SecuritiesCompanyCode", "") or row.get("股票代號", "")
-        name = row.get("CompanyName", "") or row.get("名稱", "")
-        price = safe_float(row.get("Close", 0) or row.get("收盤", 0))
-        change = safe_float(row.get("Change", 0) or row.get("漲跌", 0))
-        volume = safe_int(row.get("TradingShares", 0) or row.get("成交股數", 0))
-        detected_date = row.get("Date", detected_date) or row.get("資料日期", detected_date)
-
-        item = normalize_stock(symbol, name, price, change, volume)
-        if item:
-            stocks.append(item)
-
-    return {
-        "ok": len(stocks) > 0,
-        "source": "TPEX OpenAPI",
-        "source_date": detected_date or today_ymd(),
-        "stocks": stocks,
-    }
-
-
-def fetch_close_data_today():
-    twse = fetch_twse_close_today()
-    tpex = fetch_tpex_close_today()
-
-    stocks = []
-    if twse.get("stocks"):
-        stocks.extend(twse["stocks"])
-    if tpex.get("stocks"):
-        stocks.extend(tpex["stocks"])
-
-    return {
-        "ok": len(stocks) > 0,
-        "source": "收盤資料",
-        "source_date": today_ymd(),
-        "stocks": stocks,
-        "twse_source": twse.get("source"),
-        "tpex_source": tpex.get("source"),
-    }
+    if score >= 85:
+        return "綜合分數高，量價表現穩定，可列入觀察"
+    elif volume >= 3000000:
+        return "成交量活絡，市場關注度提升"
+    elif price >= 500:
+        return "高價股波動較大，建議留意風險控管"
+    else:
+        return "目前走勢中性，建議等待更明確訊號"
 
 
 @app.get("/")
 def root():
-    return {"message": "TW Stock backend running"}
+    return {"message": "TW Stock Realtime Screener backend running"}
 
 
 @app.get("/stocks")
 def get_stocks():
-    now = tw_now()
-    status = market_status()
-    hhmm = now.hour * 100 + now.minute
-
     try:
-        # 盤中抓準即時
-        if status == "盤中（準即時）":
-            realtime = fetch_twse_realtime()
-            stocks = realtime["stocks"]
+        res = requests.get(TWSE_URL, timeout=20)
+        data = res.json()
 
-            stocks.sort(key=lambda x: x["score"], reverse=True)
+        stocks = []
+        now = datetime.now()
+        last_update = now.strftime("%Y/%m/%d %H:%M:%S")
+        data_date = now.strftime("%Y%m%d")
 
-            return {
-                "success": True,
-                "market_status": status,
-                "data_date": realtime["source_date"],
-                "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
-                "total": len(stocks),
-                "stocks": stocks,
-                "source": realtime["source"],
-            }
+        for s in data:
+            try:
+                symbol = str(s.get("Code", "")).strip()
+                name = str(s.get("Name", "")).strip()
 
-        # 收盤後抓當日收盤資料
-        close_data = fetch_close_data_today()
-        stocks = close_data["stocks"]
+                if not symbol or not name:
+                    continue
 
-        # 如果收盤資料抓不到，最後才 fallback 準即時，避免整頁空白
-        if not stocks:
-            realtime = fetch_twse_realtime()
-            stocks = realtime["stocks"]
-            source = f"{realtime['source']}（fallback）"
-            data_date = realtime["source_date"]
-        else:
-            source = close_data["source"]
-            data_date = close_data["source_date"]
+                price = to_float(s.get("ClosingPrice"))
+                change = to_float(s.get("Change"))
+                volume = to_int(s.get("TradeVolume"))
 
-        stocks.sort(key=lambda x: x["score"], reverse=True)
+                if price <= 0:
+                    continue
+
+                change_percent = round((change / price) * 100, 2) if price != 0 else 0.0
+                prev_close = round(price - change, 2)
+
+                score = calc_score(change_percent, volume, price)
+                signal = calc_signal(change_percent, volume)
+
+                entry_price = calc_entry_price(price)
+                target_price = calc_target_price(price)
+                stop_loss = calc_stop_loss(price)
+                reason = calc_reason(change_percent, volume, score, signal, price)
+
+                stocks.append({
+                    "symbol": symbol,
+                    "name": name,
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "change_percent": change_percent,
+                    "volume": volume,
+                    "score": score,
+                    "signal": signal,
+                    "entry_price": entry_price,
+                    "target_price": target_price,
+                    "stop_loss": stop_loss,
+                    "reason": reason,
+                    "prev_close": prev_close,
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "update_time": "--",
+                })
+            except:
+                continue
+
+        stocks.sort(key=lambda x: (x["score"], x["change_percent"], x["volume"]), reverse=True)
 
         return {
             "success": True,
-            "market_status": status,
+            "market_status": "收盤",
             "data_date": data_date,
-            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+            "last_update": last_update,
             "total": len(stocks),
-            "stocks": stocks,
-            "source": source,
+            "stocks": stocks
         }
 
     except Exception as e:
         return {
             "success": False,
-            "market_status": status,
-            "data_date": today_ymd(),
-            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
-            "total": 0,
-            "stocks": [],
-            "source": "error",
-            "error": str(e),
+            "message": f"讀取失敗: {str(e)}",
+            "stocks": []
         }
