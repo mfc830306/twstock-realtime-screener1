@@ -25,6 +25,7 @@ type ApiResponse = {
 const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 
 const PRICE_RANGES = [
+  { key: "all", label: "全部股票", min: 0, max: 999999 },
   { key: "0-50", label: "0~50", min: 0, max: 50 },
   { key: "50-100", label: "50~100", min: 50, max: 100 },
   { key: "100-200", label: "100~200", min: 100, max: 200 },
@@ -41,7 +42,7 @@ function getModeText(mode: "live" | "close") {
 
 export default function HomePage() {
   const [stocks, setStocks] = useState<Stock[]>([]);
-  const [activeRange, setActiveRange] = useState<string>("50-100");
+  const [activeRange, setActiveRange] = useState<string>("all");
   const [searchText, setSearchText] = useState<string>("");
   const [marketMode, setMarketMode] = useState<"live" | "close">("close");
   const [lastUpdated, setLastUpdated] = useState<string>("");
@@ -51,7 +52,7 @@ export default function HomePage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const selectedRange = useMemo(() => {
-    return PRICE_RANGES.find((r) => r.key === activeRange) || PRICE_RANGES[1];
+    return PRICE_RANGES.find((r) => r.key === activeRange) || PRICE_RANGES[0];
   }, [activeRange]);
 
   const fetchStocks = async () => {
@@ -59,7 +60,12 @@ export default function HomePage() {
       setLoading(true);
       setError("");
 
-      const url = `${API_BASE}/stocks?min_price=${selectedRange.min}&max_price=${selectedRange.max}&t=${Date.now()}`;
+      const isAll = selectedRange.key === "all";
+
+      const url = isAll
+        ? `${API_BASE}/stocks?t=${Date.now()}`
+        : `${API_BASE}/stocks?min_price=${selectedRange.min}&max_price=${selectedRange.max}&t=${Date.now()}`;
+
       const res = await fetch(url, { cache: "no-store" });
 
       if (!res.ok) {
@@ -143,7 +149,6 @@ export default function HomePage() {
           boxSizing: "border-box",
         }}
       >
-        {/* 左側欄 */}
         <aside
           style={{
             width: "240px",
@@ -291,14 +296,12 @@ export default function HomePage() {
           </div>
         </aside>
 
-        {/* 右側主內容 */}
         <section
           style={{
             flex: 1,
             minWidth: 0,
           }}
         >
-          {/* 頂部工具列 */}
           <div
             style={{
               marginBottom: "20px",
@@ -407,7 +410,6 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* 推薦前10 */}
           <div
             style={{
               marginBottom: "20px",
@@ -581,7 +583,6 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* 表格 */}
           <div
             style={{
               borderRadius: "16px",
@@ -667,7 +668,12 @@ export default function HomePage() {
                           <td
                             style={{
                               padding: "12px",
-                              color: stock.change > 0 ? "#00e676" : stock.change < 0 ? "#ff6b6b" : "#ffffff",
+                              color:
+                                stock.change > 0
+                                  ? "#00e676"
+                                  : stock.change < 0
+                                  ? "#ff6b6b"
+                                  : "#ffffff",
                               fontWeight: 700,
                             }}
                           >
