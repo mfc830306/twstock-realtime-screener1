@@ -1,56 +1,545 @@
-/* ===== Reset ===== */
 * {
   box-sizing: border-box;
-  margin: 0;
-  padding: 0;
 }
 
-/* ===== Body ===== */
-html, body {
-  height: 100%;
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  background: #041c33;
+  color: #ffffff;
+  font-family: Arial, "Microsoft JhengHei", sans-serif;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", Arial, sans-serif;
-  background-color: #031f36;
-  color: #ffffff;
+  min-height: 100vh;
 }
 
-/* ===== Scrollbar（讓畫面更高級） ===== */
-::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
-::-webkit-scrollbar-track {
-  background: #021628;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #1f4f75;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #2b6c9f;
-}
-
-/* ===== Input ===== */
+button,
 input {
+  font: inherit;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+.page {
+  width: 100%;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #03182c 0%, #062341 100%);
+}
+
+.container {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.titleBlock h1 {
+  margin: 0;
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.titleBlock p {
+  margin: 10px 0 0;
+  font-size: 22px;
+  color: #b7c9e6;
+}
+
+.updateCard {
+  min-width: 260px;
+  max-width: 320px;
+  background: #173764;
+  border-radius: 18px;
+  padding: 16px 18px;
+  flex-shrink: 0;
+}
+
+.updateCard .label {
   font-size: 14px;
+  color: #c9d7ef;
+  margin-bottom: 8px;
 }
 
-/* ===== Button ===== */
-button {
-  font-family: inherit;
+.updateCard .time {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-bottom: 8px;
 }
 
-/* ===== 防止表格爆版 ===== */
-table {
-  border-collapse: collapse;
+.updateCard .status {
+  font-size: 15px;
+  color: #ffd36b;
+  font-weight: 700;
 }
 
-/* ===== 避免文字被選取影響UI ===== */
-button, input {
+.searchWrap {
+  width: 100%;
+  background: #173764;
+  border-radius: 18px;
+  padding: 14px;
+  margin-bottom: 20px;
+}
+
+.searchInput {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #335a93;
   outline: none;
+  background: #14335d;
+  color: #ffffff;
+  border-radius: 14px;
+  padding: 16px 18px;
+  font-size: 20px;
+}
+
+.searchInput::placeholder {
+  color: #90a9cf;
+}
+
+.sectionBox {
+  width: 100%;
+  background: #173764;
+  border-radius: 18px;
+  padding: 16px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 14px;
+}
+
+.categoryScroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.categoryScroll::-webkit-scrollbar {
+  height: 8px;
+}
+
+.categoryScroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+
+.categoryRow {
+  display: flex;
+  gap: 10px;
+  min-width: max-content;
+}
+
+.categoryBtn {
+  border: none;
+  cursor: pointer;
+  background: #0f2d52;
+  color: #ffffff;
+  border-radius: 12px;
+  padding: 14px 18px;
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: 0.2s ease;
+}
+
+.categoryBtn.active {
+  background: linear-gradient(135deg, #3d6dff 0%, #4c86ff 100%);
+}
+
+.mainLayout {
+  display: grid;
+  grid-template-columns: 280px 320px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.leftPanel,
+.rankPanel,
+.listPanel {
+  min-width: 0;
+}
+
+.panelCard {
+  background: #173764;
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.panelTitle {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 0 0 14px;
+}
+
+.top10List {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.top10Card {
+  background: #0f2d52;
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.top10Rank {
+  font-size: 14px;
+  color: #8eb2e8;
+  margin-bottom: 8px;
+}
+
+.stockName {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.stockPrice {
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.stockChangeUp {
+  color: #ff6b81;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.stockChangeDown {
+  color: #55d38a;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.stockMeta {
+  font-size: 13px;
+  color: #b9ccea;
+  line-height: 1.6;
+}
+
+.stockScore {
+  margin-top: 8px;
+  color: #ffd36b;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.rankTabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.rankTab {
+  border: none;
+  cursor: pointer;
+  background: #0f2d52;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.rankTab.active {
+  background: #ff6c7a;
+}
+
+.rankList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rankItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  background: #0f2d52;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.rankLeft {
+  min-width: 0;
+}
+
+.rankNum {
+  font-size: 14px;
+  color: #8eb2e8;
+  margin-bottom: 4px;
+}
+
+.rankName {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.rankPrice {
+  font-size: 13px;
+  color: #b9ccea;
+  margin-top: 4px;
+}
+
+.rankRight {
+  font-size: 16px;
+  font-weight: 800;
+  color: #ff7b90;
+  white-space: nowrap;
+}
+
+.listHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.listTitle {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.listSub {
+  font-size: 14px;
+  color: #9bb7df;
+  text-align: right;
+}
+
+.stockGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.stockCard {
+  background: #0f2d52;
+  border-radius: 16px;
+  padding: 16px;
+  min-width: 0;
+}
+
+.stockCardTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.stockCodeName {
+  min-width: 0;
+}
+
+.stockCode {
+  font-size: 18px;
+  font-weight: 900;
+  margin-bottom: 6px;
+}
+
+.stockTitle {
+  font-size: 15px;
+  color: #d7e5ff;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.scoreBadge {
+  flex-shrink: 0;
+  background: rgba(255, 211, 107, 0.12);
+  color: #ffd36b;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.stockBigPrice {
+  font-size: 24px;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
+.stockInfo {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #c3d5ef;
+  word-break: break-word;
+}
+
+/* 平板 */
+@media (max-width: 1200px) {
+  .topBar {
+    flex-direction: column;
+  }
+
+  .updateCard {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .mainLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .stockGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 手機 */
+@media (max-width: 768px) {
+  .container {
+    padding: 14px;
+  }
+
+  .topBar {
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .titleBlock h1 {
+    font-size: 30px;
+  }
+
+  .titleBlock p {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .updateCard {
+    border-radius: 14px;
+    padding: 12px 14px;
+  }
+
+  .updateCard .time {
+    font-size: 24px;
+  }
+
+  .searchWrap {
+    padding: 10px;
+    border-radius: 14px;
+    margin-bottom: 14px;
+  }
+
+  .searchInput {
+    padding: 13px 14px;
+    font-size: 16px;
+    border-radius: 12px;
+  }
+
+  .sectionBox,
+  .panelCard {
+    border-radius: 14px;
+    padding: 12px;
+  }
+
+  .sectionTitle,
+  .panelTitle,
+  .listTitle {
+    font-size: 18px;
+  }
+
+  .categoryBtn {
+    font-size: 15px;
+    padding: 12px 14px;
+  }
+
+  .rankTabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .rankTabs::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .rankTab {
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: 14px;
+    padding: 9px 12px;
+  }
+
+  .listHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .listSub {
+    text-align: left;
+    font-size: 13px;
+  }
+
+  .stockGrid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .stockCard {
+    padding: 14px;
+  }
+
+  .stockCode {
+    font-size: 17px;
+  }
+
+  .stockTitle {
+    font-size: 14px;
+  }
+
+  .stockBigPrice {
+    font-size: 22px;
+  }
+
+  .stockInfo {
+    font-size: 13px;
+  }
+
+  .top10Card {
+    padding: 12px;
+  }
+
+  .stockName {
+    font-size: 15px;
+  }
+
+  .stockPrice {
+    font-size: 20px;
+  }
 }
