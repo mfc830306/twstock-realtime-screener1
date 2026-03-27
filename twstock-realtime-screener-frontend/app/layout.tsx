@@ -2,7 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "台股智慧選股系統",
+  title: "Everyone看過來",
   description: "TWSE 上市股票分類、搜尋、推薦排序與進出場規劃",
 };
 
