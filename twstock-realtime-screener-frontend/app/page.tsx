@@ -167,7 +167,7 @@ export default function Home() {
       <div className="container">
         <div className="topBar">
           <div className="titleBlock">
-            <h1>台股即時選股系統</h1>
+            <h1>Everyone看過來</h1>
             <p>依價格分類 + 即時排行 + 推薦策略</p>
           </div>
 
