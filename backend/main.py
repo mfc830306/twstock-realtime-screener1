@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 app = FastAPI()
 
@@ -16,12 +16,23 @@ app.add_middleware(
 TWSE_DAY_ALL_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 
 
+def tw_now():
+    return datetime.now(timezone(timedelta(hours=8)))
+
+
+def normalize_text(value, default=""):
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
+
+
 def to_float(value, default=0.0):
     try:
         if value is None:
             return default
         value = str(value).replace(",", "").replace("X", "").replace("--", "").strip()
-        if value in ("", "-", "—"):
+        if value in ("", "-", "—", "----"):
             return default
         return float(value)
     except Exception:
@@ -33,11 +44,43 @@ def to_int(value, default=0):
         if value is None:
             return default
         value = str(value).replace(",", "").replace("--", "").strip()
-        if value in ("", "-", "—"):
+        if value in ("", "-", "—", "----"):
             return default
         return int(float(value))
     except Exception:
         return default
+
+
+def get_first(row, keys, default=None):
+    for key in keys:
+        if key in row and row[key] not in (None, ""):
+            return row[key]
+    return default
+
+
+def normalize_data_date(raw_date):
+    if raw_date is None:
+        return ""
+
+    text = str(raw_date).strip().replace("/", "").replace("-", "")
+    digits = "".join(ch for ch in text if ch.isdigit())
+
+    # 西元 yyyyMMdd
+    if len(digits) == 8:
+        return digits
+
+    # 民國 yyyMMdd -> 西元 yyyyMMdd
+    if len(digits) == 7:
+        try:
+            roc_year = int(digits[:3])
+            month = digits[3:5]
+            day = digits[5:7]
+            year = roc_year + 1911
+            return f"{year}{month}{day}"
+        except Exception:
+            return ""
+
+    return ""
 
 
 def calc_score(change_percent, volume, price):
@@ -140,32 +183,45 @@ def get_stocks():
         res.raise_for_status()
         data = res.json()
 
+        if not isinstance(data, list):
+            raise ValueError("TWSE 回傳格式異常")
+
+        fetch_time = tw_now()
+        last_fetch_time = fetch_time.strftime("%Y/%m/%d %H:%M:%S")
+        today_str = fetch_time.strftime("%Y%m%d")
+
         stocks = []
-        now = datetime.now()
-        last_update = now.strftime("%Y/%m/%d %H:%M:%S")
-        data_date = now.strftime("%Y%m%d")
+        detected_data_date = ""
 
         for s in data:
             try:
-                symbol = str(s.get("Code", "")).strip()
-                name = str(s.get("Name", "")).strip()
+                symbol = normalize_text(
+                    get_first(s, ["Code", "證券代號", "symbol"], "")
+                )
+                name = normalize_text(
+                    get_first(s, ["Name", "證券名稱", "name"], "")
+                )
 
                 if not symbol or not name:
                     continue
 
-                price = to_float(s.get("ClosingPrice"))
-                change = to_float(s.get("Change"))
-                volume = to_int(s.get("TradeVolume"))
+                raw_date = get_first(s, ["Date", "日期", "date"], "")
+                normalized_date = normalize_data_date(raw_date)
+                if normalized_date and not detected_data_date:
+                    detected_data_date = normalized_date
+
+                price = to_float(get_first(s, ["ClosingPrice", "收盤價", "close"]))
+                change = to_float(get_first(s, ["Change", "漲跌價差", "change"]))
+                volume = to_int(get_first(s, ["TradeVolume", "成交股數", "volume"]))
+                open_price = to_float(get_first(s, ["OpeningPrice", "開盤價", "open"]))
+                high_price = to_float(get_first(s, ["HighestPrice", "最高價", "high"]))
+                low_price = to_float(get_first(s, ["LowestPrice", "最低價", "low"]))
 
                 if price <= 0:
                     continue
 
                 prev_close = round(price - change, 2)
-
-                if prev_close > 0:
-                    change_percent = round((change / prev_close) * 100, 2)
-                else:
-                    change_percent = 0.0
+                change_percent = round((change / prev_close) * 100, 2) if prev_close > 0 else 0.0
 
                 score = calc_score(change_percent, volume, price)
                 signal = calc_signal(change_percent, volume)
@@ -188,10 +244,11 @@ def get_stocks():
                     "stop_loss": stop_loss,
                     "reason": reason,
                     "prev_close": prev_close,
-                    "open": 0,
-                    "high": 0,
-                    "low": 0,
-                    "update_time": last_update,
+                    "open": round(open_price, 2) if open_price > 0 else 0,
+                    "high": round(high_price, 2) if high_price > 0 else 0,
+                    "low": round(low_price, 2) if low_price > 0 else 0,
+                    "update_time": last_fetch_time,
+                    "data_date": normalized_date or "",
                 })
             except Exception:
                 continue
@@ -205,11 +262,20 @@ def get_stocks():
             reverse=True,
         )
 
+        final_data_date = detected_data_date or ""
+        is_today_data = final_data_date == today_str if final_data_date else False
+
+        if final_data_date:
+            market_status = "收盤" if is_today_data else f"非當日資料（{final_data_date}）"
+        else:
+            market_status = "資料日期未知"
+
         return {
             "success": True,
-            "market_status": "收盤",
-            "data_date": data_date,
-            "last_update": last_update,
+            "market_status": market_status,
+            "data_date": final_data_date,
+            "last_fetch_time": last_fetch_time,
+            "last_update": last_fetch_time,
             "total": len(stocks),
             "stocks": stocks,
         }
@@ -218,5 +284,7 @@ def get_stocks():
         return {
             "success": False,
             "message": f"讀取失敗: {str(e)}",
+            "data_date": "",
+            "last_fetch_time": tw_now().strftime("%Y/%m/%d %H:%M:%S"),
             "stocks": [],
         }
