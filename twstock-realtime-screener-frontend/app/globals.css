@@ -1,29 +1,56 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-  min-height: 100%;
-}
-
+/* ===== Reset ===== */
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== Body ===== */
+html, body {
+  height: 100%;
 }
 
 body {
-  background: #061a2b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", Arial, sans-serif;
+  background-color: #031f36;
   color: #ffffff;
-  font-family: Arial, "Microsoft JhengHei", "PingFang TC", sans-serif;
 }
 
-button {
-  cursor: pointer;
+/* ===== Scrollbar（讓畫面更高級） ===== */
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
 }
 
-input,
+::-webkit-scrollbar-track {
+  background: #021628;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1f4f75;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2b6c9f;
+}
+
+/* ===== Input ===== */
+input {
+  font-size: 14px;
+}
+
+/* ===== Button ===== */
 button {
-  font: inherit;
+  font-family: inherit;
+}
+
+/* ===== 防止表格爆版 ===== */
+table {
+  border-collapse: collapse;
+}
+
+/* ===== 避免文字被選取影響UI ===== */
+button, input {
+  outline: none;
 }
