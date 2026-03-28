@@ -86,6 +86,24 @@ function matchCategory(price: number, category: string) {
   return true;
 }
 
+function getPageNumbers(current: number, total: number) {
+  const pages: (number | string)[] = [];
+
+  if (total <= 7) {
+    for (let i = 1; i <= total; i++) pages.push(i);
+  } else {
+    if (current <= 4) {
+      pages.push(1, 2, 3, 4, 5, "...", total);
+    } else if (current >= total - 3) {
+      pages.push(1, "...", total - 4, total - 3, total - 2, total - 1, total);
+    } else {
+      pages.push(1, "...", current - 1, current, current + 1, "...", total);
+    }
+  }
+
+  return pages;
+}
+
 export default function Home() {
   const [allMarketStocks, setAllMarketStocks] = useState<Stock[]>([]);
   const [realtimeStocks, setRealtimeStocks] = useState<Stock[]>([]);
@@ -259,53 +277,8 @@ export default function Home() {
         </div>
       </div>
 
-      <section className="top-grid">
-        <div className="panel">
-          <div className="panel-title-row">
-            <h2>推薦 10 檔</h2>
-            <span className="mini-note">依推薦分數排序</span>
-          </div>
-
-          <div className="recommend-grid">
-            {topRecommended.map((stock) => (
-              <div key={stock.symbol} className="recommend-card">
-                <div className="recommend-top">
-                  <div>
-                    <div className="symbol-line">
-                      <strong>{stock.symbol}</strong>
-                      <span>{stock.name}</span>
-                    </div>
-                    <div className="mini-note">{stock.market || "-"}</div>
-                  </div>
-                  <div className="score-pill">分數 {stock.score || 0}</div>
-                </div>
-
-                <div className="recommend-price">
-                  <span className="price">${stock.price}</span>
-                  <span
-                    className={
-                      (stock.change_percent || 0) >= 0 ? "change up" : "change down"
-                    }
-                  >
-                    {stock.change_percent && stock.change_percent > 0 ? "+" : ""}
-                    {stock.change_percent || 0}%
-                  </span>
-                </div>
-
-                <div className="recommend-meta">
-                  <span>訊號：{stock.signal || "-"}</span>
-                  <span>進場：{stock.entry_price || "-"}</span>
-                  <span>目標：{stock.target_price || "-"}</span>
-                  <span>停損：{stock.stop_loss || "-"}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="content-grid">
-        <aside className="panel sidebar">
+      <section className="top-grid two-col">
+        <aside className="panel">
           <div className="panel-title-row">
             <h2>價格分類 / 篩選</h2>
           </div>
@@ -370,77 +343,135 @@ export default function Home() {
           </div>
         </aside>
 
-        <section className="panel table-panel">
+        <section className="panel">
           <div className="panel-title-row">
-            <h2>股票列表</h2>
-            <div className="table-toolbar">
-              <span className="mini-note">
-                {loading ? "載入中..." : `共 ${sortedStocks.length} 檔`}
-              </span>
-              <div className="pagination">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                >
-                  上一頁
-                </button>
-                <span>
-                  {page} / {totalPages}
-                </span>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
-                >
-                  下一頁
-                </button>
-              </div>
-            </div>
+            <h2>推薦 10 檔</h2>
+            <span className="mini-note">依推薦分數排序</span>
           </div>
 
-          <div className="table-wrap">
-            <table className="stock-table">
-              <thead>
-                <tr>
-                  <th>市場</th>
-                  <th>代碼</th>
-                  <th>名稱</th>
-                  <th>現價</th>
-                  <th>漲跌幅</th>
-                  <th>成交量</th>
-                  <th>訊號</th>
-                  <th>分數</th>
-                  <th>進場價</th>
-                  <th>目標價</th>
-                  <th>停損價</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedStocks.map((stock) => (
-                  <tr key={`${stock.market}-${stock.symbol}`}>
-                    <td>{stock.market || "-"}</td>
-                    <td>{stock.symbol}</td>
-                    <td>{stock.name}</td>
-                    <td>{stock.price}</td>
-                    <td
-                      className={
-                        (stock.change_percent || 0) >= 0 ? "change up" : "change down"
-                      }
-                    >
-                      {(stock.change_percent || 0) > 0 ? "+" : ""}
-                      {stock.change_percent || 0}%
-                    </td>
-                    <td>{stock.volume || 0}</td>
-                    <td>{stock.signal || "-"}</td>
-                    <td>{stock.score || 0}</td>
-                    <td>{stock.entry_price || "-"}</td>
-                    <td>{stock.target_price || "-"}</td>
-                    <td>{stock.stop_loss || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="recommend-grid">
+            {topRecommended.map((stock) => (
+              <div key={stock.symbol} className="recommend-card">
+                <div className="recommend-top">
+                  <div>
+                    <div className="symbol-line">
+                      <strong>{stock.symbol}</strong>
+                      <span>{stock.name}</span>
+                    </div>
+                    <div className="mini-note">{stock.market || "-"}</div>
+                  </div>
+                  <div className="score-pill">分數 {stock.score || 0}</div>
+                </div>
+
+                <div className="recommend-price">
+                  <span className="price">${stock.price}</span>
+                  <span
+                    className={
+                      (stock.change_percent || 0) >= 0 ? "change up" : "change down"
+                    }
+                  >
+                    {stock.change_percent && stock.change_percent > 0 ? "+" : ""}
+                    {stock.change_percent || 0}%
+                  </span>
+                </div>
+
+                <div className="recommend-meta">
+                  <span>訊號：{stock.signal || "-"}</span>
+                  <span>進場：{stock.entry_price || "-"}</span>
+                  <span>目標：{stock.target_price || "-"}</span>
+                  <span>停損：{stock.stop_loss || "-"}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
+      </section>
+
+      <section className="panel table-panel">
+        <div className="panel-title-row">
+          <h2>股票列表</h2>
+          <div className="table-toolbar">
+            <span className="mini-note">
+              {loading ? "載入中..." : `共 ${sortedStocks.length} 檔`}
+            </span>
+
+            <div className="pagination">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+              >
+                ◀
+              </button>
+
+              {getPageNumbers(page, totalPages).map((p, idx) =>
+                p === "..." ? (
+                  <span key={idx} className="page-ellipsis">
+                    ...
+                  </span>
+                ) : (
+                  <button
+                    key={idx}
+                    className={p === page ? "page-btn active" : "page-btn"}
+                    onClick={() => setPage(p as number)}
+                  >
+                    {p}
+                  </button>
+                )
+              )}
+
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+              >
+                ▶
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table className="stock-table">
+            <thead>
+              <tr>
+                <th>市場</th>
+                <th>代碼</th>
+                <th>名稱</th>
+                <th>現價</th>
+                <th>漲跌幅</th>
+                <th>成交量</th>
+                <th>訊號</th>
+                <th>分數</th>
+                <th>進場價</th>
+                <th>目標價</th>
+                <th>停損價</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pagedStocks.map((stock) => (
+                <tr key={`${stock.market}-${stock.symbol}`}>
+                  <td>{stock.market || "-"}</td>
+                  <td>{stock.symbol}</td>
+                  <td>{stock.name}</td>
+                  <td>{stock.price}</td>
+                  <td
+                    className={
+                      (stock.change_percent || 0) >= 0 ? "change up" : "change down"
+                    }
+                  >
+                    {(stock.change_percent || 0) > 0 ? "+" : ""}
+                    {stock.change_percent || 0}%
+                  </td>
+                  <td>{stock.volume || 0}</td>
+                  <td>{stock.signal || "-"}</td>
+                  <td>{stock.score || 0}</td>
+                  <td>{stock.entry_price || "-"}</td>
+                  <td>{stock.target_price || "-"}</td>
+                  <td>{stock.stop_loss || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   );
