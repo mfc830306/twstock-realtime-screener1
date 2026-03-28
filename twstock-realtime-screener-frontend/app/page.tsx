@@ -19,6 +19,12 @@ type Stock = {
   category?: "stock" | "etf";
 };
 
+type SourceSummary = {
+  twse_stock_count: number;
+  tpex_stock_count: number;
+  etf_count: number;
+};
+
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
 const PAGE_SIZE = 20;
 
@@ -44,12 +50,31 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
 
+  const [marketStatus, setMarketStatus] = useState("");
+  const [dataDate, setDataDate] = useState("");
+  const [lastUpdate, setLastUpdate] = useState("");
+  const [sourceSummary, setSourceSummary] = useState<SourceSummary>({
+    twse_stock_count: 0,
+    tpex_stock_count: 0,
+    etf_count: 0,
+  });
+
   useEffect(() => {
     fetch(BACKEND_URL)
       .then((res) => res.json())
       .then((data) => {
         if (data?.success) {
-          setStocks(data.stocks || []);
+          setStocks(Array.isArray(data.stocks) ? data.stocks : []);
+          setMarketStatus(data.market_status || "");
+          setDataDate(data.data_date || "");
+          setLastUpdate(data.last_update || "");
+          setSourceSummary(
+            data.source_summary || {
+              twse_stock_count: 0,
+              tpex_stock_count: 0,
+              etf_count: 0,
+            }
+          );
           setErrorText("");
         } else {
           setStocks([]);
@@ -182,6 +207,40 @@ export default function Home() {
           <p>上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦</p>
         </header>
 
+        <section className="panel status-panel">
+          <h2>狀態</h2>
+          <div className="status-grid">
+            <div className="status-item">
+              <div className="status-label">市場狀態</div>
+              <div className="status-value">{marketStatus || "-"}</div>
+            </div>
+            <div className="status-item">
+              <div className="status-label">資料日期</div>
+              <div className="status-value">{dataDate || "-"}</div>
+            </div>
+            <div className="status-item">
+              <div className="status-label">最後更新</div>
+              <div className="status-value">{lastUpdate || "-"}</div>
+            </div>
+            <div className="status-item">
+              <div className="status-label">上市</div>
+              <div className="status-value">{sourceSummary.twse_stock_count}</div>
+            </div>
+            <div className="status-item">
+              <div className="status-label">上櫃</div>
+              <div className="status-value">{sourceSummary.tpex_stock_count}</div>
+            </div>
+            <div className="status-item">
+              <div className="status-label">ETF</div>
+              <div className="status-value">{sourceSummary.etf_count}</div>
+            </div>
+            <div className="status-item">
+              <div className="status-label">總檔數</div>
+              <div className="status-value">{stocks.length}</div>
+            </div>
+          </div>
+        </section>
+
         <div className="top-grid">
           <section className="panel left-panel">
             <h2>價格分類 / 篩選</h2>
@@ -273,9 +332,9 @@ export default function Home() {
             <div>
               <h2>股票列表</h2>
               <div className="list-subtitle">
-                目前分類：{
-                  PRICE_CATEGORIES.find((x) => x.key === selectedCategory)?.label
-                }　/　共 {sortedStocks.length} 檔
+                目前分類：
+                {PRICE_CATEGORIES.find((x) => x.key === selectedCategory)?.label}
+                {" / "}共 {sortedStocks.length} 檔
               </div>
             </div>
           </div>
