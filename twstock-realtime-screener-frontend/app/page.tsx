@@ -71,8 +71,23 @@ const SORT_OPTIONS = [
   { key: "volume", label: "成交量" },
 ] as const;
 
+const PAGE_SIZE = 100;
+
+function matchCategory(price: number, category: string) {
+  if (category === "all") return true;
+  if (category === "0-10") return price >= 0 && price < 10;
+  if (category === "10-20") return price >= 10 && price < 20;
+  if (category === "20-50") return price >= 20 && price < 50;
+  if (category === "50-100") return price >= 50 && price < 100;
+  if (category === "100-200") return price >= 100 && price < 200;
+  if (category === "200-500") return price >= 200 && price < 500;
+  if (category === "500-1000") return price >= 500 && price < 1000;
+  if (category === "1000+") return price >= 1000;
+  return true;
+}
+
 export default function Home() {
-  const [marketStocks, setMarketStocks] = useState<Stock[]>([]);
+  const [allMarketStocks, setAllMarketStocks] = useState<Stock[]>([]);
   const [realtimeStocks, setRealtimeStocks] = useState<Stock[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
@@ -80,15 +95,13 @@ export default function Home() {
   const [marketMeta, setMarketMeta] = useState<MarketResponse | null>(null);
   const [realtimeMeta, setRealtimeMeta] = useState<RealtimeResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
 
-  async function fetchMarket(category = selectedCategory, sort = sortBy, q = searchTerm) {
-    const url = `${BACKEND_URL}/market?category=${encodeURIComponent(
-      category
-    )}&sort_by=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=5000`;
-
+  async function fetchMarket() {
+    const url = `${BACKEND_URL}/market?category=all&sort_by=score&limit=5000`;
     const res = await fetch(url, { cache: "no-store" });
     const data: MarketResponse = await res.json();
-    setMarketStocks(data.stocks || []);
+    setAllMarketStocks(data.stocks || []);
     setMarketMeta(data);
   }
 
@@ -102,7 +115,7 @@ export default function Home() {
   async function loadAll() {
     try {
       setLoading(true);
-      await Promise.all([fetchMarket("all", sortBy, searchTerm), fetchRealtime()]);
+      await Promise.all([fetchMarket(), fetchRealtime()]);
     } finally {
       setLoading(false);
     }
@@ -110,21 +123,7 @@ export default function Home() {
 
   useEffect(() => {
     loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    fetchMarket(selectedCategory, sortBy, searchTerm);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory, sortBy]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchMarket(selectedCategory, sortBy, searchTerm);
-    }, 350);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchTerm]);
 
   useEffect(() => {
     const realtimeTimer = setInterval(() => {
@@ -132,15 +131,18 @@ export default function Home() {
     }, 15000);
 
     const marketTimer = setInterval(() => {
-      fetchMarket(selectedCategory, sortBy, searchTerm);
+      fetchMarket();
     }, 60000);
 
     return () => {
       clearInterval(realtimeTimer);
       clearInterval(marketTimer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory, sortBy, searchTerm]);
+  }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedCategory, searchTerm, sortBy]);
 
   const realtimeMap = useMemo(() => {
     const map = new Map<string, Stock>();
@@ -149,17 +151,76 @@ export default function Home() {
   }, [realtimeStocks]);
 
   const mergedStocks = useMemo(() => {
-    return marketStocks.map((stock) => {
+    return allMarketStocks.map((stock) => {
       const rt = realtimeMap.get(stock.symbol);
-      return rt
-        ? {
-            ...stock,
-            ...rt,
-            market: stock.market,
-          }
-        : stock;
+      return rt ? { ...stock, ...rt, market: stock.market } : stock;
     });
-  }, [marketStocks, realtimeMap]);
+  }, [allMarketStocks, realtimeMap]);
+
+  const searchFilteredStocks = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return mergedStocks;
+    return mergedStocks.filter(
+      (stock) =>
+        stock.symbol.toLowerCase().includes(q) ||
+        stock.name.toLowerCase().includes(q)
+    );
+  }, [mergedStocks, searchTerm]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const cat of CATEGORIES) {
+      counts[cat.key] = searchFilteredStocks.filter((stock) =>
+        matchCategory(stock.price || 0, cat.key)
+      ).length;
+    }
+    return counts;
+  }, [searchFilteredStocks]);
+
+  const categoryFilteredStocks = useMemo(() => {
+    return searchFilteredStocks.filter((stock) =>
+      matchCategory(stock.price || 0, selectedCategory)
+    );
+  }, [searchFilteredStocks, selectedCategory]);
+
+  const sortedStocks = useMemo(() => {
+    const arr = [...categoryFilteredStocks];
+    if (sortBy === "up") {
+      arr.sort(
+        (a, b) =>
+          (b.change_percent || 0) - (a.change_percent || 0) ||
+          (b.score || 0) - (a.score || 0) ||
+          (b.volume || 0) - (a.volume || 0)
+      );
+    } else if (sortBy === "down") {
+      arr.sort(
+        (a, b) =>
+          (a.change_percent || 0) - (b.change_percent || 0) ||
+          (a.score || 0) - (b.score || 0)
+      );
+    } else if (sortBy === "volume") {
+      arr.sort(
+        (a, b) =>
+          (b.volume || 0) - (a.volume || 0) ||
+          (b.score || 0) - (a.score || 0)
+      );
+    } else {
+      arr.sort(
+        (a, b) =>
+          (b.score || 0) - (a.score || 0) ||
+          (b.change_percent || 0) - (a.change_percent || 0) ||
+          (b.volume || 0) - (a.volume || 0)
+      );
+    }
+    return arr;
+  }, [categoryFilteredStocks, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedStocks.length / PAGE_SIZE));
+
+  const pagedStocks = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return sortedStocks.slice(start, start + PAGE_SIZE);
+  }, [sortedStocks, page]);
 
   const topRecommended = useMemo(() => {
     return [...mergedStocks]
@@ -176,8 +237,6 @@ export default function Home() {
     ? "富邦即時連線中"
     : "即時連線未完成";
 
-  const marketCount = marketMeta?.total || 0;
-  const allCount = marketMeta?.total || 0;
   const twseCount = marketMeta?.source_summary?.twse_count || 0;
   const tpexCount = marketMeta?.source_summary?.tpex_count || 0;
 
@@ -186,9 +245,7 @@ export default function Home() {
       <div className="page-header">
         <div>
           <h1>台股即時瀏覽系統</h1>
-          <p>
-            全市場瀏覽 + 富邦即時觀察股 + 推薦分數 + 進出場輔助
-          </p>
+          <p>全市場瀏覽 + 推薦分數 + 進出場輔助</p>
         </div>
 
         <div className="header-badges">
@@ -203,58 +260,6 @@ export default function Home() {
       </div>
 
       <section className="top-grid">
-        <div className="panel controls-panel">
-          <div className="panel-title-row">
-            <h2>篩選與狀態</h2>
-          </div>
-
-          <div className="controls-grid">
-            <div className="field">
-              <label>搜尋股票</label>
-              <input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="輸入股票代碼或名稱"
-              />
-            </div>
-
-            <div className="field">
-              <label>排序方式</label>
-              <select
-                value={sortBy}
-                onChange={(e) =>
-                  setSortBy(e.target.value as "score" | "up" | "down" | "volume")
-                }
-              >
-                {SORT_OPTIONS.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="stats-row">
-            <div className="stat-card">
-              <span className="stat-label">目前列表</span>
-              <strong>{marketCount}</strong>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">上市</span>
-              <strong>{twseCount}</strong>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">上櫃</span>
-              <strong>{tpexCount}</strong>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">觀察股</span>
-              <strong>{realtimeStocks.length}</strong>
-            </div>
-          </div>
-        </div>
-
         <div className="panel">
           <div className="panel-title-row">
             <h2>推薦 10 檔</h2>
@@ -302,7 +307,7 @@ export default function Home() {
       <section className="content-grid">
         <aside className="panel sidebar">
           <div className="panel-title-row">
-            <h2>價格分類</h2>
+            <h2>價格分類 / 篩選</h2>
           </div>
 
           <div className="category-list">
@@ -313,22 +318,82 @@ export default function Home() {
                 onClick={() => setSelectedCategory(item.key)}
               >
                 <span>{item.label}</span>
-                {item.key === "all" && <small>{allCount}</small>}
+                <small>({categoryCounts[item.key] || 0})</small>
               </button>
             ))}
           </div>
 
-          <div className="sidebar-note">
-            <p>重新開網頁預設就是「全部股票」。</p>
-            <p>手機版會自動改成上下排列，不會超出畫面。</p>
+          <div className="filter-block">
+            <div className="field">
+              <label>搜尋股票</label>
+              <input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="輸入股票代碼或名稱"
+              />
+            </div>
+
+            <div className="field">
+              <label>排序方式</label>
+              <select
+                value={sortBy}
+                onChange={(e) =>
+                  setSortBy(e.target.value as "score" | "up" | "down" | "volume")
+                }
+              >
+                {SORT_OPTIONS.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="stats-row sidebar-stats">
+              <div className="stat-card">
+                <span className="stat-label">上市</span>
+                <strong>{twseCount}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">上櫃</span>
+                <strong>{tpexCount}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">目前分類</span>
+                <strong>{sortedStocks.length}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">即時連線</span>
+                <strong>{realtimeMeta?.ws_connected ? "正常" : "等待中"}</strong>
+              </div>
+            </div>
           </div>
         </aside>
 
         <section className="panel table-panel">
           <div className="panel-title-row">
             <h2>股票列表</h2>
-            <div className="mini-note">
-              {loading ? "載入中..." : `共 ${mergedStocks.length} 檔`}
+            <div className="table-toolbar">
+              <span className="mini-note">
+                {loading ? "載入中..." : `共 ${sortedStocks.length} 檔`}
+              </span>
+              <div className="pagination">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                >
+                  上一頁
+                </button>
+                <span>
+                  {page} / {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                >
+                  下一頁
+                </button>
+              </div>
             </div>
           </div>
 
@@ -350,7 +415,7 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
-                {mergedStocks.map((stock) => (
+                {pagedStocks.map((stock) => (
                   <tr key={`${stock.market}-${stock.symbol}`}>
                     <td>{stock.market || "-"}</td>
                     <td>{stock.symbol}</td>
@@ -376,46 +441,6 @@ export default function Home() {
             </table>
           </div>
         </section>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title-row">
-          <h2>即時觀察股</h2>
-          <span className="mini-note">
-            富邦 WebSocket：{realtimeMeta?.ws_connected ? "已連線" : "未連線"}
-          </span>
-        </div>
-
-        <div className="realtime-grid">
-          {realtimeStocks.map((stock) => (
-            <div key={stock.symbol} className="realtime-card">
-              <div className="symbol-line">
-                <strong>{stock.symbol}</strong>
-                <span>{stock.name}</span>
-              </div>
-
-              <div className="recommend-price">
-                <span className="price">${stock.price}</span>
-                <span
-                  className={
-                    (stock.change_percent || 0) >= 0 ? "change up" : "change down"
-                  }
-                >
-                  {(stock.change_percent || 0) > 0 ? "+" : ""}
-                  {stock.change_percent || 0}%
-                </span>
-              </div>
-
-              <div className="recommend-meta">
-                <span>訊號：{stock.signal || "-"}</span>
-                <span>成交量：{stock.volume || 0}</span>
-                <span>進場：{stock.entry_price || "-"}</span>
-                <span>目標：{stock.target_price || "-"}</span>
-                <span>停損：{stock.stop_loss || "-"}</span>
-              </div>
-            </div>
-          ))}
-        </div>
       </section>
     </main>
   );
