@@ -3,57 +3,28 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Stock = {
-  market?: string;
+  market: string;
   symbol: string;
   name: string;
   price: number;
-  change?: number;
+  change: number;
   change_percent: number;
   volume?: number;
   score?: number;
   signal?: string;
+  reason?: string;
   entry_price?: string;
   target_price?: string;
   stop_loss?: string;
-  open?: number;
-  high?: number;
-  low?: number;
-  prev_close?: number;
-  reference_price?: number;
-  update_time?: string;
+  category?: "stock" | "etf";
 };
 
-type MarketResponse = {
-  success: boolean;
-  data_date: string;
-  last_update: string;
-  market_status: string;
-  message: string;
-  total: number;
-  source_summary?: {
-    twse_count?: number;
-    tpex_count?: number;
-  };
-  stocks: Stock[];
-};
+const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
+const PAGE_SIZE = 20;
 
-type RealtimeResponse = {
-  success: boolean;
-  market_status: string;
-  data_date: string;
-  last_update: string;
-  message: string;
-  total: number;
-  stocks: Stock[];
-  ws_connected: boolean;
-};
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  "https://twstock-realtime-screener1.onrender.com";
-
-const CATEGORIES = [
+const PRICE_CATEGORIES = [
   { key: "all", label: "全部股票" },
+  { key: "etf", label: "ETF" },
   { key: "0-10", label: "0 ~ 10" },
   { key: "10-20", label: "10 ~ 20" },
   { key: "20-50", label: "20 ~ 50" },
@@ -64,415 +35,326 @@ const CATEGORIES = [
   { key: "1000+", label: "1000 以上" },
 ];
 
-const SORT_OPTIONS = [
-  { key: "score", label: "推薦分數" },
-  { key: "up", label: "漲幅" },
-  { key: "down", label: "跌幅" },
-  { key: "volume", label: "成交量" },
-] as const;
-
-const PAGE_SIZE = 100;
-
-function matchCategory(price: number, category: string) {
-  if (category === "all") return true;
-  if (category === "0-10") return price >= 0 && price < 10;
-  if (category === "10-20") return price >= 10 && price < 20;
-  if (category === "20-50") return price >= 20 && price < 50;
-  if (category === "50-100") return price >= 50 && price < 100;
-  if (category === "100-200") return price >= 100 && price < 200;
-  if (category === "200-500") return price >= 200 && price < 500;
-  if (category === "500-1000") return price >= 500 && price < 1000;
-  if (category === "1000+") return price >= 1000;
-  return true;
-}
-
-function getPageNumbers(current: number, total: number) {
-  const pages: (number | string)[] = [];
-
-  if (total <= 7) {
-    for (let i = 1; i <= total; i++) pages.push(i);
-  } else {
-    if (current <= 4) {
-      pages.push(1, 2, 3, 4, 5, "...", total);
-    } else if (current >= total - 3) {
-      pages.push(1, "...", total - 4, total - 3, total - 2, total - 1, total);
-    } else {
-      pages.push(1, "...", current - 1, current, current + 1, "...", total);
-    }
-  }
-
-  return pages;
-}
-
 export default function Home() {
-  const [allMarketStocks, setAllMarketStocks] = useState<Stock[]>([]);
-  const [realtimeStocks, setRealtimeStocks] = useState<Stock[]>([]);
+  const [stocks, setStocks] = useState<Stock[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [sortBy, setSortBy] = useState<"score" | "up" | "down" | "volume">("score");
-  const [marketMeta, setMarketMeta] = useState<MarketResponse | null>(null);
-  const [realtimeMeta, setRealtimeMeta] = useState<RealtimeResponse | null>(null);
+  const [rankType, setRankType] = useState<"up" | "down" | "volume">("up");
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
 
-  async function fetchMarket() {
-    const url = `${BACKEND_URL}/market?category=all&sort_by=score&limit=5000`;
-    const res = await fetch(url, { cache: "no-store" });
-    const data: MarketResponse = await res.json();
-    setAllMarketStocks(data.stocks || []);
-    setMarketMeta(data);
-  }
+  useEffect(() => {
+    fetch(BACKEND_URL)
+      .then((res) => res.json())
+      .then((data) => {
+        setStocks(data.stocks || []);
+      })
+      .catch((err) => {
+        console.error("讀取股票資料失敗:", err);
+        setStocks([]);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
-  async function fetchRealtime() {
-    const res = await fetch(`${BACKEND_URL}/stocks`, { cache: "no-store" });
-    const data: RealtimeResponse = await res.json();
-    setRealtimeStocks(data.stocks || []);
-    setRealtimeMeta(data);
-  }
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedCategory, searchTerm]);
 
-  async function loadAll() {
-    try {
-      setLoading(true);
-      await Promise.all([fetchMarket(), fetchRealtime()]);
-    } finally {
-      setLoading(false);
+  const getCategoryStocks = (categoryKey: string) => {
+    switch (categoryKey) {
+      case "all":
+        return stocks;
+      case "etf":
+        return stocks.filter((s) => s.category === "etf" || s.market === "ETF");
+      case "0-10":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 0 && s.price < 10);
+      case "10-20":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 10 && s.price < 20);
+      case "20-50":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 20 && s.price < 50);
+      case "50-100":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 50 && s.price < 100);
+      case "100-200":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 100 && s.price < 200);
+      case "200-500":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 200 && s.price < 500);
+      case "500-1000":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 500 && s.price < 1000);
+      case "1000+":
+        return stocks.filter((s) => s.category !== "etf" && s.price >= 1000);
+      default:
+        return stocks;
     }
-  }
-
-  useEffect(() => {
-    loadAll();
-  }, []);
-
-  useEffect(() => {
-    const realtimeTimer = setInterval(() => {
-      fetchRealtime();
-    }, 15000);
-
-    const marketTimer = setInterval(() => {
-      fetchMarket();
-    }, 60000);
-
-    return () => {
-      clearInterval(realtimeTimer);
-      clearInterval(marketTimer);
-    };
-  }, []);
-
-  useEffect(() => {
-    setPage(1);
-  }, [selectedCategory, searchTerm, sortBy]);
-
-  const realtimeMap = useMemo(() => {
-    const map = new Map<string, Stock>();
-    realtimeStocks.forEach((s) => map.set(s.symbol, s));
-    return map;
-  }, [realtimeStocks]);
-
-  const mergedStocks = useMemo(() => {
-    return allMarketStocks.map((stock) => {
-      const rt = realtimeMap.get(stock.symbol);
-      return rt ? { ...stock, ...rt, market: stock.market } : stock;
-    });
-  }, [allMarketStocks, realtimeMap]);
-
-  const searchFilteredStocks = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
-    if (!q) return mergedStocks;
-    return mergedStocks.filter(
-      (stock) =>
-        stock.symbol.toLowerCase().includes(q) ||
-        stock.name.toLowerCase().includes(q)
-    );
-  }, [mergedStocks, searchTerm]);
+  };
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const cat of CATEGORIES) {
-      counts[cat.key] = searchFilteredStocks.filter((stock) =>
-        matchCategory(stock.price || 0, cat.key)
-      ).length;
+    for (const category of PRICE_CATEGORIES) {
+      counts[category.key] = getCategoryStocks(category.key).length;
     }
     return counts;
-  }, [searchFilteredStocks]);
+  }, [stocks]);
 
-  const categoryFilteredStocks = useMemo(() => {
-    return searchFilteredStocks.filter((stock) =>
-      matchCategory(stock.price || 0, selectedCategory)
-    );
-  }, [searchFilteredStocks, selectedCategory]);
+  const filteredStocks = useMemo(() => {
+    let result = getCategoryStocks(selectedCategory);
 
-  const sortedStocks = useMemo(() => {
-    const arr = [...categoryFilteredStocks];
-    if (sortBy === "up") {
-      arr.sort(
-        (a, b) =>
-          (b.change_percent || 0) - (a.change_percent || 0) ||
-          (b.score || 0) - (a.score || 0) ||
-          (b.volume || 0) - (a.volume || 0)
-      );
-    } else if (sortBy === "down") {
-      arr.sort(
-        (a, b) =>
-          (a.change_percent || 0) - (b.change_percent || 0) ||
-          (a.score || 0) - (b.score || 0)
-      );
-    } else if (sortBy === "volume") {
-      arr.sort(
-        (a, b) =>
-          (b.volume || 0) - (a.volume || 0) ||
-          (b.score || 0) - (a.score || 0)
-      );
-    } else {
-      arr.sort(
-        (a, b) =>
-          (b.score || 0) - (a.score || 0) ||
-          (b.change_percent || 0) - (a.change_percent || 0) ||
-          (b.volume || 0) - (a.volume || 0)
+    if (searchTerm.trim()) {
+      const keyword = searchTerm.trim().toLowerCase();
+      result = result.filter(
+        (s) =>
+          s.symbol.toLowerCase().includes(keyword) ||
+          s.name.toLowerCase().includes(keyword)
       );
     }
+
+    return result;
+  }, [stocks, selectedCategory, searchTerm]);
+
+  const recommendedStocks = useMemo(() => {
+    const pool = stocks.filter((s) => s.category !== "etf");
+    return [...pool]
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, 10);
+  }, [stocks]);
+
+  const sortedStocks = useMemo(() => {
+    const arr = [...filteredStocks];
+
+    if (rankType === "up") {
+      arr.sort((a, b) => b.change_percent - a.change_percent);
+    } else if (rankType === "down") {
+      arr.sort((a, b) => a.change_percent - b.change_percent);
+    } else if (rankType === "volume") {
+      arr.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    }
+
     return arr;
-  }, [categoryFilteredStocks, sortBy]);
+  }, [filteredStocks, rankType]);
 
   const totalPages = Math.max(1, Math.ceil(sortedStocks.length / PAGE_SIZE));
+  const pagedStocks = sortedStocks.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
-  const pagedStocks = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return sortedStocks.slice(start, start + PAGE_SIZE);
-  }, [sortedStocks, page]);
-
-  const topRecommended = useMemo(() => {
-    return [...mergedStocks]
-      .sort(
-        (a, b) =>
-          (b.score || 0) - (a.score || 0) ||
-          (b.change_percent || 0) - (a.change_percent || 0) ||
-          (b.volume || 0) - (a.volume || 0)
-      )
-      .slice(0, 10);
-  }, [mergedStocks]);
-
-  const statusText = realtimeMeta?.ws_connected
-    ? "富邦即時連線中"
-    : "即時連線未完成";
-
-  const twseCount = marketMeta?.source_summary?.twse_count || 0;
-  const tpexCount = marketMeta?.source_summary?.tpex_count || 0;
+  const pageNumbers = useMemo(() => {
+    const pages: number[] = [];
+    const start = Math.max(1, currentPage - 2);
+    const end = Math.min(totalPages, currentPage + 2);
+    for (let i = start; i <= end; i++) pages.push(i);
+    return pages;
+  }, [currentPage, totalPages]);
 
   return (
-    <main className="page-shell">
-      <div className="page-header">
-        <div>
-          <h1>台股即時瀏覽系統</h1>
-          <p>全市場瀏覽 + 推薦分數 + 進出場輔助</p>
-        </div>
+    <main className="min-h-screen bg-[#031b3d] text-white px-4 py-6">
+      <div className="mx-auto max-w-7xl">
+        <h1 className="text-3xl font-bold mb-6">台股分類瀏覽</h1>
 
-        <div className="header-badges">
-          <span className="badge success">{statusText}</span>
-          <span className="badge">
-            市場資料：{marketMeta?.last_update || "載入中"}
-          </span>
-          <span className="badge">
-            即時資料：{realtimeMeta?.last_update || "載入中"}
-          </span>
+        <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
+          <div className="space-y-6">
+            <section className="rounded-2xl border border-blue-900 bg-[#062a57] p-4 shadow-lg">
+              <h2 className="text-2xl font-bold mb-4">價格分類 / 篩選</h2>
+
+              <div className="space-y-3">
+                {PRICE_CATEGORIES.map((category) => (
+                  <button
+                    key={category.key}
+                    onClick={() => setSelectedCategory(category.key)}
+                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                      selectedCategory === category.key
+                        ? "border-blue-400 bg-blue-800"
+                        : "border-blue-900 bg-white/5 hover:bg-white/10"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{category.label}</span>
+                      <span className="text-blue-200">({categoryCounts[category.key] || 0})</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-6 border-t border-blue-900 pt-4">
+                <input
+                  type="text"
+                  placeholder="搜尋股票代號 / 名稱"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full rounded-xl border border-blue-700 bg-[#0a356d] px-4 py-3 outline-none placeholder:text-blue-200"
+                />
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  onClick={() => setRankType("up")}
+                  className={`rounded-xl px-3 py-2 text-sm ${
+                    rankType === "up" ? "bg-blue-600" : "bg-white/10"
+                  }`}
+                >
+                  漲幅排序
+                </button>
+                <button
+                  onClick={() => setRankType("down")}
+                  className={`rounded-xl px-3 py-2 text-sm ${
+                    rankType === "down" ? "bg-blue-600" : "bg-white/10"
+                  }`}
+                >
+                  跌幅排序
+                </button>
+                <button
+                  onClick={() => setRankType("volume")}
+                  className={`rounded-xl px-3 py-2 text-sm ${
+                    rankType === "volume" ? "bg-blue-600" : "bg-white/10"
+                  }`}
+                >
+                  成交量排序
+                </button>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-blue-900 bg-[#062a57] p-4 shadow-lg">
+              <h2 className="text-2xl font-bold mb-4">推薦 10 檔</h2>
+
+              <div className="space-y-3">
+                {recommendedStocks.map((stock) => (
+                  <div
+                    key={stock.symbol}
+                    className="rounded-xl border border-blue-900 bg-white/5 p-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold">
+                          {stock.symbol} {stock.name}
+                        </div>
+                        <div className="text-sm text-blue-200">
+                          {stock.market} / 分數 {stock.score ?? 0}
+                        </div>
+                      </div>
+                      <div
+                        className={
+                          stock.change_percent >= 0 ? "text-red-400" : "text-green-400"
+                        }
+                      >
+                        {stock.change_percent >= 0 ? "+" : ""}
+                        {stock.change_percent}%
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <section className="rounded-2xl border border-blue-900 bg-[#062a57] p-4 shadow-lg overflow-hidden">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-2xl font-bold">
+                股票列表
+                <span className="ml-3 text-base font-normal text-blue-200">
+                  共 {sortedStocks.length} 檔
+                </span>
+              </h2>
+            </div>
+
+            {loading ? (
+              <div className="py-10 text-center text-blue-200">載入中...</div>
+            ) : pagedStocks.length === 0 ? (
+              <div className="py-10 text-center text-blue-200">查無資料</div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1100px] border-collapse">
+                    <thead>
+                      <tr className="border-b border-blue-900 text-left text-blue-200">
+                        <th className="px-3 py-3">代號</th>
+                        <th className="px-3 py-3">名稱</th>
+                        <th className="px-3 py-3">市場</th>
+                        <th className="px-3 py-3">價格</th>
+                        <th className="px-3 py-3">漲跌</th>
+                        <th className="px-3 py-3">漲跌幅</th>
+                        <th className="px-3 py-3">成交量</th>
+                        <th className="px-3 py-3">訊號</th>
+                        <th className="px-3 py-3">推薦分數</th>
+                        <th className="px-3 py-3">進場價</th>
+                        <th className="px-3 py-3">目標價</th>
+                        <th className="px-3 py-3">停損價</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pagedStocks.map((stock) => (
+                        <tr
+                          key={`${stock.market}-${stock.symbol}`}
+                          className="border-b border-blue-950/70 hover:bg-white/5"
+                        >
+                          <td className="px-3 py-3 font-semibold">{stock.symbol}</td>
+                          <td className="px-3 py-3">{stock.name}</td>
+                          <td className="px-3 py-3">{stock.market}</td>
+                          <td className="px-3 py-3">{stock.price}</td>
+                          <td
+                            className={`px-3 py-3 ${
+                              stock.change >= 0 ? "text-red-400" : "text-green-400"
+                            }`}
+                          >
+                            {stock.change >= 0 ? "+" : ""}
+                            {stock.change}
+                          </td>
+                          <td
+                            className={`px-3 py-3 ${
+                              stock.change_percent >= 0
+                                ? "text-red-400"
+                                : "text-green-400"
+                            }`}
+                          >
+                            {stock.change_percent >= 0 ? "+" : ""}
+                            {stock.change_percent}%
+                          </td>
+                          <td className="px-3 py-3">
+                            {(stock.volume || 0).toLocaleString()}
+                          </td>
+                          <td className="px-3 py-3">{stock.signal || "-"}</td>
+                          <td className="px-3 py-3">{stock.score ?? 0}</td>
+                          <td className="px-3 py-3">{stock.entry_price || "-"}</td>
+                          <td className="px-3 py-3">{stock.target_price || "-"}</td>
+                          <td className="px-3 py-3">{stock.stop_loss || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-40"
+                  >
+                    上一頁
+                  </button>
+
+                  {pageNumbers.map((page) => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`rounded-lg px-3 py-2 ${
+                        currentPage === page ? "bg-blue-600" : "bg-white/10"
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-40"
+                  >
+                    下一頁
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
         </div>
       </div>
-
-      <section className="top-grid">
-        <aside className="panel filter-panel">
-          <div className="panel-title-row">
-            <h2>價格分類 / 篩選</h2>
-          </div>
-
-          <div className="category-list">
-            {CATEGORIES.map((item) => (
-              <button
-                key={item.key}
-                className={selectedCategory === item.key ? "category active" : "category"}
-                onClick={() => setSelectedCategory(item.key)}
-              >
-                <span>{item.label}</span>
-                <small>({categoryCounts[item.key] || 0})</small>
-              </button>
-            ))}
-          </div>
-
-          <div className="filter-block">
-            <div className="field">
-              <label>搜尋股票</label>
-              <input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="輸入股票代碼或名稱"
-              />
-            </div>
-
-            <div className="field">
-              <label>排序方式</label>
-              <select
-                value={sortBy}
-                onChange={(e) =>
-                  setSortBy(e.target.value as "score" | "up" | "down" | "volume")
-                }
-              >
-                {SORT_OPTIONS.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="stats-row sidebar-stats">
-              <div className="stat-card">
-                <span className="stat-label">上市</span>
-                <strong>{twseCount}</strong>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">上櫃</span>
-                <strong>{tpexCount}</strong>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">目前分類</span>
-                <strong>{sortedStocks.length}</strong>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">即時連線</span>
-                <strong>{realtimeMeta?.ws_connected ? "正常" : "等待中"}</strong>
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        <section className="panel recommend-panel">
-          <div className="panel-title-row">
-            <h2>推薦 10 檔</h2>
-            <span className="mini-note">依推薦分數排序</span>
-          </div>
-
-          <div className="recommend-grid">
-            {topRecommended.map((stock) => (
-              <div key={stock.symbol} className="recommend-card">
-                <div className="recommend-top">
-                  <div>
-                    <div className="symbol-line">
-                      <strong>{stock.symbol}</strong>
-                      <span>{stock.name}</span>
-                    </div>
-                    <div className="mini-note">{stock.market || "-"}</div>
-                  </div>
-                  <div className="score-pill">分數 {stock.score || 0}</div>
-                </div>
-
-                <div className="recommend-price">
-                  <span className="price">${stock.price}</span>
-                  <span
-                    className={
-                      (stock.change_percent || 0) >= 0 ? "change up" : "change down"
-                    }
-                  >
-                    {stock.change_percent && stock.change_percent > 0 ? "+" : ""}
-                    {stock.change_percent || 0}%
-                  </span>
-                </div>
-
-                <div className="recommend-meta">
-                  <span>訊號：{stock.signal || "-"}</span>
-                  <span>進場：{stock.entry_price || "-"}</span>
-                  <span>目標：{stock.target_price || "-"}</span>
-                  <span>停損：{stock.stop_loss || "-"}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel table-panel">
-        <div className="panel-title-row">
-          <h2>股票列表</h2>
-          <div className="table-toolbar">
-            <span className="mini-note">
-              {loading ? "載入中..." : `共 ${sortedStocks.length} 檔`}
-            </span>
-
-            <div className="pagination">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-              >
-                ◀
-              </button>
-
-              {getPageNumbers(page, totalPages).map((p, idx) =>
-                p === "..." ? (
-                  <span key={idx} className="page-ellipsis">
-                    ...
-                  </span>
-                ) : (
-                  <button
-                    key={idx}
-                    className={p === page ? "page-btn active" : "page-btn"}
-                    onClick={() => setPage(p as number)}
-                  >
-                    {p}
-                  </button>
-                )
-              )}
-
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page === totalPages}
-              >
-                ▶
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="table-wrap">
-          <table className="stock-table">
-            <thead>
-              <tr>
-                <th>市場</th>
-                <th>代碼</th>
-                <th>名稱</th>
-                <th>現價</th>
-                <th>漲跌幅</th>
-                <th>成交量</th>
-                <th>訊號</th>
-                <th>分數</th>
-                <th>進場價</th>
-                <th>目標價</th>
-                <th>停損價</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pagedStocks.map((stock) => (
-                <tr key={`${stock.market}-${stock.symbol}`}>
-                  <td>{stock.market || "-"}</td>
-                  <td>{stock.symbol}</td>
-                  <td>{stock.name}</td>
-                  <td>{stock.price}</td>
-                  <td
-                    className={
-                      (stock.change_percent || 0) >= 0 ? "change up" : "change down"
-                    }
-                  >
-                    {(stock.change_percent || 0) > 0 ? "+" : ""}
-                    {stock.change_percent || 0}%
-                  </td>
-                  <td>{stock.volume || 0}</td>
-                  <td>{stock.signal || "-"}</td>
-                  <td>{stock.score || 0}</td>
-                  <td>{stock.entry_price || "-"}</td>
-                  <td>{stock.target_price || "-"}</td>
-                  <td>{stock.stop_loss || "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </main>
   );
 }
