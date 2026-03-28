@@ -277,8 +277,8 @@ export default function Home() {
         </div>
       </div>
 
-      <section className="top-grid two-col">
-        <aside className="panel">
+      <section className="top-grid">
+        <aside className="panel filter-panel">
           <div className="panel-title-row">
             <h2>價格分類 / 篩選</h2>
           </div>
@@ -343,7 +343,7 @@ export default function Home() {
           </div>
         </aside>
 
-        <section className="panel">
+        <section className="panel recommend-panel">
           <div className="panel-title-row">
             <h2>推薦 10 檔</h2>
             <span className="mini-note">依推薦分數排序</span>
