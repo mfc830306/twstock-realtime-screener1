@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Stock = {
+  market?: string;
   symbol: string;
   name: string;
   price: number;
@@ -14,250 +15,408 @@ type Stock = {
   entry_price?: string;
   target_price?: string;
   stop_loss?: string;
-  reason?: string;
-  prev_close?: number;
   open?: number;
   high?: number;
   low?: number;
+  prev_close?: number;
+  reference_price?: number;
   update_time?: string;
-  market?: string;
 };
 
-type ApiResponse = {
-  success?: boolean;
-  market_status?: string;
-  data_date?: string;
-  last_fetch_time?: string;
-  last_update?: string;
-  total?: number;
-  stocks?: Stock[];
-  message?: string;
+type MarketResponse = {
+  success: boolean;
+  data_date: string;
+  last_update: string;
+  market_status: string;
+  message: string;
+  total: number;
+  source_summary?: {
+    twse_count?: number;
+    tpex_count?: number;
+  };
+  stocks: Stock[];
 };
 
-const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
+type RealtimeResponse = {
+  success: boolean;
+  market_status: string;
+  data_date: string;
+  last_update: string;
+  message: string;
+  total: number;
+  stocks: Stock[];
+  ws_connected: boolean;
+};
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  "https://twstock-realtime-screener1.onrender.com";
+
+const CATEGORIES = [
+  { key: "all", label: "全部股票" },
+  { key: "0-10", label: "0 ~ 10" },
+  { key: "10-20", label: "10 ~ 20" },
+  { key: "20-50", label: "20 ~ 50" },
+  { key: "50-100", label: "50 ~ 100" },
+  { key: "100-200", label: "100 ~ 200" },
+  { key: "200-500", label: "200 ~ 500" },
+  { key: "500-1000", label: "500 ~ 1000" },
+  { key: "1000+", label: "1000 以上" },
+];
+
+const SORT_OPTIONS = [
+  { key: "score", label: "推薦分數" },
+  { key: "up", label: "漲幅" },
+  { key: "down", label: "跌幅" },
+  { key: "volume", label: "成交量" },
+] as const;
 
 export default function Home() {
-  const [stocks, setStocks] = useState<Stock[]>([]);
+  const [marketStocks, setMarketStocks] = useState<Stock[]>([]);
+  const [realtimeStocks, setRealtimeStocks] = useState<Stock[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [lastFetchTime, setLastFetchTime] = useState("--");
-  const [dataDate, setDataDate] = useState("--");
-  const [marketStatus, setMarketStatus] = useState("--");
+  const [sortBy, setSortBy] = useState<"score" | "up" | "down" | "volume">("score");
+  const [marketMeta, setMarketMeta] = useState<MarketResponse | null>(null);
+  const [realtimeMeta, setRealtimeMeta] = useState<RealtimeResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchStocks = async () => {
+  async function fetchMarket(category = selectedCategory, sort = sortBy, q = searchTerm) {
+    const url = `${BACKEND_URL}/market?category=${encodeURIComponent(
+      category
+    )}&sort_by=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=5000`;
+
+    const res = await fetch(url, { cache: "no-store" });
+    const data: MarketResponse = await res.json();
+    setMarketStocks(data.stocks || []);
+    setMarketMeta(data);
+  }
+
+  async function fetchRealtime() {
+    const res = await fetch(`${BACKEND_URL}/stocks`, { cache: "no-store" });
+    const data: RealtimeResponse = await res.json();
+    setRealtimeStocks(data.stocks || []);
+    setRealtimeMeta(data);
+  }
+
+  async function loadAll() {
     try {
       setLoading(true);
-      const res = await fetch(BACKEND_URL, { cache: "no-store" });
-      const data: ApiResponse = await res.json();
-
-      setStocks(Array.isArray(data.stocks) ? data.stocks : []);
-      setLastFetchTime(data.last_fetch_time || "--");
-      setDataDate(data.data_date || "--");
-      setMarketStatus(data.market_status || "--");
-    } catch (error) {
-      setStocks([]);
-      setLastFetchTime("--");
-      setDataDate("--");
-      setMarketStatus("讀取失敗");
+      await Promise.all([fetchMarket("all", sortBy, searchTerm), fetchRealtime()]);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
-    fetchStocks();
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isETF = (s: Stock) => {
-    return s.symbol.startsWith("00") || s.name.includes("ETF");
-  };
+  useEffect(() => {
+    fetchMarket(selectedCategory, sortBy, searchTerm);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategory, sortBy]);
 
-  const categories = [
-    { key: "all", label: "全部股票" },
-    { key: "0to50", label: "0~50" },
-    { key: "50to100", label: "50~100" },
-    { key: "100to200", label: "100~200" },
-    { key: "200plus", label: "200+" },
-  ];
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchMarket(selectedCategory, sortBy, searchTerm);
+    }, 350);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm]);
 
-  const searchedStocks = useMemo(() => {
-    if (!searchTerm) return stocks;
-    return stocks.filter(
-      (s) =>
-        s.symbol.includes(searchTerm) ||
-        s.name.includes(searchTerm)
-    );
-  }, [stocks, searchTerm]);
+  useEffect(() => {
+    const realtimeTimer = setInterval(() => {
+      fetchRealtime();
+    }, 15000);
 
-  const filterCategory = (s: Stock) => {
-    if (selectedCategory === "all") return true;
+    const marketTimer = setInterval(() => {
+      fetchMarket(selectedCategory, sortBy, searchTerm);
+    }, 60000);
 
-    if (isETF(s)) return false;
+    return () => {
+      clearInterval(realtimeTimer);
+      clearInterval(marketTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategory, sortBy, searchTerm]);
 
-    if (selectedCategory === "0to50") return s.price < 50;
-    if (selectedCategory === "50to100") return s.price >= 50 && s.price < 100;
-    if (selectedCategory === "100to200") return s.price >= 100 && s.price < 200;
-    if (selectedCategory === "200plus") return s.price >= 200;
+  const realtimeMap = useMemo(() => {
+    const map = new Map<string, Stock>();
+    realtimeStocks.forEach((s) => map.set(s.symbol, s));
+    return map;
+  }, [realtimeStocks]);
 
-    return true;
-  };
+  const mergedStocks = useMemo(() => {
+    return marketStocks.map((stock) => {
+      const rt = realtimeMap.get(stock.symbol);
+      return rt
+        ? {
+            ...stock,
+            ...rt,
+            market: stock.market,
+          }
+        : stock;
+    });
+  }, [marketStocks, realtimeMap]);
 
-  const filteredStocks = useMemo(() => {
-    return searchedStocks
-      .filter(filterCategory)
-      .sort((a, b) => (b.score || 0) - (a.score || 0));
-  }, [searchedStocks, selectedCategory]);
+  const topRecommended = useMemo(() => {
+    return [...mergedStocks]
+      .sort(
+        (a, b) =>
+          (b.score || 0) - (a.score || 0) ||
+          (b.change_percent || 0) - (a.change_percent || 0) ||
+          (b.volume || 0) - (a.volume || 0)
+      )
+      .slice(0, 10);
+  }, [mergedStocks]);
 
-  const top10 = useMemo(() => {
-    return filteredStocks.slice(0, 10);
-  }, [filteredStocks]);
+  const statusText = realtimeMeta?.ws_connected
+    ? "富邦即時連線中"
+    : "即時連線未完成";
 
-  const formatPercent = (v?: number) =>
-    v !== undefined ? `${v}%` : "--";
-
-  const getClass = (v?: number) =>
-    (v || 0) >= 0 ? "up" : "down";
+  const marketCount = marketMeta?.total || 0;
+  const allCount = marketMeta?.total || 0;
+  const twseCount = marketMeta?.source_summary?.twse_count || 0;
+  const tpexCount = marketMeta?.source_summary?.tpex_count || 0;
 
   return (
-    <div className="dashboard">
-      <aside className="sidebar">
-        <div className="brandCard">
-          <div className="brandTitle">台股智慧選股</div>
-          <div className="brandSub">盤中選股系統</div>
+    <main className="page-shell">
+      <div className="page-header">
+        <div>
+          <h1>台股即時瀏覽系統</h1>
+          <p>
+            全市場瀏覽 + 富邦即時觀察股 + 推薦分數 + 進出場輔助
+          </p>
         </div>
 
-        <div className="sideCard">
-          <div className="sideTitle">狀態</div>
+        <div className="header-badges">
+          <span className="badge success">{statusText}</span>
+          <span className="badge">
+            市場資料：{marketMeta?.last_update || "載入中"}
+          </span>
+          <span className="badge">
+            即時資料：{realtimeMeta?.last_update || "載入中"}
+          </span>
+        </div>
+      </div>
 
-          <div className="statusRow">
-            <span className="statusDot" />
-            <span className="statusText">{marketStatus}</span>
+      <section className="top-grid">
+        <div className="panel controls-panel">
+          <div className="panel-title-row">
+            <h2>篩選與狀態</h2>
           </div>
 
-          <div className="sideLabel">資料日期</div>
-          <div className="sideValue">{dataDate}</div>
-
-          <div className="sideLabel">抓取時間</div>
-          <div className="sideValue">{lastFetchTime}</div>
-        </div>
-
-        <div className="sideCard">
-          <div className="sideTitle">價格分類</div>
-
-          <div className="categoryStack">
-            {categories.map((c) => (
-              <button
-                key={c.key}
-                className={`sideCategoryBtn ${
-                  selectedCategory === c.key ? "active" : ""
-                }`}
-                onClick={() => setSelectedCategory(c.key)}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="sideCard">
-          <div className="sideTitle">統計</div>
-          <div className="sideValue">總數：{filteredStocks.length}</div>
-        </div>
-      </aside>
-
-      <main className="mainContent">
-        <section className="heroCard">
-          <div className="heroTop">
-            <div>
-              <h1 className="pageTitle">股票列表</h1>
-              <p className="pageDesc">資料已分離：交易日 / 抓取時間</p>
-            </div>
-
-            <div className="searchArea">
+          <div className="controls-grid">
+            <div className="field">
+              <label>搜尋股票</label>
               <input
-                className="searchInput"
-                placeholder="輸入代號或名稱"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="輸入股票代碼或名稱"
               />
-              <button className="refreshBtn" onClick={fetchStocks}>
-                立即更新
-              </button>
+            </div>
+
+            <div className="field">
+              <label>排序方式</label>
+              <select
+                value={sortBy}
+                onChange={(e) =>
+                  setSortBy(e.target.value as "score" | "up" | "down" | "volume")
+                }
+              >
+                {SORT_OPTIONS.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
-          <div className="infoBar">
-            {loading ? "更新中..." : `資料日期：${dataDate}`}
+          <div className="stats-row">
+            <div className="stat-card">
+              <span className="stat-label">目前列表</span>
+              <strong>{marketCount}</strong>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">上市</span>
+              <strong>{twseCount}</strong>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">上櫃</span>
+              <strong>{tpexCount}</strong>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">觀察股</span>
+              <strong>{realtimeStocks.length}</strong>
+            </div>
           </div>
-        </section>
+        </div>
 
-        <section className="recommendCard">
-          <div className="sectionHeader">
-            <h2>推薦前 10 檔</h2>
+        <div className="panel">
+          <div className="panel-title-row">
+            <h2>推薦 10 檔</h2>
+            <span className="mini-note">依推薦分數排序</span>
           </div>
 
-          <div className="recommendList">
-            {top10.map((s, i) => (
-              <div key={i} className="recommendItem">
-                <div className="recommendMain">
-                  #{i + 1} {s.symbol} {s.name}
-                </div>
-
-                <div>
-                  <div>{s.price}</div>
-                  <div className={getClass(s.change_percent)}>
-                    {formatPercent(s.change_percent)}
+          <div className="recommend-grid">
+            {topRecommended.map((stock) => (
+              <div key={stock.symbol} className="recommend-card">
+                <div className="recommend-top">
+                  <div>
+                    <div className="symbol-line">
+                      <strong>{stock.symbol}</strong>
+                      <span>{stock.name}</span>
+                    </div>
+                    <div className="mini-note">{stock.market || "-"}</div>
                   </div>
+                  <div className="score-pill">分數 {stock.score || 0}</div>
                 </div>
 
-                <div>
-                  分數：{s.score}<br />
-                  進場：{s.entry_price}<br />
-                  目標：{s.target_price}<br />
-                  停損：{s.stop_loss}
+                <div className="recommend-price">
+                  <span className="price">${stock.price}</span>
+                  <span
+                    className={
+                      (stock.change_percent || 0) >= 0 ? "change up" : "change down"
+                    }
+                  >
+                    {stock.change_percent && stock.change_percent > 0 ? "+" : ""}
+                    {stock.change_percent || 0}%
+                  </span>
                 </div>
 
-                <div className="recommendReason">
-                  {s.reason}
+                <div className="recommend-meta">
+                  <span>訊號：{stock.signal || "-"}</span>
+                  <span>進場：{stock.entry_price || "-"}</span>
+                  <span>目標：{stock.target_price || "-"}</span>
+                  <span>停損：{stock.stop_loss || "-"}</span>
                 </div>
               </div>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="tableCard">
-          <div className="tableWrap">
-            <table className="stockTable">
+      <section className="content-grid">
+        <aside className="panel sidebar">
+          <div className="panel-title-row">
+            <h2>價格分類</h2>
+          </div>
+
+          <div className="category-list">
+            {CATEGORIES.map((item) => (
+              <button
+                key={item.key}
+                className={selectedCategory === item.key ? "category active" : "category"}
+                onClick={() => setSelectedCategory(item.key)}
+              >
+                <span>{item.label}</span>
+                {item.key === "all" && <small>{allCount}</small>}
+              </button>
+            ))}
+          </div>
+
+          <div className="sidebar-note">
+            <p>重新開網頁預設就是「全部股票」。</p>
+            <p>手機版會自動改成上下排列，不會超出畫面。</p>
+          </div>
+        </aside>
+
+        <section className="panel table-panel">
+          <div className="panel-title-row">
+            <h2>股票列表</h2>
+            <div className="mini-note">
+              {loading ? "載入中..." : `共 ${mergedStocks.length} 檔`}
+            </div>
+          </div>
+
+          <div className="table-wrap">
+            <table className="stock-table">
               <thead>
                 <tr>
                   <th>市場</th>
-                  <th>代號</th>
+                  <th>代碼</th>
                   <th>名稱</th>
-                  <th>價格</th>
+                  <th>現價</th>
                   <th>漲跌幅</th>
                   <th>成交量</th>
+                  <th>訊號</th>
+                  <th>分數</th>
+                  <th>進場價</th>
+                  <th>目標價</th>
+                  <th>停損價</th>
                 </tr>
               </thead>
-
               <tbody>
-                {filteredStocks.map((s, i) => (
-                  <tr key={i}>
-                    <td>{s.market}</td>
-                    <td>{s.symbol}</td>
-                    <td>{s.name}</td>
-                    <td>{s.price}</td>
-                    <td className={getClass(s.change_percent)}>
-                      {formatPercent(s.change_percent)}
+                {mergedStocks.map((stock) => (
+                  <tr key={`${stock.market}-${stock.symbol}`}>
+                    <td>{stock.market || "-"}</td>
+                    <td>{stock.symbol}</td>
+                    <td>{stock.name}</td>
+                    <td>{stock.price}</td>
+                    <td
+                      className={
+                        (stock.change_percent || 0) >= 0 ? "change up" : "change down"
+                      }
+                    >
+                      {(stock.change_percent || 0) > 0 ? "+" : ""}
+                      {stock.change_percent || 0}%
                     </td>
-                    <td>{s.volume}</td>
+                    <td>{stock.volume || 0}</td>
+                    <td>{stock.signal || "-"}</td>
+                    <td>{stock.score || 0}</td>
+                    <td>{stock.entry_price || "-"}</td>
+                    <td>{stock.target_price || "-"}</td>
+                    <td>{stock.stop_loss || "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </section>
-      </main>
-    </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-title-row">
+          <h2>即時觀察股</h2>
+          <span className="mini-note">
+            富邦 WebSocket：{realtimeMeta?.ws_connected ? "已連線" : "未連線"}
+          </span>
+        </div>
+
+        <div className="realtime-grid">
+          {realtimeStocks.map((stock) => (
+            <div key={stock.symbol} className="realtime-card">
+              <div className="symbol-line">
+                <strong>{stock.symbol}</strong>
+                <span>{stock.name}</span>
+              </div>
+
+              <div className="recommend-price">
+                <span className="price">${stock.price}</span>
+                <span
+                  className={
+                    (stock.change_percent || 0) >= 0 ? "change up" : "change down"
+                  }
+                >
+                  {(stock.change_percent || 0) > 0 ? "+" : ""}
+                  {stock.change_percent || 0}%
+                </span>
+              </div>
+
+              <div className="recommend-meta">
+                <span>訊號：{stock.signal || "-"}</span>
+                <span>成交量：{stock.volume || 0}</span>
+                <span>進場：{stock.entry_price || "-"}</span>
+                <span>目標：{stock.target_price || "-"}</span>
+                <span>停損：{stock.stop_loss || "-"}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </main>
   );
 }
