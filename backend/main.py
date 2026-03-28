@@ -131,6 +131,24 @@ def ensure_default_rows():
                 }
 
 
+def safe_float(v, default=0.0):
+    try:
+        if v in ("", None):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def safe_int(v, default=0):
+    try:
+        if v in ("", None):
+            return default
+        return int(float(v))
+    except Exception:
+        return default
+
+
 def update_stock_from_marketdata(item: Dict[str, Any]) -> None:
     symbol = str(item.get("symbol", "")).strip()
     if not symbol:
@@ -153,25 +171,27 @@ def update_stock_from_marketdata(item: Dict[str, Any]) -> None:
     change = item.get("change", 0) or 0
     change_percent = item.get("changePercent", 0) or 0
 
+    total = item.get("total", {}) if isinstance(item.get("total"), dict) else {}
     volume = (
         item.get("volume")
         or item.get("totalVolume")
         or item.get("tradeVolume")
+        or total.get("tradeVolume")
         or 0
     )
 
     row = {
         "symbol": symbol,
         "name": name,
-        "price": float(last_price) if last_price not in ("", None) else 0,
-        "change": float(change) if change not in ("", None) else 0,
-        "change_percent": float(change_percent) if change_percent not in ("", None) else 0,
-        "volume": int(volume) if str(volume).replace(".", "", 1).isdigit() else 0,
-        "open": float(open_price) if open_price not in ("", None) else 0,
-        "high": float(high_price) if high_price not in ("", None) else 0,
-        "low": float(low_price) if low_price not in ("", None) else 0,
-        "prev_close": float(previous_close) if previous_close not in ("", None) else 0,
-        "reference_price": float(reference_price) if reference_price not in ("", None) else 0,
+        "price": safe_float(last_price),
+        "change": safe_float(change),
+        "change_percent": safe_float(change_percent),
+        "volume": safe_int(volume),
+        "open": safe_float(open_price),
+        "high": safe_float(high_price),
+        "low": safe_float(low_price),
+        "prev_close": safe_float(previous_close),
+        "reference_price": safe_float(reference_price),
         "update_time": now_str(),
     }
 
@@ -189,16 +209,37 @@ def handle_message(message):
         else:
             payload = message
 
+        if not isinstance(payload, dict):
+            print("未處理訊息:", payload)
+            return
+
         event = payload.get("event")
-        data = payload.get("data", {})
+        data = payload.get("data")
 
         if event == "subscribed":
-            sub_id = data.get("id")
-            symbol = data.get("symbol")
-            if sub_id and sub_id not in state["channel_ids"]:
-                state["channel_ids"].append(sub_id)
-            if symbol and symbol not in state["subscribed"]:
-                state["subscribed"].append(symbol)
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+
+                    sub_id = item.get("id")
+                    symbol = item.get("symbol")
+
+                    if sub_id and sub_id not in state["channel_ids"]:
+                        state["channel_ids"].append(sub_id)
+
+                    if symbol and symbol not in state["subscribed"]:
+                        state["subscribed"].append(symbol)
+            elif isinstance(data, dict):
+                sub_id = data.get("id")
+                symbol = data.get("symbol")
+
+                if sub_id and sub_id not in state["channel_ids"]:
+                    state["channel_ids"].append(sub_id)
+
+                if symbol and symbol not in state["subscribed"]:
+                    state["subscribed"].append(symbol)
+
             state["last_update"] = now_str()
             state["message"] = f"已訂閱 {len(state['subscribed'])} 檔股票"
             print("訂閱成功:", payload)
@@ -209,6 +250,10 @@ def handle_message(message):
             return
 
         if event == "heartbeat":
+            state["last_update"] = now_str()
+            return
+
+        if event == "pong":
             state["last_update"] = now_str()
             return
 
@@ -225,7 +270,7 @@ def handle_message(message):
             print("WebSocket error:", payload)
             return
 
-        if event == "data":
+        if event in ["snapshot", "data"]:
             if isinstance(data, dict):
                 update_stock_from_marketdata(data)
                 state["market_status"] = "即時行情中"
@@ -262,7 +307,6 @@ def handle_error(error):
 def connect_realtime_and_subscribe():
     global stock_ws
 
-    # 官方文件的接法：init_realtime -> stock.on('message') -> connect() -> subscribe()
     sdk.init_realtime(Mode.Normal)
     stock_ws = sdk.marketdata.websocket_client.stock
 
