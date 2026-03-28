@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "台股即時選股系統",
-  description: "TWSE 上市股票分類、搜尋、推薦排序與進出場規劃",
+  title: "台股分類瀏覽",
+  description: "台股分類、搜尋、排序與推薦",
 };
 
 export default function RootLayout({
