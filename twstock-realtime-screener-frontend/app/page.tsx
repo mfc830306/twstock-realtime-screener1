@@ -19,6 +19,10 @@ type Stock = {
   category?: "stock" | "etf";
 };
 
+<div className="bg-red-500 text-white p-5 text-2xl">
+  測試 Tailwind
+</div>
+
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
 const PAGE_SIZE = 20;
 
