@@ -19,10 +19,6 @@ type Stock = {
   category?: "stock" | "etf";
 };
 
-<div className="bg-red-500 text-white p-5 text-2xl">
-  測試 Tailwind
-</div>
-
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
 const PAGE_SIZE = 20;
 
@@ -46,23 +42,31 @@ export default function Home() {
   const [rankType, setRankType] = useState<"up" | "down" | "volume">("up");
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [errorText, setErrorText] = useState("");
 
   useEffect(() => {
     fetch(BACKEND_URL)
       .then((res) => res.json())
       .then((data) => {
-        setStocks(data.stocks || []);
+        if (data?.success) {
+          setStocks(data.stocks || []);
+          setErrorText("");
+        } else {
+          setStocks([]);
+          setErrorText("後端回傳失敗");
+        }
       })
       .catch((err) => {
         console.error("讀取股票資料失敗:", err);
         setStocks([]);
+        setErrorText("無法連線到後端，請稍後再試");
       })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, searchTerm]);
+  }, [selectedCategory, searchTerm, rankType]);
 
   const getCategoryStocks = (categoryKey: string) => {
     switch (categoryKey) {
@@ -71,19 +75,33 @@ export default function Home() {
       case "etf":
         return stocks.filter((s) => s.category === "etf" || s.market === "ETF");
       case "0-10":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 0 && s.price < 10);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 0 && s.price < 10
+        );
       case "10-20":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 10 && s.price < 20);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 10 && s.price < 20
+        );
       case "20-50":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 20 && s.price < 50);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 20 && s.price < 50
+        );
       case "50-100":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 50 && s.price < 100);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 50 && s.price < 100
+        );
       case "100-200":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 100 && s.price < 200);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 100 && s.price < 200
+        );
       case "200-500":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 200 && s.price < 500);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 200 && s.price < 500
+        );
       case "500-1000":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 500 && s.price < 1000);
+        return stocks.filter(
+          (s) => s.category !== "etf" && s.price >= 500 && s.price < 1000
+        );
       case "1000+":
         return stocks.filter((s) => s.category !== "etf" && s.price >= 1000);
       default:
@@ -128,7 +146,7 @@ export default function Home() {
       arr.sort((a, b) => b.change_percent - a.change_percent);
     } else if (rankType === "down") {
       arr.sort((a, b) => a.change_percent - b.change_percent);
-    } else if (rankType === "volume") {
+    } else {
       arr.sort((a, b) => (b.volume || 0) - (a.volume || 0));
     }
 
@@ -136,228 +154,222 @@ export default function Home() {
   }, [filteredStocks, rankType]);
 
   const totalPages = Math.max(1, Math.ceil(sortedStocks.length / PAGE_SIZE));
-  const pagedStocks = sortedStocks.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE
-  );
+
+  const pagedStocks = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return sortedStocks.slice(start, start + PAGE_SIZE);
+  }, [sortedStocks, currentPage]);
 
   const pageNumbers = useMemo(() => {
     const pages: number[] = [];
-    const start = Math.max(1, currentPage - 2);
-    const end = Math.min(totalPages, currentPage + 2);
-    for (let i = start; i <= end; i++) pages.push(i);
+    let start = Math.max(1, currentPage - 2);
+    let end = Math.min(totalPages, currentPage + 2);
+
+    if (currentPage <= 3) end = Math.min(totalPages, 5);
+    if (currentPage >= totalPages - 2) start = Math.max(1, totalPages - 4);
+
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
     return pages;
   }, [currentPage, totalPages]);
 
   return (
-    <main className="min-h-screen bg-[#031b3d] text-white px-4 py-6">
-      <div className="mx-auto max-w-7xl">
-        <h1 className="text-3xl font-bold mb-6">台股分類瀏覽</h1>
+    <main className="page">
+      <div className="container">
+        <header className="hero">
+          <h1>台股分類瀏覽</h1>
+          <p>上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦</p>
+        </header>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
-          <div className="space-y-6">
-            <section className="rounded-2xl border border-blue-900 bg-[#062a57] p-4 shadow-lg">
-              <h2 className="text-2xl font-bold mb-4">價格分類 / 篩選</h2>
+        <div className="top-grid">
+          <section className="panel left-panel">
+            <h2>價格分類 / 篩選</h2>
 
-              <div className="space-y-3">
-                {PRICE_CATEGORIES.map((category) => (
-                  <button
-                    key={category.key}
-                    onClick={() => setSelectedCategory(category.key)}
-                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                      selectedCategory === category.key
-                        ? "border-blue-400 bg-blue-800"
-                        : "border-blue-900 bg-white/5 hover:bg-white/10"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold">{category.label}</span>
-                      <span className="text-blue-200">({categoryCounts[category.key] || 0})</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-6 border-t border-blue-900 pt-4">
-                <input
-                  type="text"
-                  placeholder="搜尋股票代號 / 名稱"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full rounded-xl border border-blue-700 bg-[#0a356d] px-4 py-3 outline-none placeholder:text-blue-200"
-                />
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
+            <div className="category-list">
+              {PRICE_CATEGORIES.map((category) => (
                 <button
-                  onClick={() => setRankType("up")}
-                  className={`rounded-xl px-3 py-2 text-sm ${
-                    rankType === "up" ? "bg-blue-600" : "bg-white/10"
+                  key={category.key}
+                  type="button"
+                  onClick={() => setSelectedCategory(category.key)}
+                  className={`category-btn ${
+                    selectedCategory === category.key ? "active" : ""
                   }`}
                 >
-                  漲幅排序
+                  <span>{category.label}</span>
+                  <span className="count">({categoryCounts[category.key] || 0})</span>
                 </button>
-                <button
-                  onClick={() => setRankType("down")}
-                  className={`rounded-xl px-3 py-2 text-sm ${
-                    rankType === "down" ? "bg-blue-600" : "bg-white/10"
-                  }`}
-                >
-                  跌幅排序
-                </button>
-                <button
-                  onClick={() => setRankType("volume")}
-                  className={`rounded-xl px-3 py-2 text-sm ${
-                    rankType === "volume" ? "bg-blue-600" : "bg-white/10"
-                  }`}
-                >
-                  成交量排序
-                </button>
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-blue-900 bg-[#062a57] p-4 shadow-lg">
-              <h2 className="text-2xl font-bold mb-4">推薦 10 檔</h2>
-
-              <div className="space-y-3">
-                {recommendedStocks.map((stock) => (
-                  <div
-                    key={stock.symbol}
-                    className="rounded-xl border border-blue-900 bg-white/5 p-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-bold">
-                          {stock.symbol} {stock.name}
-                        </div>
-                        <div className="text-sm text-blue-200">
-                          {stock.market} / 分數 {stock.score ?? 0}
-                        </div>
-                      </div>
-                      <div
-                        className={
-                          stock.change_percent >= 0 ? "text-red-400" : "text-green-400"
-                        }
-                      >
-                        {stock.change_percent >= 0 ? "+" : ""}
-                        {stock.change_percent}%
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-
-          <section className="rounded-2xl border border-blue-900 bg-[#062a57] p-4 shadow-lg overflow-hidden">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-2xl font-bold">
-                股票列表
-                <span className="ml-3 text-base font-normal text-blue-200">
-                  共 {sortedStocks.length} 檔
-                </span>
-              </h2>
+              ))}
             </div>
 
-            {loading ? (
-              <div className="py-10 text-center text-blue-200">載入中...</div>
-            ) : pagedStocks.length === 0 ? (
-              <div className="py-10 text-center text-blue-200">查無資料</div>
-            ) : (
-              <>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1100px] border-collapse">
-                    <thead>
-                      <tr className="border-b border-blue-900 text-left text-blue-200">
-                        <th className="px-3 py-3">代號</th>
-                        <th className="px-3 py-3">名稱</th>
-                        <th className="px-3 py-3">市場</th>
-                        <th className="px-3 py-3">價格</th>
-                        <th className="px-3 py-3">漲跌</th>
-                        <th className="px-3 py-3">漲跌幅</th>
-                        <th className="px-3 py-3">成交量</th>
-                        <th className="px-3 py-3">訊號</th>
-                        <th className="px-3 py-3">推薦分數</th>
-                        <th className="px-3 py-3">進場價</th>
-                        <th className="px-3 py-3">目標價</th>
-                        <th className="px-3 py-3">停損價</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pagedStocks.map((stock) => (
-                        <tr
-                          key={`${stock.market}-${stock.symbol}`}
-                          className="border-b border-blue-950/70 hover:bg-white/5"
-                        >
-                          <td className="px-3 py-3 font-semibold">{stock.symbol}</td>
-                          <td className="px-3 py-3">{stock.name}</td>
-                          <td className="px-3 py-3">{stock.market}</td>
-                          <td className="px-3 py-3">{stock.price}</td>
-                          <td
-                            className={`px-3 py-3 ${
-                              stock.change >= 0 ? "text-red-400" : "text-green-400"
-                            }`}
-                          >
-                            {stock.change >= 0 ? "+" : ""}
-                            {stock.change}
-                          </td>
-                          <td
-                            className={`px-3 py-3 ${
-                              stock.change_percent >= 0
-                                ? "text-red-400"
-                                : "text-green-400"
-                            }`}
-                          >
-                            {stock.change_percent >= 0 ? "+" : ""}
-                            {stock.change_percent}%
-                          </td>
-                          <td className="px-3 py-3">
-                            {(stock.volume || 0).toLocaleString()}
-                          </td>
-                          <td className="px-3 py-3">{stock.signal || "-"}</td>
-                          <td className="px-3 py-3">{stock.score ?? 0}</td>
-                          <td className="px-3 py-3">{stock.entry_price || "-"}</td>
-                          <td className="px-3 py-3">{stock.target_price || "-"}</td>
-                          <td className="px-3 py-3">{stock.stop_loss || "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            <div className="search-box">
+              <input
+                type="text"
+                placeholder="搜尋股票代號 / 名稱"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
 
-                <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-                  <button
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                    className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-40"
-                  >
-                    上一頁
-                  </button>
+            <div className="sort-row">
+              <button
+                type="button"
+                className={rankType === "up" ? "sort-btn active" : "sort-btn"}
+                onClick={() => setRankType("up")}
+              >
+                漲幅排序
+              </button>
+              <button
+                type="button"
+                className={rankType === "down" ? "sort-btn active" : "sort-btn"}
+                onClick={() => setRankType("down")}
+              >
+                跌幅排序
+              </button>
+              <button
+                type="button"
+                className={rankType === "volume" ? "sort-btn active" : "sort-btn"}
+                onClick={() => setRankType("volume")}
+              >
+                成交量排序
+              </button>
+            </div>
+          </section>
 
-                  {pageNumbers.map((page) => (
-                    <button
-                      key={page}
-                      onClick={() => setCurrentPage(page)}
-                      className={`rounded-lg px-3 py-2 ${
-                        currentPage === page ? "bg-blue-600" : "bg-white/10"
-                      }`}
+          <section className="panel recommend-panel">
+            <h2>推薦 10 檔</h2>
+
+            <div className="recommend-list">
+              {recommendedStocks.map((stock) => (
+                <div key={stock.symbol} className="recommend-card">
+                  <div className="recommend-top">
+                    <div>
+                      <div className="recommend-title">
+                        {stock.symbol} {stock.name}
+                      </div>
+                      <div className="recommend-sub">
+                        {stock.market} / 分數 {stock.score ?? 0}
+                      </div>
+                    </div>
+                    <div
+                      className={
+                        stock.change_percent >= 0
+                          ? "up-text recommend-change"
+                          : "down-text recommend-change"
+                      }
                     >
-                      {page}
-                    </button>
-                  ))}
-
-                  <button
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                    className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-40"
-                  >
-                    下一頁
-                  </button>
+                      {stock.change_percent >= 0 ? "+" : ""}
+                      {stock.change_percent}%
+                    </div>
+                  </div>
                 </div>
-              </>
-            )}
+              ))}
+            </div>
           </section>
         </div>
+
+        <section className="panel list-panel">
+          <div className="list-header">
+            <div>
+              <h2>股票列表</h2>
+              <div className="list-subtitle">
+                目前分類：{
+                  PRICE_CATEGORIES.find((x) => x.key === selectedCategory)?.label
+                }　/　共 {sortedStocks.length} 檔
+              </div>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="status-box">資料載入中...</div>
+          ) : errorText ? (
+            <div className="status-box error">{errorText}</div>
+          ) : pagedStocks.length === 0 ? (
+            <div className="status-box">查無資料</div>
+          ) : (
+            <>
+              <div className="table-wrap">
+                <table className="stock-table">
+                  <thead>
+                    <tr>
+                      <th>代號</th>
+                      <th>名稱</th>
+                      <th>市場</th>
+                      <th>價格</th>
+                      <th>漲跌</th>
+                      <th>漲跌幅</th>
+                      <th>成交量</th>
+                      <th>訊號</th>
+                      <th>分數</th>
+                      <th>進場價</th>
+                      <th>目標價</th>
+                      <th>停損價</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedStocks.map((stock) => (
+                      <tr key={`${stock.market}-${stock.symbol}`}>
+                        <td>{stock.symbol}</td>
+                        <td>{stock.name}</td>
+                        <td>{stock.market}</td>
+                        <td>{stock.price}</td>
+                        <td className={stock.change >= 0 ? "up-text" : "down-text"}>
+                          {stock.change >= 0 ? "+" : ""}
+                          {stock.change}
+                        </td>
+                        <td
+                          className={
+                            stock.change_percent >= 0 ? "up-text" : "down-text"
+                          }
+                        >
+                          {stock.change_percent >= 0 ? "+" : ""}
+                          {stock.change_percent}%
+                        </td>
+                        <td>{(stock.volume || 0).toLocaleString()}</td>
+                        <td>{stock.signal || "-"}</td>
+                        <td>{stock.score ?? 0}</td>
+                        <td>{stock.entry_price || "-"}</td>
+                        <td>{stock.target_price || "-"}</td>
+                        <td>{stock.stop_loss || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="pagination">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="page-btn"
+                >
+                  上一頁
+                </button>
+
+                {pageNumbers.map((page) => (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    className={currentPage === page ? "page-btn active" : "page-btn"}
+                  >
+                    {page}
+                  </button>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="page-btn"
+                >
+                  下一頁
+                </button>
+              </div>
+            </>
+          )}
+        </section>
       </div>
     </main>
   );
