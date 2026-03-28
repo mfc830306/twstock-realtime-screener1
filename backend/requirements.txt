@@ -1,6 +1,4 @@
 fastapi
 uvicorn
-requests
-pandas
-lxml
-html5lib
+fubon-neo
+python-multipart
