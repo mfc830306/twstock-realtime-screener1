@@ -16,7 +16,7 @@ app.add_middleware(
 
 def safe_float(v, default=0.0):
     try:
-        if v in [None, "", "-", "--", "----"]:
+        if v in [None, "", "-", "--", "----", "除權息"]:
             return default
         return float(str(v).replace(",", "").strip())
     except:
@@ -90,13 +90,12 @@ def build_stop(price: float) -> str:
     return str(round(price * 0.97, 2))
 
 
-def is_valid_symbol(symbol: str) -> bool:
+def is_stock_symbol(symbol: str) -> bool:
     return symbol.isdigit() and len(symbol) == 4
 
 
 def is_etf_symbol(symbol: str) -> bool:
-    # 台股 ETF 常見代碼多為 4~6 碼，這裡先用 4~6 碼純數字
-    return symbol.isdigit() and 4 <= len(symbol) <= 6
+    return symbol.isdigit() and 4 <= len(symbol) <= 6 and symbol.startswith("00")
 
 
 def normalize_stock(
@@ -125,11 +124,11 @@ def normalize_stock(
         "entry_price": build_entry(price),
         "target_price": build_target(price),
         "stop_loss": build_stop(price),
-        "category": category,  # stock / etf
+        "category": category,
     }
 
 
-def fetch_twse() -> List[Dict[str, Any]]:
+def fetch_twse_stocks() -> List[Dict[str, Any]]:
     stocks = []
     url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 
@@ -142,8 +141,7 @@ def fetch_twse() -> List[Dict[str, Any]]:
             symbol = str(s.get("Code", "")).strip()
             name = str(s.get("Name", "")).strip()
 
-            # 上市股票：只留4碼股票
-            if not is_valid_symbol(symbol):
+            if not is_stock_symbol(symbol):
                 continue
 
             price = safe_float(s.get("ClosingPrice"))
@@ -165,15 +163,13 @@ def fetch_twse() -> List[Dict[str, Any]]:
                 )
             )
     except Exception as e:
-        print(f"TWSE fetch failed: {e}")
+        print(f"TWSE stocks fetch failed: {e}")
 
     return stocks
 
 
-def fetch_tpex() -> List[Dict[str, Any]]:
+def fetch_tpex_stocks() -> List[Dict[str, Any]]:
     stocks = []
-
-    # 上櫃每日收盤行情
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
 
     try:
@@ -185,8 +181,7 @@ def fetch_tpex() -> List[Dict[str, Any]]:
             symbol = str(s.get("SecuritiesCompanyCode", "")).strip()
             name = str(s.get("CompanyName", "")).strip()
 
-            # 上櫃股票：只留4碼股票
-            if not is_valid_symbol(symbol):
+            if not is_stock_symbol(symbol):
                 continue
 
             price = safe_float(s.get("Close"))
@@ -208,29 +203,23 @@ def fetch_tpex() -> List[Dict[str, Any]]:
                 )
             )
     except Exception as e:
-        print(f"TPEX fetch failed: {e}")
+        print(f"TPEX stocks fetch failed: {e}")
 
     return stocks
 
 
-def fetch_etf() -> List[Dict[str, Any]]:
+def fetch_twse_etfs() -> List[Dict[str, Any]]:
     etfs = []
-
-    # 上市 ETF
-    twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 
     try:
-        res = requests.get(twse_url, timeout=20)
+        res = requests.get(url, timeout=20)
         res.raise_for_status()
         data = res.json()
 
         for s in data:
             symbol = str(s.get("Code", "")).strip()
             name = str(s.get("Name", "")).strip()
-
-            # 用名稱判斷 ETF，比只看代碼穩
-            if "ETF" not in name and "槓桿" not in name and "反向" not in name and not symbol.startswith("00"):
-                continue
 
             if not is_etf_symbol(symbol):
                 continue
@@ -256,9 +245,6 @@ def fetch_etf() -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"TWSE ETF fetch failed: {e}")
 
-    # 上櫃 ETF / ETN 類商品可能也有，但你這邊要的是 ETF，先以常見上市 ETF 為主
-    # 若之後你要補上櫃 ETF，再另外擴充
-
     return etfs
 
 
@@ -269,21 +255,21 @@ def root():
 
 @app.get("/stocks")
 def get_stocks():
-    twse_stocks = fetch_twse()
-    tpex_stocks = fetch_tpex()
-    etf_stocks = fetch_etf()
+    twse_stocks = fetch_twse_stocks()
+    tpex_stocks = fetch_tpex_stocks()
+    etf_stocks = fetch_twse_etfs()
 
     merged = twse_stocks + tpex_stocks + etf_stocks
 
-    # 去重複：同 symbol 保留第一筆
     seen = set()
     final_stocks = []
+
     for s in merged:
-        key = (s["symbol"], s["category"])
-        if key in seen:
-            continue
-        seen.add(key)
-        final_stocks.append(s)
+      key = (s["symbol"], s["category"])
+      if key in seen:
+          continue
+      seen.add(key)
+      final_stocks.append(s)
 
     return {
         "success": True,
