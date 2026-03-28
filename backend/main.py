@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
+from datetime import datetime
 from typing import List, Dict, Any
 
 app = FastAPI(title="TW Stock Realtime Screener")
@@ -265,15 +266,20 @@ def get_stocks():
     final_stocks = []
 
     for s in merged:
-      key = (s["symbol"], s["category"])
-      if key in seen:
-          continue
-      seen.add(key)
-      final_stocks.append(s)
+        key = (s["symbol"], s["category"])
+        if key in seen:
+            continue
+        seen.add(key)
+        final_stocks.append(s)
+
+    now_str = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+    data_date = datetime.now().strftime("%Y%m%d")
 
     return {
         "success": True,
         "market_status": "收盤資料",
+        "data_date": data_date,
+        "last_update": now_str,
         "total": len(final_stocks),
         "source_summary": {
             "twse_stock_count": len(twse_stocks),
