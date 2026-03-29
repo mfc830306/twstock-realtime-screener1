@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from typing import List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = FastAPI()
 
@@ -36,6 +36,26 @@ def safe_int(value, default=0):
         return int(float(str(value).replace(",", "").strip()))
     except:
         return default
+
+
+def get_latest_trading_date() -> str:
+    """
+    回傳最近一個交易日（先處理週末）
+    週六 -> 週五
+    週日 -> 週五
+    其餘平日 -> 當天
+    """
+    now = datetime.now()
+    weekday = now.weekday()  # Monday=0 ... Sunday=6
+
+    if weekday == 5:  # Saturday
+        trading_day = now - timedelta(days=1)
+    elif weekday == 6:  # Sunday
+        trading_day = now - timedelta(days=2)
+    else:
+        trading_day = now
+
+    return trading_day.strftime("%Y%m%d")
 
 
 def build_signal_and_reason(price: float, change: float, change_percent: float, volume: int):
@@ -213,7 +233,7 @@ def get_stocks():
         )
 
         now = datetime.now()
-        data_date = now.strftime("%Y%m%d")
+        data_date = get_latest_trading_date()
         last_update = now.strftime("%Y/%m/%d %H:%M:%S")
 
         return {
@@ -230,7 +250,7 @@ def get_stocks():
         return {
             "success": False,
             "market_status": "資料抓取失敗",
-            "data_date": now.strftime("%Y%m%d"),
+            "data_date": get_latest_trading_date(),
             "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
             "total": 0,
             "stocks": [],
