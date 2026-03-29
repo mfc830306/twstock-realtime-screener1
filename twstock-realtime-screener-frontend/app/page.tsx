@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Stock = {
+  market?: string;
   symbol: string;
   name: string;
   price: number;
+  change?: number;
   change_percent: number;
   volume?: number;
   score?: number;
@@ -16,17 +18,32 @@ type Stock = {
   stop_loss?: string;
 };
 
+type ApiResponse = {
+  success: boolean;
+  market_status?: string;
+  data_date?: string;
+  last_update?: string;
+  last_fetch_time?: string;
+  total?: number;
+  stocks?: Stock[];
+  top_recommendations?: Stock[];
+  message?: string;
+};
+
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
 
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [topStocks, setTopStocks] = useState<Stock[]>([]);
-  const [search, setSearch] = useState("");
-  const [priceFilter, setPriceFilter] = useState("all");
-  const [sortType, setSortType] = useState("score");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [sortType, setSortType] = useState<"score" | "up" | "down">("score");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [lastUpdate, setLastUpdate] = useState("");
+
+  const [marketStatus, setMarketStatus] = useState("-");
+  const [dataDate, setDataDate] = useState("-");
+  const [lastUpdate, setLastUpdate] = useState("-");
 
   useEffect(() => {
     fetchStocks();
@@ -38,43 +55,66 @@ export default function Home() {
       setError("");
 
       const res = await fetch(BACKEND_URL, { cache: "no-store" });
-      const data = await res.json();
+      const data: ApiResponse = await res.json();
 
-      if (!data.success) {
+      if (!res.ok || !data.success) {
         throw new Error(data.message || "資料讀取失敗");
       }
 
-      setStocks(data.stocks || []);
-      setTopStocks(data.top_recommendations || []);
-      setLastUpdate(data.last_update || "");
+      const allStocks = Array.isArray(data.stocks) ? data.stocks : [];
+      const recommended =
+        Array.isArray(data.top_recommendations) && data.top_recommendations.length > 0
+          ? data.top_recommendations
+          : [...allStocks]
+              .sort((a, b) => (b.score || 0) - (a.score || 0))
+              .slice(0, 10);
+
+      setStocks(allStocks);
+      setTopStocks(recommended);
+
+      setMarketStatus(data.market_status || "-");
+      setDataDate(data.data_date || "-");
+      setLastUpdate(data.last_update || data.last_fetch_time || "-");
     } catch (err: any) {
-      setError(err?.message || "讀取失敗");
+      setError(err?.message || "讀取資料失敗");
       setStocks([]);
       setTopStocks([]);
+      setMarketStatus("-");
+      setDataDate("-");
+      setLastUpdate("-");
     } finally {
       setLoading(false);
     }
   }
 
-  const categories = [
-    { label: "全部", value: "all" },
-    { label: "0-50", value: "0-50" },
-    { label: "50-100", value: "50-100" },
-    { label: "100-200", value: "100-200" },
-    { label: "200-500", value: "200-500" },
-    { label: "500+", value: "500-999999" },
-  ];
+  const categories = useMemo(
+    () => [
+      { label: "全部", value: "all" },
+      { label: "0-50", value: "0-50" },
+      { label: "50-100", value: "50-100" },
+      { label: "100-200", value: "100-200" },
+      { label: "200-500", value: "200-500" },
+      { label: "500+", value: "500-999999" },
+    ],
+    []
+  );
+
+  function getCategoryCount(value: string) {
+    if (value === "all") return stocks.length;
+    const [min, max] = value.split("-").map(Number);
+    return stocks.filter((s) => s.price >= min && s.price <= max).length;
+  }
 
   const filteredStocks = useMemo(() => {
     let result = [...stocks];
 
-    if (priceFilter !== "all") {
-      const [min, max] = priceFilter.split("-").map(Number);
+    if (selectedCategory !== "all") {
+      const [min, max] = selectedCategory.split("-").map(Number);
       result = result.filter((s) => s.price >= min && s.price <= max);
     }
 
-    if (search.trim()) {
-      const keyword = search.trim().toLowerCase();
+    if (searchTerm.trim()) {
+      const keyword = searchTerm.trim().toLowerCase();
       result = result.filter(
         (s) =>
           s.symbol.toLowerCase().includes(keyword) ||
@@ -91,25 +131,19 @@ export default function Home() {
     }
 
     return result;
-  }, [stocks, search, priceFilter, sortType]);
-
-  function getCategoryCount(value: string) {
-    if (value === "all") return stocks.length;
-    const [min, max] = value.split("-").map(Number);
-    return stocks.filter((s) => s.price >= min && s.price <= max).length;
-  }
-
-  function formatNumber(value?: number) {
-    if (value === undefined || value === null) return "-";
-    return value.toLocaleString();
-  }
+  }, [stocks, selectedCategory, searchTerm, sortType]);
 
   function formatPrice(value?: number) {
-    if (value === undefined || value === null) return "-";
+    if (value === undefined || value === null || Number.isNaN(value)) return "-";
     return Number(value).toFixed(value >= 100 ? 1 : 2).replace(/\.00$/, "");
   }
 
-  function getSignalClass(signal?: string) {
+  function formatVolume(value?: number) {
+    if (value === undefined || value === null || Number.isNaN(value)) return "-";
+    return value.toLocaleString();
+  }
+
+  function signalClass(signal?: string) {
     if (!signal) return "signal-neutral";
     if (signal.includes("多")) return "signal-up";
     if (signal.includes("空")) return "signal-down";
@@ -121,8 +155,11 @@ export default function Home() {
       <div className="container">
         <header className="page-header">
           <h1 className="title">台股即時選股系統</h1>
+
           <div className="header-meta">
-            <span>資料更新：{lastUpdate || "—"}</span>
+            <span>市場狀態：{marketStatus}</span>
+            <span>資料日期：{dataDate}</span>
+            <span>最後更新：{lastUpdate}</span>
             <button className="refresh-btn" onClick={fetchStocks}>
               重新整理
             </button>
@@ -134,13 +171,15 @@ export default function Home() {
             <h2 className="panel-title">價格分類</h2>
 
             <div className="category-list">
-              {categories.map((c) => (
+              {categories.map((item) => (
                 <button
-                  key={c.value}
-                  className={`category-btn ${priceFilter === c.value ? "active" : ""}`}
-                  onClick={() => setPriceFilter(c.value)}
+                  key={item.value}
+                  className={`category-btn ${
+                    selectedCategory === item.value ? "active" : ""
+                  }`}
+                  onClick={() => setSelectedCategory(item.value)}
                 >
-                  {c.label} ({getCategoryCount(c.value)})
+                  {item.label} ({getCategoryCount(item.value)})
                 </button>
               ))}
             </div>
@@ -150,8 +189,8 @@ export default function Home() {
                 className="search-input"
                 type="text"
                 placeholder="搜尋股票代號 / 名稱"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
 
@@ -180,45 +219,49 @@ export default function Home() {
           <div className="panel right-panel">
             <h2 className="panel-title">🔥 推薦10檔</h2>
 
-            <div className="recommend-list">
-              {topStocks.length === 0 && !loading && (
-                <div className="empty-box">目前沒有推薦資料</div>
-              )}
-
-              {topStocks.map((s) => (
-                <div className="recommend-card" key={s.symbol}>
-                  <div className="recommend-top">
-                    <div className="recommend-name">
-                      <span className="recommend-symbol">{s.symbol}</span>
-                      <span>{s.name}</span>
+            {loading ? (
+              <div className="status-box">資料載入中...</div>
+            ) : topStocks.length === 0 ? (
+              <div className="status-box">目前沒有推薦資料</div>
+            ) : (
+              <div className="recommend-list">
+                {topStocks.slice(0, 10).map((stock) => (
+                  <div className="recommend-card" key={stock.symbol}>
+                    <div className="recommend-top">
+                      <div className="recommend-name">
+                        <span className="recommend-symbol">{stock.symbol}</span>
+                        <span>{stock.name}</span>
+                      </div>
+                      <div className="recommend-score">分數 {stock.score ?? "-"}</div>
                     </div>
-                    <div className="recommend-score">分數 {s.score ?? "-"}</div>
-                  </div>
 
-                  <div className="recommend-meta">
-                    <span className={`signal-badge ${getSignalClass(s.signal)}`}>
-                      {s.signal || "中性"}
-                    </span>
-                    <span>股價 {formatPrice(s.price)}</span>
-                    <span
-                      className={
-                        (s.change_percent || 0) >= 0 ? "text-up" : "text-down"
-                      }
-                    >
-                      漲跌幅 {s.change_percent ?? 0}%
-                    </span>
-                  </div>
+                    <div className="recommend-meta">
+                      <span className={`signal-badge ${signalClass(stock.signal)}`}>
+                        {stock.signal || "中性"}
+                      </span>
+                      <span>股價 {formatPrice(stock.price)}</span>
+                      <span
+                        className={
+                          (stock.change_percent || 0) >= 0 ? "text-up" : "text-down"
+                        }
+                      >
+                        漲跌幅 {stock.change_percent ?? 0}%
+                      </span>
+                    </div>
 
-                  <div className="recommend-reason">{s.reason || "暫無推薦原因"}</div>
+                    <div className="recommend-reason">
+                      {stock.reason || "暫無推薦原因"}
+                    </div>
 
-                  <div className="recommend-levels">
-                    <span>進場：{s.entry_price || "-"}</span>
-                    <span>目標：{s.target_price || "-"}</span>
-                    <span>停損：{s.stop_loss || "-"}</span>
+                    <div className="recommend-levels">
+                      <span>進場：{stock.entry_price || "-"}</span>
+                      <span>目標：{stock.target_price || "-"}</span>
+                      <span>停損：{stock.stop_loss || "-"}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
@@ -228,7 +271,7 @@ export default function Home() {
           </div>
 
           {loading && <div className="status-box">資料載入中...</div>}
-          {error && !loading && <div className="status-box error-box">{error}</div>}
+          {!loading && error && <div className="status-box error-box">{error}</div>}
           {!loading && !error && filteredStocks.length === 0 && (
             <div className="status-box">查無符合條件的股票</div>
           )}
@@ -247,16 +290,20 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredStocks.map((s) => (
-                    <tr key={s.symbol}>
-                      <td>{s.symbol}</td>
-                      <td>{s.name}</td>
-                      <td>{formatPrice(s.price)}</td>
-                      <td className={(s.change_percent || 0) >= 0 ? "text-up" : "text-down"}>
-                        {s.change_percent ?? 0}%
+                  {filteredStocks.map((stock) => (
+                    <tr key={stock.symbol}>
+                      <td>{stock.symbol}</td>
+                      <td>{stock.name}</td>
+                      <td>{formatPrice(stock.price)}</td>
+                      <td
+                        className={
+                          (stock.change_percent || 0) >= 0 ? "text-up" : "text-down"
+                        }
+                      >
+                        {stock.change_percent ?? 0}%
                       </td>
-                      <td>{formatNumber(s.volume)}</td>
-                      <td className="score-cell">{s.score ?? "-"}</td>
+                      <td>{formatVolume(stock.volume)}</td>
+                      <td className="score-cell">{stock.score ?? "-"}</td>
                     </tr>
                   ))}
                 </tbody>
