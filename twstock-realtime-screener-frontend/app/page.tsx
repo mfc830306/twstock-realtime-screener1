@@ -3,11 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Stock = {
-  market: string;
   symbol: string;
   name: string;
   price: number;
-  change: number;
   change_percent: number;
   volume?: number;
   score?: number;
@@ -16,439 +14,185 @@ type Stock = {
   entry_price?: string;
   target_price?: string;
   stop_loss?: string;
-  category?: "stock" | "etf";
-};
-
-type SourceSummary = {
-  twse_stock_count: number;
-  tpex_stock_count: number;
-  etf_count: number;
 };
 
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
-const PAGE_SIZE = 20;
-
-const PRICE_CATEGORIES = [
-  { key: "all", label: "全部股票" },
-  { key: "etf", label: "ETF" },
-  { key: "0-10", label: "0 ~ 10" },
-  { key: "10-20", label: "10 ~ 20" },
-  { key: "20-50", label: "20 ~ 50" },
-  { key: "50-100", label: "50 ~ 100" },
-  { key: "100-200", label: "100 ~ 200" },
-  { key: "200-500", label: "200 ~ 500" },
-  { key: "500-1000", label: "500 ~ 1000" },
-  { key: "1000+", label: "1000 以上" },
-];
 
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [rankType, setRankType] = useState<"up" | "down" | "volume">("up");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [errorText, setErrorText] = useState("");
-
-  const [marketStatus, setMarketStatus] = useState("");
-  const [dataDate, setDataDate] = useState("");
-  const [lastUpdate, setLastUpdate] = useState("");
-  const [, setSourceSummary] = useState<SourceSummary>({
-    twse_stock_count: 0,
-    tpex_stock_count: 0,
-    etf_count: 0,
-  });
+  const [topStocks, setTopStocks] = useState<Stock[]>([]);
+  const [search, setSearch] = useState("");
+  const [priceFilter, setPriceFilter] = useState("all");
+  const [sortType, setSortType] = useState("score");
 
   useEffect(() => {
     fetch(BACKEND_URL)
       .then((res) => res.json())
       .then((data) => {
-        if (data?.success) {
-          setStocks(Array.isArray(data.stocks) ? data.stocks : []);
-          setMarketStatus(data.market_status || "");
-          setDataDate(data.data_date || "");
-          setLastUpdate(data.last_update || "");
-          setSourceSummary(
-            data.source_summary || {
-              twse_stock_count: 0,
-              tpex_stock_count: 0,
-              etf_count: 0,
-            }
-          );
-          setErrorText("");
-        } else {
-          setStocks([]);
-          setErrorText("後端回傳失敗");
-        }
-      })
-      .catch((err) => {
-        console.error("讀取股票資料失敗:", err);
-        setStocks([]);
-        setErrorText("無法連線到後端，請稍後再試");
-      })
-      .finally(() => setLoading(false));
+        setStocks(data.stocks || []);
+        setTopStocks(data.top_recommendations || []);
+      });
   }, []);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedCategory, searchTerm, rankType]);
-
-  const getCategoryStocks = (categoryKey: string) => {
-    switch (categoryKey) {
-      case "all":
-        return stocks;
-      case "etf":
-        return stocks.filter((s) => s.category === "etf" || s.market === "ETF");
-      case "0-10":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 0 && s.price < 10
-        );
-      case "10-20":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 10 && s.price < 20
-        );
-      case "20-50":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 20 && s.price < 50
-        );
-      case "50-100":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 50 && s.price < 100
-        );
-      case "100-200":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 100 && s.price < 200
-        );
-      case "200-500":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 200 && s.price < 500
-        );
-      case "500-1000":
-        return stocks.filter(
-          (s) => s.category !== "etf" && s.price >= 500 && s.price < 1000
-        );
-      case "1000+":
-        return stocks.filter((s) => s.category !== "etf" && s.price >= 1000);
-      default:
-        return stocks;
-    }
-  };
-
-  const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const category of PRICE_CATEGORIES) {
-      counts[category.key] = getCategoryStocks(category.key).length;
-    }
-    return counts;
-  }, [stocks]);
-
+  // 價格分類
   const filteredStocks = useMemo(() => {
-    let result = getCategoryStocks(selectedCategory);
+    let result = [...stocks];
 
-    if (searchTerm.trim()) {
-      const keyword = searchTerm.trim().toLowerCase();
+    if (priceFilter !== "all") {
+      const [min, max] = priceFilter.split("-").map(Number);
       result = result.filter(
-        (s) =>
-          s.symbol.toLowerCase().includes(keyword) ||
-          s.name.toLowerCase().includes(keyword)
+        (s) => s.price >= min && s.price <= max
       );
     }
 
-    return result;
-  }, [stocks, selectedCategory, searchTerm]);
-
-  const recommendedStocks = useMemo(() => {
-    const pool = stocks.filter((s) => s.category !== "etf");
-    return [...pool]
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, 10);
-  }, [stocks]);
-
-  const sortedStocks = useMemo(() => {
-    const arr = [...filteredStocks];
-
-    if (rankType === "up") {
-      arr.sort((a, b) => b.change_percent - a.change_percent);
-    } else if (rankType === "down") {
-      arr.sort((a, b) => a.change_percent - b.change_percent);
-    } else {
-      arr.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    if (search) {
+      result = result.filter(
+        (s) =>
+          s.symbol.includes(search) ||
+          s.name.includes(search)
+      );
     }
 
-    return arr;
-  }, [filteredStocks, rankType]);
+    if (sortType === "up") {
+      result.sort((a, b) => b.change_percent - a.change_percent);
+    } else if (sortType === "down") {
+      result.sort((a, b) => a.change_percent - b.change_percent);
+    } else {
+      result.sort((a, b) => (b.score || 0) - (a.score || 0));
+    }
 
-  const totalPages = Math.max(1, Math.ceil(sortedStocks.length / PAGE_SIZE));
+    return result;
+  }, [stocks, search, priceFilter, sortType]);
 
-  const pagedStocks = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return sortedStocks.slice(start, start + PAGE_SIZE);
-  }, [sortedStocks, currentPage]);
-
-  const pageNumbers = useMemo(() => {
-    const pages: number[] = [];
-    let start = Math.max(1, currentPage - 2);
-    let end = Math.min(totalPages, currentPage + 2);
-
-    if (currentPage <= 3) end = Math.min(totalPages, 5);
-    if (currentPage >= totalPages - 2) start = Math.max(1, totalPages - 4);
-
-    for (let i = start; i <= end; i++) pages.push(i);
-    return pages;
-  }, [currentPage, totalPages]);
+  const categories = [
+    { label: "全部", value: "all" },
+    { label: "0-50", value: "0-50" },
+    { label: "50-100", value: "50-100" },
+    { label: "100-200", value: "100-200" },
+    { label: "200-500", value: "200-500" },
+    { label: "500+", value: "500-99999" },
+  ];
 
   return (
-    <main className="page">
-      <div className="container">
-        <header className="topbar">
-          <div className="topbar-left">
-            <div className="brand-wrap">
-              <div className="brand-title">TW/STOCK</div>
-              <div className="brand-dot">•</div>
-              <div className="brand-subtitle">即時選股系統</div>
-            </div>
+    <div className="bg-[#0f172a] text-white min-h-screen p-4">
+      {/* 標題 */}
+      <h1 className="text-2xl font-bold mb-4 text-center">
+        台股即時選股系統
+      </h1>
 
-            <div className="topbar-desc">
-              上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦
-            </div>
+      {/* 上方區塊 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        {/* 左：分類 */}
+        <div className="bg-[#1e293b] p-4 rounded-xl">
+          <h2 className="mb-3 font-bold">價格分類</h2>
+
+          <div className="flex flex-wrap gap-2 mb-3">
+            {categories.map((c) => (
+              <button
+                key={c.value}
+                onClick={() => setPriceFilter(c.value)}
+                className={`px-3 py-1 rounded ${
+                  priceFilter === c.value
+                    ? "bg-blue-500"
+                    : "bg-gray-600"
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
           </div>
 
-          <div className="topbar-status-wrap">
-            <div className="topbar-badge">
-              <span className="topbar-badge-dot" />
-              <span>{marketStatus || "狀態未知"}</span>
-            </div>
+          {/* 搜尋 */}
+          <input
+            type="text"
+            placeholder="搜尋股票..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full p-2 rounded text-black"
+          />
 
-            <div className="topbar-info">
-              <span className="topbar-label">資料日期：</span>
-              <span className="topbar-value">{dataDate || "-"}</span>
-            </div>
-
-            <div className="topbar-info">
-              <span className="topbar-label">最後更新：</span>
-              <span className="topbar-value">{lastUpdate || "-"}</span>
-            </div>
+          {/* 排序 */}
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => setSortType("score")} className="bg-gray-600 px-3 py-1 rounded">
+              推薦
+            </button>
+            <button onClick={() => setSortType("up")} className="bg-gray-600 px-3 py-1 rounded">
+              漲幅
+            </button>
+            <button onClick={() => setSortType("down")} className="bg-gray-600 px-3 py-1 rounded">
+              跌幅
+            </button>
           </div>
-        </header>
-
-        <div className="top-grid">
-          <section className="panel left-panel">
-            <h2>價格分類 / 篩選</h2>
-
-            <div className="category-list">
-              {PRICE_CATEGORIES.map((category) => (
-                <button
-                  key={category.key}
-                  type="button"
-                  onClick={() => setSelectedCategory(category.key)}
-                  className={`category-btn ${
-                    selectedCategory === category.key ? "active" : ""
-                  }`}
-                >
-                  <span>{category.label}</span>
-                  <span className="count">({categoryCounts[category.key] || 0})</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="search-box">
-              <input
-                type="text"
-                placeholder="搜尋股票代號 / 名稱"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-
-            <div className="sort-row">
-              <button
-                type="button"
-                className={rankType === "up" ? "sort-btn active" : "sort-btn"}
-                onClick={() => setRankType("up")}
-              >
-                漲幅排序
-              </button>
-              <button
-                type="button"
-                className={rankType === "down" ? "sort-btn active" : "sort-btn"}
-                onClick={() => setRankType("down")}
-              >
-                跌幅排序
-              </button>
-              <button
-                type="button"
-                className={rankType === "volume" ? "sort-btn active" : "sort-btn"}
-                onClick={() => setRankType("volume")}
-              >
-                成交量排序
-              </button>
-            </div>
-          </section>
-
-          <section className="panel recommend-panel">
-            <h2>推薦 10 檔</h2>
-
-            <div className="recommend-list">
-              {recommendedStocks.map((stock) => (
-                <div key={stock.symbol} className="recommend-card">
-                  <div className="recommend-top">
-                    <div>
-                      <div className="recommend-title">
-                        {stock.symbol} {stock.name}
-                      </div>
-                      <div className="recommend-sub">
-                        {stock.market} / 分數 {stock.score ?? 0} / 訊號{" "}
-                        {stock.signal || "-"}
-                      </div>
-                    </div>
-                    <div
-                      className={
-                        stock.change_percent >= 0
-                          ? "up-text recommend-change"
-                          : "down-text recommend-change"
-                      }
-                    >
-                      {stock.change_percent >= 0 ? "+" : ""}
-                      {stock.change_percent}%
-                    </div>
-                  </div>
-
-                  <div className="recommend-price-grid">
-                    <div className="recommend-info-item">
-                      <div className="recommend-info-label">進場價位</div>
-                      <div className="recommend-info-value">
-                        {stock.entry_price || "-"}
-                      </div>
-                    </div>
-
-                    <div className="recommend-info-item">
-                      <div className="recommend-info-label">目標價位</div>
-                      <div className="recommend-info-value">
-                        {stock.target_price || "-"}
-                      </div>
-                    </div>
-
-                    <div className="recommend-info-item">
-                      <div className="recommend-info-label">停損價位</div>
-                      <div className="recommend-info-value">
-                        {stock.stop_loss || "-"}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="recommend-reason">
-                    <span className="recommend-reason-label">推薦原因：</span>
-                    <span>{stock.reason || "-"}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
         </div>
 
-        <section className="panel list-panel">
-          <div className="list-header">
-            <div>
-              <h2>股票列表</h2>
-              <div className="list-subtitle">
-                目前分類：
-                {PRICE_CATEGORIES.find((x) => x.key === selectedCategory)?.label}
-                {" / "}共 {sortedStocks.length} 檔
+        {/* 右：推薦 */}
+        <div className="bg-[#1e293b] p-4 rounded-xl">
+          <h2 className="mb-3 font-bold">🔥 推薦10檔</h2>
+
+          <div className="space-y-3 max-h-[400px] overflow-y-auto">
+            {topStocks.map((s) => (
+              <div key={s.symbol} className="bg-[#334155] p-3 rounded">
+                <div className="flex justify-between">
+                  <div>
+                    {s.symbol} {s.name}
+                  </div>
+                  <div className="text-yellow-300">
+                    {s.score}
+                  </div>
+                </div>
+
+                <div className="text-sm text-gray-300 mt-1">
+                  {s.reason}
+                </div>
+
+                <div className="text-xs mt-1 text-gray-400">
+                  進場: {s.entry_price} ｜ 目標: {s.target_price} ｜ 停損: {s.stop_loss}
+                </div>
               </div>
-            </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 股票列表 */}
+      <div className="bg-[#1e293b] p-4 rounded-xl overflow-x-auto">
+        <h2 className="mb-3 font-bold">股票列表 ({filteredStocks.length})</h2>
+
+        <div className="min-w-[900px]">
+          {/* 表頭 */}
+          <div className="grid grid-cols-6 bg-gray-700 p-2 rounded text-center">
+            <div>代號</div>
+            <div>名稱</div>
+            <div>股價</div>
+            <div>漲跌%</div>
+            <div>成交量</div>
+            <div>分數</div>
           </div>
 
-          {loading ? (
-            <div className="status-box">資料載入中...</div>
-          ) : errorText ? (
-            <div className="status-box error">{errorText}</div>
-          ) : pagedStocks.length === 0 ? (
-            <div className="status-box">查無資料</div>
-          ) : (
-            <>
-              <div className="table-wrap">
-                <table className="stock-table">
-                  <thead>
-                    <tr>
-                      <th>代號</th>
-                      <th>名稱</th>
-                      <th>市場</th>
-                      <th>價格</th>
-                      <th>漲跌</th>
-                      <th>漲跌幅</th>
-                      <th>成交量</th>
-                      <th>訊號</th>
-                      <th>分數</th>
-                      <th>進場價</th>
-                      <th>目標價</th>
-                      <th>停損價</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedStocks.map((stock) => (
-                      <tr key={`${stock.market}-${stock.symbol}`}>
-                        <td>{stock.symbol}</td>
-                        <td>{stock.name}</td>
-                        <td>{stock.market}</td>
-                        <td>{stock.price}</td>
-                        <td className={stock.change >= 0 ? "up-text" : "down-text"}>
-                          {stock.change >= 0 ? "+" : ""}
-                          {stock.change}
-                        </td>
-                        <td
-                          className={
-                            stock.change_percent >= 0 ? "up-text" : "down-text"
-                          }
-                        >
-                          {stock.change_percent >= 0 ? "+" : ""}
-                          {stock.change_percent}%
-                        </td>
-                        <td>{(stock.volume || 0).toLocaleString()}</td>
-                        <td>{stock.signal || "-"}</td>
-                        <td>{stock.score ?? 0}</td>
-                        <td>{stock.entry_price || "-"}</td>
-                        <td>{stock.target_price || "-"}</td>
-                        <td>{stock.stop_loss || "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {/* 資料 */}
+          {filteredStocks.map((s) => (
+            <div
+              key={s.symbol}
+              className="grid grid-cols-6 border-b border-gray-700 p-2 text-center items-center"
+            >
+              <div>{s.symbol}</div>
+              <div>{s.name}</div>
+              <div>{s.price}</div>
+              <div
+                className={
+                  s.change_percent > 0
+                    ? "text-red-400"
+                    : "text-green-400"
+                }
+              >
+                {s.change_percent}%
               </div>
-
-              <div className="pagination">
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="page-btn"
-                >
-                  上一頁
-                </button>
-
-                {pageNumbers.map((page) => (
-                  <button
-                    key={page}
-                    type="button"
-                    onClick={() => setCurrentPage(page)}
-                    className={currentPage === page ? "page-btn active" : "page-btn"}
-                  >
-                    {page}
-                  </button>
-                ))}
-
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                  className="page-btn"
-                >
-                  下一頁
-                </button>
-              </div>
-            </>
-          )}
-        </section>
+              <div>{s.volume}</div>
+              <div className="text-yellow-300">{s.score}</div>
+            </div>
+          ))}
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
