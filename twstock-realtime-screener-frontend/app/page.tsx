@@ -193,9 +193,7 @@ export default function Home() {
     if (currentPage <= 3) end = Math.min(totalPages, 5);
     if (currentPage >= totalPages - 2) start = Math.max(1, totalPages - 4);
 
-    for (let i = start; i <= end; i++) {
-      pages.push(i);
-    }
+    for (let i = start; i <= end; i++) pages.push(i);
     return pages;
   }, [currentPage, totalPages]);
 
@@ -203,10 +201,16 @@ export default function Home() {
     <main className="page">
       <div className="container">
         <header className="topbar">
-          <div className="brand-wrap">
-            <div className="brand-title">TW/STOCK</div>
-            <div className="brand-dot">•</div>
-            <div className="brand-subtitle">即時選股系統</div>
+          <div className="topbar-left">
+            <div className="brand-wrap">
+              <div className="brand-title">TW/STOCK</div>
+              <div className="brand-dot">•</div>
+              <div className="brand-subtitle">即時選股系統</div>
+            </div>
+
+            <div className="topbar-desc">
+              上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦
+            </div>
           </div>
 
           <div className="topbar-status-wrap">
@@ -229,7 +233,6 @@ export default function Home() {
 
         <div className="hero">
           <h1>台股分類瀏覽</h1>
-          <p>上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦</p>
         </div>
 
         <div className="top-grid">
