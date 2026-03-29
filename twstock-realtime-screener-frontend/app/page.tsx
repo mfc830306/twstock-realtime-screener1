@@ -21,6 +21,7 @@ type ApiResponse = {
   market_status?: string;
   data_date?: string;
   last_update?: string;
+  last_fetch_time?: string;
   stocks?: Stock[];
   top_recommendations?: Stock[];
   message?: string;
@@ -66,17 +67,18 @@ export default function Home() {
         throw new Error(data.message || "資料讀取失敗");
       }
 
-      const allStocks = data.stocks || [];
+      const allStocks = Array.isArray(data.stocks) ? data.stocks : [];
       const recommended =
-        data.top_recommendations && data.top_recommendations.length > 0
+        Array.isArray(data.top_recommendations) && data.top_recommendations.length > 0
           ? data.top_recommendations
           : [...allStocks].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 10);
 
       setStocks(allStocks);
       setTopStocks(recommended);
-      setMarketStatus(data.market_status || "-");
-      setDataDate(data.data_date || "-");
-      setLastUpdate(data.last_update || "-");
+
+      setMarketStatus(resolveMarketStatus(data.market_status));
+      setDataDate(resolveDataDate(data.data_date, data.last_update, data.last_fetch_time));
+      setLastUpdate(resolveLastUpdate(data.last_update, data.last_fetch_time));
     } catch (err: any) {
       setError(err?.message || "讀取失敗");
       setStocks([]);
@@ -87,6 +89,26 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function resolveMarketStatus(value?: string) {
+    if (value && value.trim()) return value.trim();
+    return "資料同步中";
+  }
+
+  function resolveDataDate(value?: string, lastUpdateValue?: string, lastFetchValue?: string) {
+    if (value && value.trim()) return value.trim();
+
+    const raw = lastUpdateValue || lastFetchValue || "";
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length >= 8) return digits.slice(0, 8);
+
+    return "-";
+  }
+
+  function resolveLastUpdate(value?: string, lastFetchValue?: string) {
+    const finalValue = value || lastFetchValue || "";
+    return finalValue.trim() || "-";
   }
 
   function getCategoryCount(value: string) {
@@ -143,6 +165,21 @@ export default function Home() {
     return "signal-neutral";
   }
 
+  function getMarketStatusClass(status?: string) {
+    if (!status) return "status-neutral";
+    if (status.includes("收盤")) return "status-close";
+    if (status.includes("盤中") || status.includes("交易中")) return "status-live";
+    if (status.includes("非當日") || status.includes("同步")) return "status-neutral";
+    return "status-neutral";
+  }
+
+  function getQuickReason(reason?: string) {
+    if (!reason) return "暫無策略摘要";
+    const cleaned = reason.replace(/。/g, "；");
+    const first = cleaned.split("；").map((v) => v.trim()).filter(Boolean)[0];
+    return first || reason;
+  }
+
   return (
     <main className="page">
       <div className="top-header">
@@ -154,7 +191,9 @@ export default function Home() {
           </div>
 
           <div className="top-right">
-            <span className="status-badge">● {marketStatus}</span>
+            <span className={`status-badge ${getMarketStatusClass(marketStatus)}`}>
+              ● {marketStatus}
+            </span>
             <span>資料日期：{dataDate}</span>
             <span>最後更新：{lastUpdate}</span>
             <button className="refresh-btn small" onClick={fetchData}>
@@ -228,21 +267,31 @@ export default function Home() {
                 {topStocks.slice(0, 10).map((s) => (
                   <article key={s.symbol} className="recommend-card">
                     <div className="recommend-top">
-                      <div className="recommend-name-wrap">
-                        <div className="recommend-symbol">{s.symbol}</div>
-                        <div className="recommend-name">{s.name}</div>
+                      <div className="recommend-main">
+                        <div className="recommend-title-row">
+                          <span className="recommend-symbol">{s.symbol}</span>
+                          <span className="recommend-name">{s.name}</span>
+                        </div>
+
+                        <div className="recommend-meta-row">
+                          <span className={`signal-badge mini ${getSignalClass(s.signal)}`}>
+                            {s.signal || "中性"}
+                          </span>
+                          <span className="meta-item">股價 {formatPrice(s.price)}</span>
+                          <span className={`meta-item ${(s.change_percent || 0) >= 0 ? "text-up" : "text-down"}`}>
+                            漲跌幅 {s.change_percent ?? 0}%
+                          </span>
+                        </div>
                       </div>
-                      <div className="recommend-score">分數 {s.score ?? "-"}</div>
+
+                      <div className="recommend-side">
+                        <div className="recommend-score">分數 {s.score ?? "-"}</div>
+                      </div>
                     </div>
 
-                    <div className="recommend-meta">
-                      <span className={`signal-badge ${getSignalClass(s.signal)}`}>
-                        {s.signal || "中性"}
-                      </span>
-                      <span>股價 {formatPrice(s.price)}</span>
-                      <span className={(s.change_percent || 0) >= 0 ? "text-up" : "text-down"}>
-                        漲跌幅 {s.change_percent ?? 0}%
-                      </span>
+                    <div className="strategy-line">
+                      <span className="strategy-label">策略重點</span>
+                      <span className="strategy-text">{getQuickReason(s.reason)}</span>
                     </div>
 
                     <div className="recommend-reason">
@@ -250,9 +299,18 @@ export default function Home() {
                     </div>
 
                     <div className="recommend-extra">
-                      <span>進場：{s.entry_price || "-"}</span>
-                      <span>目標：{s.target_price || "-"}</span>
-                      <span>停損：{s.stop_loss || "-"}</span>
+                      <div className="level-box">
+                        <span className="level-label">進場</span>
+                        <span className="level-value">{s.entry_price || "-"}</span>
+                      </div>
+                      <div className="level-box">
+                        <span className="level-label">目標</span>
+                        <span className="level-value">{s.target_price || "-"}</span>
+                      </div>
+                      <div className="level-box">
+                        <span className="level-label">停損</span>
+                        <span className="level-value">{s.stop_loss || "-"}</span>
+                      </div>
                     </div>
                   </article>
                 ))}
