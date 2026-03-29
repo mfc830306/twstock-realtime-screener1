@@ -77,35 +77,38 @@ export default function Home() {
   const [error, setError] = useState("");
 
   async function fetchStocks() {
-    try {
-      setLoading(true);
-      setError("");
+  try {
+    setLoading(true);
+    setError("");
 
-      const res = await fetch(BACKEND_URL, { cache: "no-store" });
-      const data: ApiResponse = await res.json();
+    const res = await fetch(BACKEND_URL, {
+      cache: "no-store",
+    });
 
-      if (!data.success) {
-        throw new Error(data.message || "取得資料失敗");
-      }
+    const data: ApiResponse = await res.json();
 
-      const safeStocks = (data.stocks || []).map((s) => ({
-        ...s,
-        price: Number(s.price ?? 0),
-        change: Number(s.change ?? 0),
-        change_percent: Number(s.change_percent ?? 0),
-        volume: Number(s.volume ?? 0),
-        score: Number(s.score ?? 0),
-      }));
-
-      setStocks(safeStocks);
-      setMarketStatus(data.market_status || "-");
-      setDataDate(data.data_date || "-");
-      setLastUpdate(data.last_update || "-");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "載入失敗");
-    } finally {
-      setLoading(false);
+    if (!data.success) {
+      throw new Error(data.message || "取得資料失敗");
     }
+
+    const safeStocks = (data.stocks || []).map((s) => ({
+      ...s,
+      price: Number(s.price ?? 0),
+      change: Number(s.change ?? 0),
+      change_percent: Number(s.change_percent ?? 0),
+      volume: Number(s.volume ?? 0),
+      score: Number(s.score ?? 0),
+    }));
+
+    setStocks(safeStocks);
+    setMarketStatus(data.market_status || "-");
+    setDataDate(data.data_date || "-");
+    setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
+  } catch (err) {
+    setError(err instanceof Error ? err.message : "載入失敗");
+  } finally {
+    setLoading(false);
+  }
   }
 
   useEffect(() => {
@@ -168,11 +171,12 @@ export default function Home() {
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
-    border: "1px solid rgba(80, 140, 220, 0.22)",
-    borderRadius: "22px",
-    padding: "24px",
-    minHeight: "595px",
-    boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+  border: "1px solid rgba(80, 140, 220, 0.22)",
+  borderRadius: "22px",
+  padding: "24px",
+  height: "560px",
+  boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+  overflow: "hidden",
   };
 
   return (
@@ -408,7 +412,7 @@ export default function Home() {
 
             <div
               style={{
-                maxHeight: "505px",
+                height: "470px",
                 overflowY: "auto",
                 paddingRight: "6px",
               }}
