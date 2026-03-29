@@ -84,10 +84,26 @@ input {
 .status-badge {
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(26, 191, 110, 0.14);
-  border: 1px solid rgba(70, 220, 145, 0.22);
-  color: #54e394;
   font-weight: 800;
+  border: 1px solid transparent;
+}
+
+.status-live {
+  background: rgba(18, 191, 115, 0.14);
+  border-color: rgba(72, 230, 151, 0.22);
+  color: #59e298;
+}
+
+.status-close {
+  background: rgba(58, 153, 255, 0.14);
+  border-color: rgba(118, 189, 255, 0.22);
+  color: #8ec4ff;
+}
+
+.status-neutral {
+  background: rgba(164, 183, 214, 0.14);
+  border-color: rgba(164, 183, 214, 0.18);
+  color: #d9e7ff;
 }
 
 .refresh-btn {
@@ -255,16 +271,26 @@ input {
 .recommend-top {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
   align-items: flex-start;
   margin-bottom: 12px;
 }
 
-.recommend-name-wrap {
+.recommend-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.recommend-side {
+  flex-shrink: 0;
+}
+
+.recommend-title-row {
   display: flex;
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 
 .recommend-symbol {
@@ -287,14 +313,17 @@ input {
   white-space: nowrap;
 }
 
-.recommend-meta {
+.recommend-meta-row {
   display: flex;
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+}
+
+.meta-item {
   color: #dbe9ff;
   font-size: 15px;
+  font-weight: 700;
 }
 
 .signal-badge {
@@ -304,6 +333,10 @@ input {
   border-radius: 999px;
   font-size: 13px;
   font-weight: 900;
+}
+
+.signal-badge.mini {
+  padding: 5px 11px;
 }
 
 .signal-up {
@@ -324,20 +357,66 @@ input {
   color: #d9e7ff;
 }
 
-.recommend-reason {
-  color: #eef5ff;
-  font-size: 15px;
-  line-height: 1.85;
+.strategy-line {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  background: rgba(10, 38, 74, 0.42);
+  border: 1px solid rgba(126, 168, 236, 0.1);
+  border-radius: 12px;
+  padding: 10px 12px;
   margin-bottom: 12px;
 }
 
-.recommend-extra {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  color: #9dc8ff;
+.strategy-label {
+  color: #9bc6ff;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.strategy-text {
+  color: #eef5ff;
   font-size: 14px;
-  font-weight: 800;
+  line-height: 1.7;
+  font-weight: 700;
+  flex: 1;
+}
+
+.recommend-reason {
+  color: #dbe9ff;
+  font-size: 14px;
+  line-height: 1.8;
+  margin-bottom: 14px;
+}
+
+.recommend-extra {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.level-box {
+  background: rgba(8, 32, 63, 0.56);
+  border: 1px solid rgba(126, 168, 236, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.level-label {
+  display: block;
+  color: #8fbfff;
+  font-size: 13px;
+  font-weight: 900;
+  margin-bottom: 6px;
+}
+
+.level-value {
+  display: block;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 900;
 }
 
 .list-panel {
@@ -452,6 +531,10 @@ input {
 
   .recommend-top {
     flex-direction: column;
+  }
+
+  .recommend-extra {
+    grid-template-columns: 1fr;
   }
 
   .stock-table {
