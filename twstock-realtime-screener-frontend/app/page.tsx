@@ -53,7 +53,7 @@ export default function Home() {
   const [marketStatus, setMarketStatus] = useState("");
   const [dataDate, setDataDate] = useState("");
   const [lastUpdate, setLastUpdate] = useState("");
-  const [sourceSummary, setSourceSummary] = useState<SourceSummary>({
+  const [, setSourceSummary] = useState<SourceSummary>({
     twse_stock_count: 0,
     tpex_stock_count: 0,
     etf_count: 0,
@@ -202,44 +202,35 @@ export default function Home() {
   return (
     <main className="page">
       <div className="container">
-        <header className="hero">
-          <h1>台股分類瀏覽</h1>
-          <p>上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦</p>
-        </header>
+        <header className="topbar">
+          <div className="brand-wrap">
+            <div className="brand-title">TW/STOCK</div>
+            <div className="brand-dot">•</div>
+            <div className="brand-subtitle">即時選股系統</div>
+          </div>
 
-        <section className="panel status-panel">
-          <h2>狀態</h2>
-          <div className="status-grid">
-            <div className="status-item">
-              <div className="status-label">市場狀態</div>
-              <div className="status-value">{marketStatus || "-"}</div>
+          <div className="topbar-status-wrap">
+            <div className="topbar-badge">
+              <span className="topbar-badge-dot" />
+              <span>{marketStatus || "狀態未知"}</span>
             </div>
-            <div className="status-item">
-              <div className="status-label">資料日期</div>
-              <div className="status-value">{dataDate || "-"}</div>
+
+            <div className="topbar-info">
+              <span className="topbar-label">資料日期：</span>
+              <span className="topbar-value">{dataDate || "-"}</span>
             </div>
-            <div className="status-item">
-              <div className="status-label">最後更新</div>
-              <div className="status-value">{lastUpdate || "-"}</div>
-            </div>
-            <div className="status-item">
-              <div className="status-label">上市</div>
-              <div className="status-value">{sourceSummary.twse_stock_count}</div>
-            </div>
-            <div className="status-item">
-              <div className="status-label">上櫃</div>
-              <div className="status-value">{sourceSummary.tpex_stock_count}</div>
-            </div>
-            <div className="status-item">
-              <div className="status-label">ETF</div>
-              <div className="status-value">{sourceSummary.etf_count}</div>
-            </div>
-            <div className="status-item">
-              <div className="status-label">總檔數</div>
-              <div className="status-value">{stocks.length}</div>
+
+            <div className="topbar-info">
+              <span className="topbar-label">最後更新：</span>
+              <span className="topbar-value">{lastUpdate || "-"}</span>
             </div>
           </div>
-        </section>
+        </header>
+
+        <div className="hero">
+          <h1>台股分類瀏覽</h1>
+          <p>上市 / 上櫃 / ETF　價格分類、搜尋、排序、推薦</p>
+        </div>
 
         <div className="top-grid">
           <section className="panel left-panel">
