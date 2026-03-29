@@ -66,7 +66,7 @@ function formatPrice(num?: number) {
 
 function formatSigned(num?: number, digits = 2) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
-  return `${num > 0 ? "+" : ""}${num.toFixed(digits)}`;
+  return `${num > 0 ? "+" : num < 0 ? "" : ""}${num.toFixed(digits)}`;
 }
 
 function formatDateString(dateText?: string) {
@@ -79,9 +79,10 @@ function formatDateString(dateText?: string) {
 }
 
 function getMarketLightColor(status?: string) {
-  if (!status) return "#ef4444";
+  if (!status) return "#f59e0b";
   if (status.includes("開盤")) return "#22c55e";
-  return "#ef4444";
+  if (status.includes("收盤")) return "#ef4444";
+  return "#f59e0b";
 }
 
 export default function Home() {
@@ -94,6 +95,7 @@ export default function Home() {
   const [rankType, setRankType] = useState<RankType>("recommend");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [isMobile, setIsMobile] = useState(false);
 
   async function fetchStocks() {
     try {
@@ -134,8 +136,18 @@ export default function Home() {
 
   useEffect(() => {
     fetchStocks();
-    const timer = setInterval(fetchStocks, 60000);
+    const timer = setInterval(fetchStocks, 120000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth <= 900);
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   const categoryCounts = useMemo(() => {
@@ -194,8 +206,8 @@ export default function Home() {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
     border: "1px solid rgba(80, 140, 220, 0.22)",
     borderRadius: "22px",
-    padding: "24px",
-    height: "595px",
+    padding: isMobile ? "18px" : "24px",
+    minHeight: isMobile ? "auto" : "540px",
     boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
     overflow: "hidden",
   };
@@ -222,12 +234,13 @@ export default function Home() {
           style={{
             maxWidth: "1400px",
             margin: "0 auto",
-            padding: "14px 36px",
+            padding: isMobile ? "14px 16px" : "14px 36px",
             display: "flex",
-            alignItems: "center",
+            alignItems: isMobile ? "flex-start" : "center",
             justifyContent: "space-between",
-            gap: "20px",
+            gap: "16px",
             flexWrap: "wrap",
+            flexDirection: isMobile ? "column" : "row",
           }}
         >
           <div
@@ -240,7 +253,7 @@ export default function Home() {
           >
             <div
               style={{
-                fontSize: "34px",
+                fontSize: isMobile ? "28px" : "34px",
                 fontWeight: 900,
                 lineHeight: 1,
                 letterSpacing: "1px",
@@ -251,7 +264,7 @@ export default function Home() {
             </div>
             <div
               style={{
-                fontSize: "24px",
+                fontSize: isMobile ? "20px" : "24px",
                 opacity: 0.95,
                 fontWeight: 700,
               }}
@@ -263,17 +276,19 @@ export default function Home() {
           <div
             style={{
               display: "flex",
-              alignItems: "center",
+              alignItems: isMobile ? "stretch" : "center",
               gap: "12px",
               flexWrap: "wrap",
               justifyContent: "flex-end",
+              width: isMobile ? "100%" : "auto",
+              flexDirection: isMobile ? "column" : "row",
             }}
           >
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "18px",
+                gap: "12px 18px",
                 padding: "10px 16px",
                 borderRadius: "14px",
                 background: "rgba(255,255,255,0.04)",
@@ -282,6 +297,7 @@ export default function Home() {
                 fontSize: "14px",
                 fontWeight: 700,
                 flexWrap: "wrap",
+                width: isMobile ? "100%" : "auto",
               }}
             >
               <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -315,6 +331,7 @@ export default function Home() {
                 cursor: loading ? "not-allowed" : "pointer",
                 opacity: loading ? 0.7 : 1,
                 minWidth: "78px",
+                width: isMobile ? "100%" : "auto",
               }}
             >
               {loading ? "更新中" : "更新"}
@@ -323,7 +340,13 @@ export default function Home() {
         </div>
       </div>
 
-      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "26px 36px" }}>
+      <div
+        style={{
+          maxWidth: "1400px",
+          margin: "0 auto",
+          padding: isMobile ? "18px 16px 24px" : "26px 36px",
+        }}
+      >
         {error && (
           <div
             style={{
@@ -342,7 +365,9 @@ export default function Home() {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "375px 1fr",
+            gridTemplateColumns: isMobile
+              ? "1fr"
+              : "minmax(300px, 375px) minmax(0, 1fr)",
             gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
@@ -368,7 +393,7 @@ export default function Home() {
                     key={item.key}
                     onClick={() => setSelectedCategory(item.key)}
                     style={{
-                      minWidth: "118px",
+                      minWidth: isMobile ? "calc(50% - 6px)" : "118px",
                       border: "none",
                       borderRadius: "14px",
                       padding: "14px 14px",
@@ -439,9 +464,9 @@ export default function Home() {
 
             <div
               style={{
-                height: "505px",
-                overflowY: "auto",
-                paddingRight: "6px",
+                maxHeight: isMobile ? "none" : "470px",
+                overflowY: isMobile ? "visible" : "auto",
+                paddingRight: isMobile ? "0" : "6px",
               }}
             >
               {recommendedStocks.map((stock) => {
@@ -466,12 +491,13 @@ export default function Home() {
                         alignItems: "flex-start",
                         gap: "12px",
                         marginBottom: "10px",
+                        flexDirection: isMobile ? "column" : "row",
                       }}
                     >
-                      <div>
+                      <div style={{ width: "100%" }}>
                         <div
                           style={{
-                            fontSize: "22px",
+                            fontSize: isMobile ? "20px" : "22px",
                             fontWeight: 900,
                             marginBottom: "10px",
                             color: "#7fb6ff",
@@ -565,10 +591,11 @@ export default function Home() {
 
         <section
           style={{
-            ...panelStyle,
-            minHeight: "unset",
-            height: "auto",
-            padding: "20px",
+            background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
+            border: "1px solid rgba(80, 140, 220, 0.22)",
+            borderRadius: "22px",
+            padding: isMobile ? "16px" : "20px",
+            boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
           }}
         >
           <h2 style={{ fontSize: "22px", fontWeight: 900, marginBottom: "16px" }}>
@@ -586,7 +613,6 @@ export default function Home() {
                 width: "100%",
                 borderCollapse: "collapse",
                 minWidth: "1080px",
-                overflow: "hidden",
               }}
             >
               <thead>
