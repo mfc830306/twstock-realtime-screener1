@@ -1,12 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
-from statistics import median
-from typing import Any, Dict, List
-
 import requests
+from typing import List, Dict, Any
 
-app = FastAPI(title="TW Stock Realtime Screener")
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,391 +13,214 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TWSE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-TPEX_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-
 
 @app.get("/")
 def root():
-    return {"message": "TW Stock Realtime Screener is running"}
+    return {"message": "TW Stock Realtime Screener B is running"}
 
 
-def now_str() -> str:
-    return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-
-
-def safe_float(value: Any, default: float = 0.0) -> float:
+def safe_float(value, default=0.0):
     try:
-        if value is None:
+        if value in [None, "", "-", "--"]:
             return default
-        s = str(value).replace(",", "").replace("X", "").replace("除權息", "").strip()
-        if s in ["", "-", "--", "----", "N/A", "nan", "None"]:
-            return default
-        return float(s)
-    except Exception:
+        return float(str(value).replace(",", "").replace("X", "").strip())
+    except:
         return default
 
 
-def safe_int(value: Any, default: int = 0) -> int:
+def safe_int(value, default=0):
     try:
-        if value is None:
+        if value in [None, "", "-", "--"]:
             return default
-        s = str(value).replace(",", "").strip()
-        if s in ["", "-", "--", "----", "N/A", "nan", "None"]:
-            return default
-        return int(float(s))
-    except Exception:
+        return int(float(str(value).replace(",", "").strip()))
+    except:
         return default
 
 
-def is_valid_common_stock_symbol(symbol: str) -> bool:
-    """
-    只保留一般股票常見 4 位數代號
-    例：2330、2317、3715
-    排除 ETF、權證、牛熊證、其他雜項商品
-    """
-    return symbol.isdigit() and len(symbol) == 4
+def build_signal_and_reason(price: float, change: float, change_percent: float, volume: int):
+    score = 50
 
-
-def calc_change_percent(price: float, prev_close: float) -> float:
-    if prev_close <= 0:
-        return 0.0
-    return round(((price - prev_close) / prev_close) * 100, 2)
-
-
-def calc_amplitude(high: float, low: float, prev_close: float) -> float:
-    if prev_close <= 0:
-        return 0.0
-    return round(((high - low) / prev_close) * 100, 2)
-
-
-def detect_signal(change_percent: float, price: float, open_price: float, volume_ratio: float) -> str:
-    if change_percent >= 3 and price >= open_price and volume_ratio >= 1.2:
-        return "強勢多方"
-    if change_percent >= 1.2 and price >= open_price:
-        return "偏多"
-    if change_percent <= -3 and price <= open_price:
-        return "弱勢空方"
-    if change_percent <= -1.2:
-        return "偏空"
-    return "區間震盪"
-
-
-def generate_professional_reason(stock: Dict[str, Any], median_volume: float) -> str:
-    price = stock.get("price", 0.0)
-    open_price = stock.get("open", 0.0)
-    high = stock.get("high", 0.0)
-    low = stock.get("low", 0.0)
-    volume = stock.get("volume", 0)
-    change_percent = stock.get("change_percent", 0.0)
-    amplitude = stock.get("amplitude", 0.0)
-
-    volume_ratio = round(volume / median_volume, 2) if median_volume > 0 else 1.0
-
-    reasons: List[str] = []
-
-    # 1. 價格結構
-    if price > open_price > 0:
-        if high > 0 and abs(high - price) / max(price, 0.01) < 0.01:
-            reasons.append("股價維持開高走高格局，收斂於當日高檔附近，顯示買盤承接力道偏強")
-        else:
-            reasons.append("股價位於開盤價之上，盤中多方仍維持主導節奏")
-    elif price < open_price and open_price > 0:
-        if low > 0 and abs(price - low) / max(price, 0.01) < 0.01:
-            reasons.append("股價貼近日內低點，短線賣壓仍待進一步消化")
-        else:
-            reasons.append("股價跌回開盤價下方，顯示盤中追價意願轉趨保守")
-    else:
-        reasons.append("股價圍繞平盤附近整理，市場觀望氣氛相對明顯")
-
-    # 2. 漲跌幅
-    if change_percent >= 6:
-        reasons.append("漲幅明確擴大，屬盤面強勢表態個股")
+    if change_percent >= 9:
+        score += 35
+    elif change_percent >= 5:
+        score += 25
     elif change_percent >= 3:
-        reasons.append("漲幅維持在強勢區間，短線趨勢明顯偏多")
-    elif change_percent >= 1:
-        reasons.append("維持溫和上漲結構，多方節奏尚未破壞")
-    elif change_percent <= -6:
-        reasons.append("跌幅偏深，短線結構明顯轉弱")
-    elif change_percent <= -3:
-        reasons.append("股價回落幅度擴大，反映短線籌碼偏保守")
-    else:
-        reasons.append("漲跌幅仍在可控範圍內，等待後續方向表態")
+        score += 18
+    elif change_percent > 0:
+        score += 8
+    elif change_percent <= -5:
+        score -= 10
 
-    # 3. 量能
-    if volume_ratio >= 2.5:
-        reasons.append("成交量明顯放大，量能足以支持價格波動，市場關注度高")
-    elif volume_ratio >= 1.5:
-        reasons.append("量能優於市場中位水準，具備一定換手與推動力")
-    elif volume_ratio >= 0.8:
-        reasons.append("成交量維持正常水準，量價結構尚屬健康")
-    else:
-        reasons.append("成交量偏低，短線續航力仍需進一步觀察")
-
-    # 4. 振幅
-    if amplitude >= 8:
-        reasons.append("日內振幅偏大，代表多空交戰激烈，操作上宜搭配停損控管")
-    elif amplitude >= 4:
-        reasons.append("具備適度波動空間，短線交易彈性相對較佳")
-    else:
-        reasons.append("日內波動收斂，整體走勢相對穩定")
-
-    return "；".join(reasons[:4]) + "。"
-
-
-def calc_score(stock: Dict[str, Any], median_volume: float) -> float:
-    change_percent = stock.get("change_percent", 0.0)
-    amplitude = stock.get("amplitude", 0.0)
-    volume = stock.get("volume", 0)
-    price = stock.get("price", 0.0)
-    open_price = stock.get("open", 0.0)
-    high = stock.get("high", 0.0)
-
-    volume_ratio = volume / median_volume if median_volume > 0 else 1.0
-
-    score = 50.0
-
-    # 漲跌幅
-    score += min(max(change_percent * 4, -20), 20)
-
-    # 振幅
-    score += min(amplitude * 1.4, 12)
-
-    # 量能
-    if volume_ratio >= 3:
-        score += 15
-    elif volume_ratio >= 2:
+    if volume >= 30000000:
+        score += 14
+    elif volume >= 10000000:
         score += 10
-    elif volume_ratio >= 1.2:
+    elif volume >= 3000000:
         score += 6
-    elif volume_ratio < 0.6:
-        score -= 5
 
-    # 價格位置
-    if price > open_price > 0:
+    if change > 0:
         score += 5
-    elif open_price > 0 and price < open_price:
-        score -= 5
 
-    # 接近高點
-    if high > 0 and abs(high - price) / max(price, 0.01) < 0.015:
-        score += 6
+    score = max(1, min(99, score))
 
-    return round(max(min(score, 99), 1), 2)
-
-
-def calc_trade_levels(price: float, amplitude: float, signal: str):
-    if price <= 0:
-        return "-", "-", "-"
-
-    base_pct = 0.015
-    if amplitude >= 8:
-        base_pct = 0.03
-    elif amplitude >= 5:
-        base_pct = 0.025
-    elif amplitude >= 3:
-        base_pct = 0.02
-
-    entry_low = round(price * (1 - base_pct / 2), 2)
-    entry_high = round(price * (1 + base_pct / 2), 2)
-
-    if signal in ["強勢多方", "偏多"]:
-        target = round(price * (1 + base_pct * 2.2), 2)
-        stop = round(price * (1 - base_pct * 1.4), 2)
-    elif signal == "區間震盪":
-        target = round(price * (1 + base_pct * 1.2), 2)
-        stop = round(price * (1 - base_pct * 1.0), 2)
+    if score >= 85:
+        signal = "強勢多方"
+    elif score >= 70:
+        signal = "偏多"
+    elif score >= 50:
+        signal = "中性偏多"
+    elif score >= 35:
+        signal = "中性"
     else:
-        target = round(price * (1 - base_pct * 1.2), 2)
-        stop = round(price * (1 + base_pct * 1.0), 2)
+        signal = "偏弱"
 
-    return f"{entry_low} ~ {entry_high}", str(target), str(stop)
+    reason = "股價維持強勢、量能放大、短線表現活躍"
+    if change_percent >= 9:
+        reason = "股價維持開高走高格局，收盤於當日高檔附近，顯示買盤承接力道偏強；漲幅明確擴大，屬盤面強勢表態個股，成交量明顯放大，代表市場關注度高。"
+    elif change_percent >= 5:
+        reason = "漲勢明顯擴大，股價結構偏強，量能表現佳，具短線續強機會。"
+    elif change_percent > 0:
+        reason = "股價維持紅盤，走勢穩定，量價結構尚可，屬偏多觀察名單。"
+    elif change_percent < 0:
+        reason = "股價回落，短線動能偏弱，建議觀察支撐與量能變化。"
+
+    entry_low = round(price * 0.99, 2)
+    entry_high = round(price * 1.01, 2)
+    target_price = round(price * 1.05, 2)
+    stop_loss = round(price * 0.96, 2)
+
+    return {
+        "score": score,
+        "signal": signal,
+        "reason": reason,
+        "entry_price": f"{entry_low} ~ {entry_high}",
+        "target_price": str(target_price),
+        "stop_loss": str(stop_loss),
+    }
 
 
 def fetch_twse_stocks() -> List[Dict[str, Any]]:
-    res = requests.get(TWSE_URL, timeout=20)
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    res = requests.get(url, timeout=20)
     res.raise_for_status()
     data = res.json()
 
-    stocks: List[Dict[str, Any]] = []
-
+    stocks = []
     for s in data:
         try:
             symbol = str(s.get("Code", "")).strip()
             name = str(s.get("Name", "")).strip()
-
-            if not is_valid_common_stock_symbol(symbol):
-                continue
-
             price = safe_float(s.get("ClosingPrice"))
-            change = safe_float(s.get("Change"))
+            change_raw = str(s.get("Change", "")).strip()
             volume = safe_int(s.get("TradeVolume"))
-            open_price = safe_float(s.get("OpeningPrice"))
-            high = safe_float(s.get("HighestPrice"))
-            low = safe_float(s.get("LowestPrice"))
 
-            if not name or price <= 0:
+            if not symbol or not name or price <= 0:
                 continue
 
-            prev_close = round(price - change, 2) if (price - change) > 0 else 0.0
-            if prev_close <= 0:
-                continue
+            # TWSE 的 Change 有些會帶 + / -，有些已經是純數字
+            change = safe_float(change_raw, 0.0)
+            change_percent = round((change / (price - change) * 100), 2) if (price - change) > 0 else 0.0
 
-            change_percent = calc_change_percent(price, prev_close)
-            amplitude = calc_amplitude(high, low, prev_close)
+            extra = build_signal_and_reason(price, change, change_percent, volume)
 
-            stocks.append(
-                {
-                    "market": "上市",
-                    "symbol": symbol,
-                    "name": name,
-                    "price": round(price, 2),
-                    "change": round(change, 2),
-                    "change_percent": change_percent,
-                    "volume": volume,
-                    "open": round(open_price, 2),
-                    "high": round(high, 2),
-                    "low": round(low, 2),
-                    "prev_close": prev_close,
-                    "amplitude": amplitude,
-                }
-            )
-        except Exception:
+            stocks.append({
+                "market": "上市",
+                "symbol": symbol,
+                "name": name,
+                "price": round(price, 2),
+                "change": round(change, 2),               # 這就是你要新增的欄位
+                "change_percent": round(change_percent, 2),
+                "volume": volume,
+                **extra,
+            })
+        except:
             continue
 
     return stocks
 
 
 def fetch_tpex_stocks() -> List[Dict[str, Any]]:
-    res = requests.get(TPEX_URL, timeout=20)
-    res.raise_for_status()
-    data = res.json()
+    urls = [
+        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
+        "https://www.tpex.org.tw/openapi/v1/tpex_esb_quotes",
+    ]
 
-    stocks: List[Dict[str, Any]] = []
+    stocks = []
 
-    for s in data:
+    for url in urls:
         try:
-            symbol = str(s.get("SecuritiesCompanyCode", "")).strip()
-            name = str(s.get("CompanyName", "")).strip()
+            res = requests.get(url, timeout=20)
+            res.raise_for_status()
+            data = res.json()
 
-            if not is_valid_common_stock_symbol(symbol):
-                continue
+            for s in data:
+                try:
+                    symbol = str(s.get("SecuritiesCompanyCode", "") or s.get("Code", "")).strip()
+                    name = str(s.get("CompanyName", "") or s.get("Name", "")).strip()
 
-            price = safe_float(s.get("Close"))
-            change = safe_float(s.get("Diff"))
-            volume = safe_int(s.get("TradingShares"))
-            open_price = safe_float(s.get("Open"))
-            high = safe_float(s.get("High"))
-            low = safe_float(s.get("Low"))
+                    price = safe_float(
+                        s.get("Close") or s.get("ClosingPrice") or s.get("LatestTradePrice"),
+                        0.0
+                    )
 
-            if not name or price <= 0:
-                continue
+                    change = safe_float(
+                        s.get("Change") or s.get("PriceChange"),
+                        0.0
+                    )
 
-            prev_close = round(price - change, 2) if (price - change) > 0 else 0.0
-            if prev_close <= 0:
-                continue
+                    volume = safe_int(
+                        s.get("TradingShares") or s.get("TradeVolume") or s.get("Volume"),
+                        0
+                    )
 
-            change_percent = calc_change_percent(price, prev_close)
-            amplitude = calc_amplitude(high, low, prev_close)
+                    if not symbol or not name or price <= 0:
+                        continue
 
-            stocks.append(
-                {
-                    "market": "上櫃",
-                    "symbol": symbol,
-                    "name": name,
-                    "price": round(price, 2),
-                    "change": round(change, 2),
-                    "change_percent": change_percent,
-                    "volume": volume,
-                    "open": round(open_price, 2),
-                    "high": round(high, 2),
-                    "low": round(low, 2),
-                    "prev_close": prev_close,
-                    "amplitude": amplitude,
-                }
-            )
-        except Exception:
+                    prev_close = price - change
+                    change_percent = round((change / prev_close * 100), 2) if prev_close > 0 else 0.0
+
+                    extra = build_signal_and_reason(price, change, change_percent, volume)
+
+                    stocks.append({
+                        "market": "上櫃",
+                        "symbol": symbol,
+                        "name": name,
+                        "price": round(price, 2),
+                        "change": round(change, 2),        # 這就是你要新增的欄位
+                        "change_percent": round(change_percent, 2),
+                        "volume": volume,
+                        **extra,
+                    })
+                except:
+                    continue
+        except:
             continue
-
-    return stocks
-
-
-def enrich_stocks(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if not stocks:
-        return stocks
-
-    volumes = [s["volume"] for s in stocks if s.get("volume", 0) > 0]
-    median_volume = median(volumes) if volumes else 1
-
-    for s in stocks:
-        volume_ratio = round(s.get("volume", 0) / median_volume, 2) if median_volume > 0 else 1.0
-        signal = detect_signal(
-            s.get("change_percent", 0.0),
-            s.get("price", 0.0),
-            s.get("open", 0.0),
-            volume_ratio,
-        )
-        score = calc_score(s, median_volume)
-        reason = generate_professional_reason(s, median_volume)
-        entry_price, target_price, stop_loss = calc_trade_levels(
-            s.get("price", 0.0),
-            s.get("amplitude", 0.0),
-            signal,
-        )
-
-        s["signal"] = signal
-        s["score"] = score
-        s["reason"] = reason
-        s["entry_price"] = entry_price
-        s["target_price"] = target_price
-        s["stop_loss"] = stop_loss
 
     return stocks
 
 
 @app.get("/stocks")
 def get_stocks():
-    fetch_time = now_str()
-
     try:
         twse_stocks = fetch_twse_stocks()
         tpex_stocks = fetch_tpex_stocks()
 
         all_stocks = twse_stocks + tpex_stocks
-        all_stocks = enrich_stocks(all_stocks)
 
-        all_stocks.sort(
-            key=lambda x: (
-                x.get("score", 0),
-                x.get("change_percent", 0),
-                x.get("volume", 0),
-            ),
-            reverse=True,
-        )
-
-        # 取資料日期：優先從股票資料抓，抓不到就用今天
-        data_date = datetime.now().strftime("%Y%m%d")
-        if all_stocks:
-            data_date = datetime.now().strftime("%Y%m%d")
+        all_stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
         return {
             "success": True,
-            "market_status": "收盤資料",
-            "data_date": data_date,
-            "last_update": fetch_time,
+            "market_status": "收盤後資料",
+            "data_date": "",
+            "last_update": "",
             "total": len(all_stocks),
             "stocks": all_stocks,
-            "top_recommendations": all_stocks[:10],
         }
 
     except Exception as e:
         return {
             "success": False,
-            "market_status": "資料同步失敗",
-            "data_date": datetime.now().strftime("%Y%m%d"),
-            "last_update": fetch_time,
-            "total": 0,
-            "stocks": [],
-            "top_recommendations": [],
-            "message": str(e),
+            "message": f"資料抓取失敗: {str(e)}",
+            "stocks": []
         }
