@@ -77,38 +77,35 @@ export default function Home() {
   const [error, setError] = useState("");
 
   async function fetchStocks() {
-  try {
-    setLoading(true);
-    setError("");
+    try {
+      setLoading(true);
+      setError("");
 
-    const res = await fetch(BACKEND_URL, {
-      cache: "no-store",
-    });
+      const res = await fetch(BACKEND_URL, { cache: "no-store" });
+      const data: ApiResponse = await res.json();
 
-    const data: ApiResponse = await res.json();
+      if (!data.success) {
+        throw new Error(data.message || "取得資料失敗");
+      }
 
-    if (!data.success) {
-      throw new Error(data.message || "取得資料失敗");
+      const safeStocks = (data.stocks || []).map((s) => ({
+        ...s,
+        price: Number(s.price ?? 0),
+        change: Number(s.change ?? 0),
+        change_percent: Number(s.change_percent ?? 0),
+        volume: Number(s.volume ?? 0),
+        score: Number(s.score ?? 0),
+      }));
+
+      setStocks(safeStocks);
+      setMarketStatus(data.market_status || "-");
+      setDataDate(data.data_date || "-");
+      setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "載入失敗");
+    } finally {
+      setLoading(false);
     }
-
-    const safeStocks = (data.stocks || []).map((s) => ({
-      ...s,
-      price: Number(s.price ?? 0),
-      change: Number(s.change ?? 0),
-      change_percent: Number(s.change_percent ?? 0),
-      volume: Number(s.volume ?? 0),
-      score: Number(s.score ?? 0),
-    }));
-
-    setStocks(safeStocks);
-    setMarketStatus(data.market_status || "-");
-    setDataDate(data.data_date || "-");
-    setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
-  } catch (err) {
-    setError(err instanceof Error ? err.message : "載入失敗");
-  } finally {
-    setLoading(false);
-  }
   }
 
   useEffect(() => {
@@ -171,12 +168,12 @@ export default function Home() {
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
-  border: "1px solid rgba(80, 140, 220, 0.22)",
-  borderRadius: "22px",
-  padding: "24px",
-  height: "450px",
-  boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
-  overflow: "hidden",
+    border: "1px solid rgba(80, 140, 220, 0.22)",
+    borderRadius: "22px",
+    padding: "24px",
+    height: "595px",
+    boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+    overflow: "hidden",
   };
 
   return (
@@ -406,13 +403,13 @@ export default function Home() {
           </div>
 
           <div style={panelStyle}>
-            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>
+            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "10px" }}>
               🔥 推薦10檔
             </h2>
 
             <div
               style={{
-                height: "470px",
+                height: "505px",
                 overflowY: "auto",
                 paddingRight: "6px",
               }}
@@ -429,7 +426,7 @@ export default function Home() {
                       border: "1px solid rgba(86, 145, 228, 0.22)",
                       borderRadius: "18px",
                       padding: "16px 18px",
-                      marginBottom: "14px",
+                      marginBottom: "12px",
                     }}
                   >
                     <div
@@ -540,6 +537,7 @@ export default function Home() {
           style={{
             ...panelStyle,
             minHeight: "unset",
+            height: "auto",
             padding: "20px",
           }}
         >
