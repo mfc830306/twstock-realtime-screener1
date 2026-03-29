@@ -231,10 +231,6 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="hero">
-          <h1>台股分類瀏覽</h1>
-        </div>
-
         <div className="top-grid">
           <section className="panel left-panel">
             <h2>價格分類 / 篩選</h2>
