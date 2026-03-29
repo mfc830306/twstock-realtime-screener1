@@ -55,6 +55,11 @@ function formatNumber(num?: number) {
   return num.toLocaleString("zh-TW");
 }
 
+function formatPrice(value?: number) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
+  return value.toLocaleString("zh-TW");
+}
+
 function formatSigned(value?: number, digits = 2) {
   if (value === undefined || value === null || Number.isNaN(value)) return "-";
   return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
@@ -222,8 +227,8 @@ export default function Home() {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "360px 1fr",
-            gap: "22px",
+            gridTemplateColumns: "340px 1fr",
+            gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
           }}
@@ -234,7 +239,7 @@ export default function Home() {
               border: "1px solid rgba(80, 140, 220, 0.22)",
               borderRadius: "22px",
               padding: "20px",
-              minHeight: "590px",
+              minHeight: "500px",
             }}
           >
             <h2 style={{ fontSize: "22px", fontWeight: 800, marginBottom: "18px" }}>
@@ -283,19 +288,19 @@ export default function Home() {
               placeholder="搜尋股票代號 / 名稱"
               style={{
                 width: "100%",
-                height: "48px",
+                height: "44px",
                 borderRadius: "14px",
                 border: "none",
                 outline: "none",
                 padding: "0 16px",
                 fontSize: "15px",
-                marginBottom: "16px",
+                marginBottom: "18px",
                 background: "#e6edf7",
                 color: "#123",
               }}
             />
 
-            <div style={{ display: "flex", gap: "10px" }}>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button
                 onClick={() => setRankType("recommend")}
                 style={{
@@ -361,7 +366,7 @@ export default function Home() {
               border: "1px solid rgba(80, 140, 220, 0.22)",
               borderRadius: "22px",
               padding: "20px",
-              minHeight: "590px",
+              minHeight: "500px",
             }}
           >
             <h2 style={{ fontSize: "22px", fontWeight: 800, marginBottom: "16px" }}>
@@ -370,7 +375,7 @@ export default function Home() {
 
             <div
               style={{
-                maxHeight: "520px",
+                maxHeight: "480px",
                 overflowY: "auto",
                 paddingRight: "6px",
               }}
@@ -426,12 +431,26 @@ export default function Home() {
                           </span>
 
                           <span style={{ fontWeight: 700, color: "#dce9ff" }}>
-                            股價 {stock.price}
+                            股價 {formatPrice(stock.price)}
                           </span>
 
-                          <span style={{ fontWeight: 900, color: changeColor }}>
-                            {formatSigned(stock.change)}　{formatSigned(stock.change_percent)}%
-                          </span>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "14px",
+                              flexWrap: "wrap",
+                              alignItems: "center",
+                              fontWeight: 900,
+                              color: changeColor,
+                            }}
+                          >
+                            <span>
+                              漲跌 {stock.change > 0 ? "+" : ""}{stock.change.toFixed(2)}
+                            </span>
+                            <span>
+                              漲跌% {stock.change_percent > 0 ? "+" : ""}{stock.change_percent.toFixed(2)}%
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -554,7 +573,7 @@ export default function Home() {
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: "980px",
+                minWidth: "1080px",
                 overflow: "hidden",
               }}
             >
@@ -568,6 +587,7 @@ export default function Home() {
                   <th style={thStyle}>名稱</th>
                   <th style={thStyle}>股價</th>
                   <th style={thStyle}>漲跌</th>
+                  <th style={thStyle}>漲跌%</th>
                   <th style={thStyle}>成交量</th>
                   <th style={thStyle}>分數</th>
                 </tr>
@@ -588,15 +608,20 @@ export default function Home() {
                     >
                       <td style={tdStyle}>{stock.symbol}</td>
                       <td style={tdStyle}>{stock.name}</td>
-                      <td style={tdStyle}>{stock.price}</td>
+                      <td style={tdStyle}>{formatPrice(stock.price)}</td>
+
                       <td style={tdStyle}>
                         <div style={{ color, fontWeight: 900, fontSize: "18px" }}>
-                          {formatSigned(stock.change)}
-                        </div>
-                        <div style={{ color, fontWeight: 800, fontSize: "15px", marginTop: "4px" }}>
-                          {formatSigned(stock.change_percent)}%
+                          {stock.change > 0 ? "+" : ""}{stock.change.toFixed(2)}
                         </div>
                       </td>
+
+                      <td style={tdStyle}>
+                        <div style={{ color, fontWeight: 800, fontSize: "15px" }}>
+                          {stock.change_percent > 0 ? "+" : ""}{stock.change_percent.toFixed(2)}%
+                        </div>
+                      </td>
+
                       <td style={tdStyle}>{formatNumber(stock.volume)}</td>
                       <td style={tdStyle}>{stock.score ?? 0}</td>
                     </tr>
