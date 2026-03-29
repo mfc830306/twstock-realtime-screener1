@@ -1,18 +1,23 @@
-html,
-body {
-  padding: 0;
-  margin: 0;
-  background: #041f45;
-  color: #ffffff;
-  font-family: Arial, Helvetica, sans-serif;
-}
-
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
-  min-width: 0;
+  padding: 0;
+  margin: 0;
+  font-family: Arial, "Microsoft JhengHei", "PingFang TC", sans-serif;
+  background: #062a57;
+  color: #ffffff;
+}
+
+body {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
 button,
@@ -20,334 +25,367 @@ input {
   font: inherit;
 }
 
-button {
-  cursor: pointer;
-}
-
 .page {
+  width: 100%;
   min-height: 100vh;
-  padding: 0 16px 40px;
-  background: #041f45;
+  background: #062a57;
 }
 
 .container {
-  max-width: 1400px;
+  width: 100%;
+  max-width: 1480px;
   margin: 0 auto;
+  padding: 20px 16px 40px;
 }
 
-/* ===== TOP BAR ===== */
-
-.topbar {
-  min-height: 88px;
-  padding: 14px 20px;
-  margin-bottom: 24px;
-  background: linear-gradient(180deg, #0a2d5e 0%, #082955 100%);
-  border: 1px solid #24538d;
-  border-top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+.page-header {
+  margin-bottom: 18px;
 }
 
-.topbar-left {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.brand-wrap {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.brand-title {
-  color: #6db2ff;
-  font-size: 18px;
+.title {
+  margin: 0 0 10px;
+  font-size: 44px;
   font-weight: 800;
+  color: #ffffff;
   letter-spacing: 1px;
 }
 
-.brand-dot {
-  color: #88a4c8;
-}
-
-.brand-subtitle {
-  color: #e5efff;
-  font-size: 16px;
-}
-
-.topbar-desc {
-  color: #bfd7ff;
-  font-size: 16px;
-}
-
-/* ===== 狀態 ===== */
-
-.topbar-status-wrap {
+.header-meta {
   display: flex;
   align-items: center;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.topbar-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: #124c2a;
-  color: #7df0a1;
-  border: 1px solid #1f7440;
-  border-radius: 8px;
-  padding: 8px 14px;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.topbar-badge-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #32df73;
-}
-
-.topbar-info {
-  color: #c8dcff;
-  font-size: 15px;
-}
-
-.topbar-label {
-  color: #b8cff0;
-}
-
-.topbar-value {
-  color: #ffffff;
-  font-weight: 600;
-}
-
-/* ===== PANEL ===== */
-
-.panel {
-  background: linear-gradient(180deg, #0a2d5e 0%, #082955 100%);
-  border: 1px solid #24538d;
-  border-radius: 18px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-}
-
-.panel h2 {
-  margin: 0 0 18px;
-  font-size: 24px;
-}
-
-/* ===== GRID ===== */
-
-.top-grid {
-  display: grid;
-  grid-template-columns: 340px 1fr;
-  gap: 20px;
-  margin-bottom: 20px;
-}
-
-.left-panel,
-.recommend-panel,
-.list-panel {
-  padding: 20px;
-}
-
-/* ===== 分類按鈕 ===== */
-
-.category-list {
-  display: flex;
-  flex-direction: column;
   gap: 12px;
-}
-
-.category-btn {
-  width: 100%;
-  border: 1px solid #3567a4;
-  background: rgba(255, 255, 255, 0.06);
-  color: #ffffff;
-  border-radius: 14px;
-  padding: 14px 16px;
-  display: flex;
-  justify-content: space-between;
-}
-
-.category-btn.active {
-  background: #16519a;
-  border-color: #7fb7ff;
-}
-
-.count {
-  color: #c7ddff;
-}
-
-/* ===== 搜尋 ===== */
-
-.search-box {
-  margin-top: 18px;
-}
-
-.search-box input {
-  width: 100%;
-  border-radius: 12px;
-  border: 1px solid #3567a4;
-  background: #0b3976;
-  color: #fff;
-  padding: 12px;
-}
-
-/* ===== 排序 ===== */
-
-.sort-row {
-  margin-top: 16px;
-  display: flex;
-  gap: 10px;
   flex-wrap: wrap;
-}
-
-.sort-btn,
-.page-btn {
-  border: 1px solid #3567a4;
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  border-radius: 10px;
-  padding: 10px 14px;
-}
-
-.sort-btn.active,
-.page-btn.active {
-  background: #1f64b7;
-  border-color: #8ec0ff;
-}
-
-/* ===== 推薦卡 ===== */
-
-.recommend-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.recommend-card {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid #3567a4;
-  border-radius: 14px;
-  padding: 14px;
-}
-
-.recommend-title {
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.recommend-sub {
-  color: #c3d9fb;
+  color: #d7e6ff;
   font-size: 14px;
 }
 
-.recommend-change {
-  font-size: 18px;
+.refresh-btn {
+  border: none;
+  background: #2f7df6;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
   font-weight: 700;
 }
 
-/* ===== 進出場價 ===== */
+.refresh-btn:hover {
+  background: #1f6ae0;
+}
 
-.recommend-price-grid {
-  margin-top: 14px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+.top-layout {
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+  margin-bottom: 18px;
+}
+
+.left-panel {
+  width: 36%;
+  min-width: 320px;
+}
+
+.right-panel {
+  width: 64%;
+  min-width: 0;
+}
+
+.panel {
+  background: rgba(7, 20, 43, 0.72);
+  border: 1px solid rgba(131, 171, 255, 0.22);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.panel-title {
+  margin: 0 0 14px;
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.category-list {
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+  margin-bottom: 14px;
 }
 
-.recommend-info-item {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid #3567a4;
-  border-radius: 12px;
-  padding: 10px;
+.category-btn {
+  border: 1px solid #4f6f9f;
+  background: #0f376f;
+  color: #ffffff;
+  padding: 9px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: 0.2s;
 }
 
-.recommend-info-label {
-  font-size: 12px;
-  color: #bcd3f5;
+.category-btn:hover {
+  background: #1b4f97;
 }
 
-.recommend-info-value {
+.category-btn.active {
+  background: #2f7df6;
+  border-color: #2f7df6;
+}
+
+.search-wrap {
+  margin-bottom: 14px;
+}
+
+.search-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #5574a1;
+  background: #f5f8ff;
+  color: #10233e;
+  outline: none;
+}
+
+.sort-wrap {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sort-btn {
+  border: 1px solid #4f6f9f;
+  background: #0f376f;
+  color: #ffffff;
+  padding: 9px 16px;
+  border-radius: 10px;
+  cursor: pointer;
   font-weight: 700;
 }
 
-/* ===== 推薦原因 ===== */
+.sort-btn.active {
+  background: #2f7df6;
+  border-color: #2f7df6;
+}
+
+.recommend-list {
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.recommend-card {
+  background: rgba(20, 42, 74, 0.95);
+  border: 1px solid rgba(117, 160, 242, 0.18);
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.recommend-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.recommend-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 800;
+  flex-wrap: wrap;
+}
+
+.recommend-symbol {
+  color: #8bc1ff;
+}
+
+.recommend-score {
+  color: #ffd76a;
+  font-size: 15px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.recommend-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: #d8e7ff;
+}
+
+.signal-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.signal-up {
+  background: rgba(255, 77, 77, 0.18);
+  color: #ff8a8a;
+  border: 1px solid rgba(255, 108, 108, 0.28);
+}
+
+.signal-down {
+  background: rgba(48, 200, 120, 0.16);
+  color: #73e3a4;
+  border: 1px solid rgba(115, 227, 164, 0.28);
+}
+
+.signal-neutral {
+  background: rgba(162, 177, 207, 0.16);
+  color: #dbe6ff;
+  border: 1px solid rgba(162, 177, 207, 0.2);
+}
 
 .recommend-reason {
-  margin-top: 12px;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid #3567a4;
+  line-height: 1.75;
+  color: #f0f5ff;
+  font-size: 14px;
+  margin-bottom: 10px;
 }
 
-.recommend-reason-label {
-  color: #8fc0ff;
+.recommend-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #9cc5ff;
+  font-size: 13px;
   font-weight: 700;
 }
 
-/* ===== 表格 ===== */
+.list-panel {
+  width: 100%;
+}
+
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
 
 .table-wrap {
+  width: 100%;
   overflow-x: auto;
-  border: 1px solid #24538d;
-  border-radius: 14px;
 }
 
 .stock-table {
   width: 100%;
-  min-width: 1100px;
   border-collapse: collapse;
+  min-width: 760px;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.stock-table thead tr {
+  background: #103869;
 }
 
 .stock-table th,
 .stock-table td {
-  padding: 12px;
-  border-bottom: 1px solid #1d4578;
+  padding: 14px 10px;
+  border-bottom: 1px solid rgba(137, 170, 230, 0.18);
+  text-align: center;
+  vertical-align: middle;
 }
 
 .stock-table th {
-  color: #dcecff;
+  font-size: 16px;
+  font-weight: 800;
+  color: #ffffff;
 }
 
-/* ===== 分頁 ===== */
-
-.pagination {
-  margin-top: 16px;
-  display: flex;
-  gap: 8px;
-  justify-content: center;
+.stock-table tbody tr {
+  background: rgba(12, 32, 59, 0.86);
+  transition: 0.15s;
 }
 
-/* ===== 漲跌顏色 ===== */
-
-.up-text {
-  color: #ff8f8f;
+.stock-table tbody tr:hover {
+  background: rgba(23, 52, 92, 0.95);
 }
 
-.down-text {
-  color: #71d693;
+.score-cell {
+  color: #ffd76a;
+  font-weight: 800;
 }
 
-/* ===== 手機版 ===== */
+.text-up {
+  color: #ff7f7f;
+  font-weight: 700;
+}
+
+.text-down {
+  color: #6ee7a8;
+  font-weight: 700;
+}
+
+.status-box,
+.empty-box {
+  background: rgba(12, 32, 59, 0.86);
+  border: 1px solid rgba(137, 170, 230, 0.18);
+  border-radius: 12px;
+  padding: 18px;
+  text-align: center;
+  color: #e5efff;
+}
+
+.error-box {
+  color: #ffaaaa;
+}
 
 @media (max-width: 1100px) {
-  .top-grid {
-    grid-template-columns: 1fr;
+  .top-layout {
+    flex-direction: column;
   }
 
-  .recommend-price-grid {
-    grid-template-columns: 1fr;
+  .left-panel,
+  .right-panel {
+    width: 100%;
+    min-width: 0;
   }
 
-  .topbar {
+  .title {
+    font-size: 34px;
+  }
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 16px 10px 28px;
+  }
+
+  .title {
+    font-size: 30px;
+  }
+
+  .panel {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .panel-title {
+    font-size: 20px;
+  }
+
+  .recommend-top {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .recommend-name {
+    font-size: 16px;
+  }
+
+  .stock-table {
+    min-width: 700px;
   }
 }
