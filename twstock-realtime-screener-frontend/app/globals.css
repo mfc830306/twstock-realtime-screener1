@@ -35,6 +35,8 @@ button {
   margin: 0 auto;
 }
 
+/* ===== TOP BAR ===== */
+
 .topbar {
   min-height: 88px;
   padding: 14px 20px;
@@ -52,14 +54,12 @@ button {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-width: 0;
 }
 
 .brand-wrap {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 0;
 }
 
 .brand-title {
@@ -71,27 +71,25 @@ button {
 
 .brand-dot {
   color: #88a4c8;
-  font-size: 16px;
 }
 
 .brand-subtitle {
   color: #e5efff;
   font-size: 16px;
-  white-space: nowrap;
 }
 
 .topbar-desc {
   color: #bfd7ff;
   font-size: 16px;
-  white-space: nowrap;
 }
+
+/* ===== 狀態 ===== */
 
 .topbar-status-wrap {
   display: flex;
   align-items: center;
   gap: 24px;
   flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .topbar-badge {
@@ -112,13 +110,11 @@ button {
   height: 8px;
   border-radius: 999px;
   background: #32df73;
-  display: inline-block;
 }
 
 .topbar-info {
   color: #c8dcff;
   font-size: 15px;
-  white-space: nowrap;
 }
 
 .topbar-label {
@@ -130,16 +126,7 @@ button {
   font-weight: 600;
 }
 
-.hero {
-  margin-bottom: 24px;
-}
-
-.hero h1 {
-  margin: 0 0 8px;
-  font-size: 42px;
-  line-height: 1.2;
-  font-weight: 700;
-}
+/* ===== PANEL ===== */
 
 .panel {
   background: linear-gradient(180deg, #0a2d5e 0%, #082955 100%);
@@ -151,14 +138,14 @@ button {
 .panel h2 {
   margin: 0 0 18px;
   font-size: 24px;
-  line-height: 1.2;
 }
+
+/* ===== GRID ===== */
 
 .top-grid {
   display: grid;
   grid-template-columns: 340px 1fr;
   gap: 20px;
-  align-items: start;
   margin-bottom: 20px;
 }
 
@@ -167,6 +154,8 @@ button {
 .list-panel {
   padding: 20px;
 }
+
+/* ===== 分類按鈕 ===== */
 
 .category-list {
   display: flex;
@@ -182,13 +171,7 @@ button {
   border-radius: 14px;
   padding: 14px 16px;
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  transition: 0.2s ease;
-}
-
-.category-btn:hover {
-  background: rgba(255, 255, 255, 0.11);
 }
 
 .category-btn.active {
@@ -200,6 +183,8 @@ button {
   color: #c7ddff;
 }
 
+/* ===== 搜尋 ===== */
+
 .search-box {
   margin-top: 18px;
 }
@@ -210,19 +195,16 @@ button {
   border: 1px solid #3567a4;
   background: #0b3976;
   color: #fff;
-  padding: 12px 14px;
-  outline: none;
+  padding: 12px;
 }
 
-.search-box input::placeholder {
-  color: #bfd4f3;
-}
+/* ===== 排序 ===== */
 
 .sort-row {
   margin-top: 16px;
   display: flex;
-  flex-wrap: wrap;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .sort-btn,
@@ -232,12 +214,6 @@ button {
   color: #fff;
   border-radius: 10px;
   padding: 10px 14px;
-  transition: 0.2s ease;
-}
-
-.sort-btn:hover,
-.page-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
 }
 
 .sort-btn.active,
@@ -246,11 +222,7 @@ button {
   border-color: #8ec0ff;
 }
 
-.sort-btn:disabled,
-.page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
+/* ===== 推薦卡 ===== */
 
 .recommend-list {
   display: flex;
@@ -265,17 +237,9 @@ button {
   padding: 14px;
 }
 
-.recommend-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
 .recommend-title {
   font-size: 18px;
   font-weight: 700;
-  margin-bottom: 4px;
 }
 
 .recommend-sub {
@@ -286,40 +250,51 @@ button {
 .recommend-change {
   font-size: 18px;
   font-weight: 700;
-  white-space: nowrap;
 }
 
-.list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+/* ===== 進出場價 ===== */
+
+.recommend-price-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
 
-.list-subtitle {
-  margin-top: 6px;
-  color: #c3d9fb;
-  font-size: 14px;
-}
-
-.status-box {
-  background: rgba(255, 255, 255, 0.06);
+.recommend-info-item {
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid #3567a4;
-  border-radius: 14px;
-  padding: 32px 16px;
-  text-align: center;
-  color: #dcecff;
+  border-radius: 12px;
+  padding: 10px;
 }
 
-.status-box.error {
-  color: #ffd2d2;
-  border-color: #9c4d4d;
-  background: rgba(255, 80, 80, 0.08);
+.recommend-info-label {
+  font-size: 12px;
+  color: #bcd3f5;
 }
+
+.recommend-info-value {
+  font-weight: 700;
+}
+
+/* ===== 推薦原因 ===== */
+
+.recommend-reason {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid #3567a4;
+}
+
+.recommend-reason-label {
+  color: #8fc0ff;
+  font-weight: 700;
+}
+
+/* ===== 表格 ===== */
 
 .table-wrap {
-  width: 100%;
   overflow-x: auto;
   border: 1px solid #24538d;
   border-radius: 14px;
@@ -327,135 +302,52 @@ button {
 
 .stock-table {
   width: 100%;
-  min-width: 1150px;
+  min-width: 1100px;
   border-collapse: collapse;
-  background: rgba(0, 0, 0, 0.08);
-}
-
-.stock-table thead tr {
-  background: rgba(255, 255, 255, 0.06);
 }
 
 .stock-table th,
 .stock-table td {
-  padding: 12px 10px;
+  padding: 12px;
   border-bottom: 1px solid #1d4578;
-  text-align: left;
-  white-space: nowrap;
-  font-size: 14px;
 }
 
 .stock-table th {
   color: #dcecff;
-  font-weight: 700;
 }
 
-.stock-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
+/* ===== 分頁 ===== */
 
 .pagination {
   margin-top: 16px;
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
 }
 
+/* ===== 漲跌顏色 ===== */
+
 .up-text {
   color: #ff8f8f;
-  font-weight: 700;
 }
 
 .down-text {
   color: #71d693;
-  font-weight: 700;
 }
 
+/* ===== 手機版 ===== */
+
 @media (max-width: 1100px) {
-  .topbar {
-    padding: 14px 16px;
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .topbar-left {
-    width: 100%;
-  }
-
-  .topbar-desc {
-    white-space: normal;
-  }
-
-  .topbar-status-wrap {
-    width: 100%;
-    justify-content: flex-start;
-    gap: 14px;
-  }
-
   .top-grid {
     grid-template-columns: 1fr;
   }
 
-  .recommend-top {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
-@media (max-width: 640px) {
-  .page {
-    padding: 0 10px 28px;
+  .recommend-price-grid {
+    grid-template-columns: 1fr;
   }
 
   .topbar {
-    margin-bottom: 18px;
-  }
-
-  .brand-wrap {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .brand-title {
-    font-size: 17px;
-  }
-
-  .brand-subtitle,
-  .topbar-desc {
-    font-size: 15px;
-  }
-
-  .topbar-info,
-  .topbar-badge {
-    font-size: 14px;
-  }
-
-  .hero h1 {
-    font-size: 30px;
-  }
-
-  .panel h2 {
-    font-size: 22px;
-  }
-
-  .left-panel,
-  .recommend-panel,
-  .list-panel {
-    padding: 16px;
-  }
-
-  .category-btn {
-    padding: 12px 14px;
-  }
-
-  .sort-row {
-    gap: 8px;
-  }
-
-  .sort-btn,
-  .page-btn {
-    padding: 9px 12px;
-    font-size: 14px;
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
