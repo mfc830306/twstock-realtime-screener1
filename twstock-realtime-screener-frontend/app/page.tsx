@@ -297,7 +297,8 @@ export default function Home() {
                         {stock.symbol} {stock.name}
                       </div>
                       <div className="recommend-sub">
-                        {stock.market} / 分數 {stock.score ?? 0}
+                        {stock.market} / 分數 {stock.score ?? 0} / 訊號{" "}
+                        {stock.signal || "-"}
                       </div>
                     </div>
                     <div
@@ -310,6 +311,34 @@ export default function Home() {
                       {stock.change_percent >= 0 ? "+" : ""}
                       {stock.change_percent}%
                     </div>
+                  </div>
+
+                  <div className="recommend-price-grid">
+                    <div className="recommend-info-item">
+                      <div className="recommend-info-label">進場價位</div>
+                      <div className="recommend-info-value">
+                        {stock.entry_price || "-"}
+                      </div>
+                    </div>
+
+                    <div className="recommend-info-item">
+                      <div className="recommend-info-label">目標價位</div>
+                      <div className="recommend-info-value">
+                        {stock.target_price || "-"}
+                      </div>
+                    </div>
+
+                    <div className="recommend-info-item">
+                      <div className="recommend-info-label">停損價位</div>
+                      <div className="recommend-info-value">
+                        {stock.stop_loss || "-"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="recommend-reason">
+                    <span className="recommend-reason-label">推薦原因：</span>
+                    <span>{stock.reason || "-"}</span>
                   </div>
                 </div>
               ))}
