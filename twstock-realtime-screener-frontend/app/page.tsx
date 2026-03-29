@@ -26,6 +26,10 @@ type ApiResponse = {
   total?: number;
   stocks: Stock[];
   message?: string;
+  source_summary?: {
+    twse_data_date?: string;
+    tpex_data_date?: string;
+  };
 };
 
 const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
@@ -65,6 +69,21 @@ function formatSigned(num?: number, digits = 2) {
   return `${num > 0 ? "+" : ""}${num.toFixed(digits)}`;
 }
 
+function formatDateString(dateText?: string) {
+  if (!dateText || dateText === "-") return "-";
+  const clean = String(dateText).replace(/\D/g, "");
+  if (clean.length === 8) {
+    return `${clean.slice(0, 4)}/${clean.slice(4, 6)}/${clean.slice(6, 8)}`;
+  }
+  return dateText;
+}
+
+function getMarketLightColor(status?: string) {
+  if (!status) return "#ef4444";
+  if (status.includes("開盤")) return "#22c55e";
+  return "#ef4444";
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [marketStatus, setMarketStatus] = useState("-");
@@ -99,7 +118,12 @@ export default function Home() {
 
       setStocks(safeStocks);
       setMarketStatus(data.market_status || "-");
-      setDataDate(data.data_date || "-");
+      setDataDate(
+        data.data_date ||
+          data.source_summary?.twse_data_date ||
+          data.source_summary?.tpex_data_date ||
+          "-"
+      );
       setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "載入失敗");
@@ -176,6 +200,8 @@ export default function Home() {
     overflow: "hidden",
   };
 
+  const marketLightColor = getMarketLightColor(marketStatus);
+
   return (
     <main
       style={{
@@ -238,39 +264,42 @@ export default function Home() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "16px",
+              gap: "12px",
               flexWrap: "wrap",
               justifyContent: "flex-end",
             }}
           >
             <div
               style={{
-                width: "42px",
-                height: "42px",
-                borderRadius: "999px",
-                background: "rgba(20, 153, 116, 0.18)",
-                border: "1px solid rgba(52, 211, 153, 0.25)",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center",
-                color: "#33e08a",
-                fontWeight: 900,
-                fontSize: "24px",
+                gap: "18px",
+                padding: "10px 16px",
+                borderRadius: "14px",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "#e8f1ff",
+                fontSize: "14px",
+                fontWeight: 700,
+                flexWrap: "wrap",
               }}
             >
-              ··
-            </div>
+              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span
+                  style={{
+                    width: "10px",
+                    height: "10px",
+                    borderRadius: "50%",
+                    background: marketLightColor,
+                    boxShadow: `0 0 6px ${marketLightColor}`,
+                    display: "inline-block",
+                  }}
+                />
+                市場狀態：{marketStatus}
+              </span>
 
-            <div style={{ fontSize: "15px", fontWeight: 700, color: "#e8f1ff" }}>
-              市場狀態：{marketStatus}
-            </div>
-
-            <div style={{ fontSize: "15px", fontWeight: 700, color: "#e8f1ff" }}>
-              資料日期：{dataDate}
-            </div>
-
-            <div style={{ fontSize: "15px", fontWeight: 700, color: "#e8f1ff" }}>
-              最後更新：{lastUpdate}
+              <span>資料日期：{formatDateString(dataDate)}</span>
+              <span>最後更新：{lastUpdate}</span>
             </div>
 
             <button
@@ -285,6 +314,7 @@ export default function Home() {
                 fontWeight: 800,
                 cursor: loading ? "not-allowed" : "pointer",
                 opacity: loading ? 0.7 : 1,
+                minWidth: "78px",
               }}
             >
               {loading ? "更新中" : "更新"}
