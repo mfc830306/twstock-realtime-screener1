@@ -2,7 +2,7 @@ html,
 body {
   padding: 0;
   margin: 0;
-  background: #031b3d;
+  background: #041f45;
   color: #ffffff;
   font-family: Arial, Helvetica, sans-serif;
 }
@@ -27,7 +27,7 @@ button {
 .page {
   min-height: 100vh;
   padding: 0 16px 40px;
-  background: #031b3d;
+  background: #041f45;
 }
 
 .container {
@@ -36,16 +36,23 @@ button {
 }
 
 .topbar {
-  min-height: 64px;
-  padding: 0 20px;
+  min-height: 88px;
+  padding: 14px 20px;
   margin-bottom: 24px;
-  background: linear-gradient(90deg, #101923 0%, #121f2d 100%);
-  border: 1px solid #22364d;
+  background: linear-gradient(180deg, #0a2d5e 0%, #082955 100%);
+  border: 1px solid #24538d;
   border-top: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+}
+
+.topbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
 .brand-wrap {
@@ -56,19 +63,25 @@ button {
 }
 
 .brand-title {
-  color: #59a5ff;
+  color: #6db2ff;
   font-size: 18px;
   font-weight: 800;
   letter-spacing: 1px;
 }
 
 .brand-dot {
-  color: #5f6f83;
+  color: #88a4c8;
   font-size: 16px;
 }
 
 .brand-subtitle {
-  color: #c9d4e0;
+  color: #e5efff;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.topbar-desc {
+  color: #bfd7ff;
   font-size: 16px;
   white-space: nowrap;
 }
@@ -85,9 +98,9 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #153d22;
-  color: #66e087;
-  border: 1px solid #1e5f33;
+  background: #124c2a;
+  color: #7df0a1;
+  border: 1px solid #1f7440;
   border-radius: 8px;
   padding: 8px 14px;
   font-size: 15px;
@@ -98,22 +111,22 @@ button {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #2fd16a;
+  background: #32df73;
   display: inline-block;
 }
 
 .topbar-info {
-  color: #b9c6d5;
+  color: #c8dcff;
   font-size: 15px;
   white-space: nowrap;
 }
 
 .topbar-label {
-  color: #a9b7c7;
+  color: #b8cff0;
 }
 
 .topbar-value {
-  color: #dfe8f1;
+  color: #ffffff;
   font-weight: 600;
 }
 
@@ -128,15 +141,9 @@ button {
   font-weight: 700;
 }
 
-.hero p {
-  margin: 0;
-  color: #bfd7ff;
-  font-size: 16px;
-}
-
 .panel {
-  background: linear-gradient(180deg, #082955 0%, #062246 100%);
-  border: 1px solid #1e4f8e;
+  background: linear-gradient(180deg, #0a2d5e 0%, #082955 100%);
+  border: 1px solid #24538d;
   border-radius: 18px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
@@ -169,7 +176,7 @@ button {
 
 .category-btn {
   width: 100%;
-  border: 1px solid #2d5e9c;
+  border: 1px solid #3567a4;
   background: rgba(255, 255, 255, 0.06);
   color: #ffffff;
   border-radius: 14px;
@@ -185,12 +192,12 @@ button {
 }
 
 .category-btn.active {
-  background: #124888;
-  border-color: #65a7ff;
+  background: #16519a;
+  border-color: #7fb7ff;
 }
 
 .count {
-  color: #b7d4ff;
+  color: #c7ddff;
 }
 
 .search-box {
@@ -200,15 +207,15 @@ button {
 .search-box input {
   width: 100%;
   border-radius: 12px;
-  border: 1px solid #2d5e9c;
-  background: #0b3468;
+  border: 1px solid #3567a4;
+  background: #0b3976;
   color: #fff;
   padding: 12px 14px;
   outline: none;
 }
 
 .search-box input::placeholder {
-  color: #b5c8e8;
+  color: #bfd4f3;
 }
 
 .sort-row {
@@ -220,7 +227,7 @@ button {
 
 .sort-btn,
 .page-btn {
-  border: 1px solid #2d5e9c;
+  border: 1px solid #3567a4;
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   border-radius: 10px;
@@ -236,7 +243,7 @@ button {
 .sort-btn.active,
 .page-btn.active {
   background: #1f64b7;
-  border-color: #7eb5ff;
+  border-color: #8ec0ff;
 }
 
 .sort-btn:disabled,
@@ -253,7 +260,7 @@ button {
 
 .recommend-card {
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid #224f88;
+  border: 1px solid #3567a4;
   border-radius: 14px;
   padding: 14px;
 }
@@ -272,7 +279,7 @@ button {
 }
 
 .recommend-sub {
-  color: #b9d2f8;
+  color: #c3d9fb;
   font-size: 14px;
 }
 
@@ -292,17 +299,17 @@ button {
 
 .list-subtitle {
   margin-top: 6px;
-  color: #bdd5f7;
+  color: #c3d9fb;
   font-size: 14px;
 }
 
 .status-box {
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid #2d5e9c;
+  border: 1px solid #3567a4;
   border-radius: 14px;
   padding: 32px 16px;
   text-align: center;
-  color: #d8e8ff;
+  color: #dcecff;
 }
 
 .status-box.error {
@@ -314,7 +321,7 @@ button {
 .table-wrap {
   width: 100%;
   overflow-x: auto;
-  border: 1px solid #1d467b;
+  border: 1px solid #24538d;
   border-radius: 14px;
 }
 
@@ -332,14 +339,14 @@ button {
 .stock-table th,
 .stock-table td {
   padding: 12px 10px;
-  border-bottom: 1px solid #153761;
+  border-bottom: 1px solid #1d4578;
   text-align: left;
   white-space: nowrap;
   font-size: 14px;
 }
 
 .stock-table th {
-  color: #d4e6ff;
+  color: #dcecff;
   font-weight: 700;
 }
 
@@ -356,12 +363,12 @@ button {
 }
 
 .up-text {
-  color: #ff8080;
+  color: #ff8f8f;
   font-weight: 700;
 }
 
 .down-text {
-  color: #66d18f;
+  color: #71d693;
   font-weight: 700;
 }
 
@@ -370,6 +377,14 @@ button {
     padding: 14px 16px;
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-left {
+    width: 100%;
+  }
+
+  .topbar-desc {
+    white-space: normal;
   }
 
   .topbar-status-wrap {
@@ -406,7 +421,8 @@ button {
     font-size: 17px;
   }
 
-  .brand-subtitle {
+  .brand-subtitle,
+  .topbar-desc {
     font-size: 15px;
   }
 
