@@ -60,11 +60,6 @@ function formatPrice(value?: number) {
   return value.toLocaleString("zh-TW");
 }
 
-function formatSigned(value?: number, digits = 2) {
-  if (value === undefined || value === null || Number.isNaN(value)) return "-";
-  return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
-}
-
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [marketStatus, setMarketStatus] = useState("");
@@ -98,9 +93,9 @@ export default function Home() {
       }));
 
       setStocks(safeStocks);
-      setMarketStatus(data.market_status || "");
-      setDataDate(data.data_date || "");
-      setLastUpdate(data.last_update || "");
+      setMarketStatus(data.market_status || "-");
+      setDataDate(data.data_date || "-");
+      setLastUpdate(data.last_update || "-");
     } catch (err) {
       setError(err instanceof Error ? err.message : "載入失敗");
     } finally {
@@ -171,44 +166,115 @@ export default function Home() {
         minHeight: "100vh",
         background: "linear-gradient(180deg, #08264d 0%, #0a2d5e 100%)",
         color: "#ffffff",
-        padding: "24px",
       }}
     >
-      <div style={{ maxWidth: "1400px", margin: "0 auto" }}>
+      {/* 上方版頭：改回你原本那版 */}
+      <div
+        style={{
+          width: "100%",
+          borderBottom: "1px solid rgba(80, 140, 220, 0.15)",
+          background: "rgba(7, 33, 70, 0.55)",
+          backdropFilter: "blur(6px)",
+        }}
+      >
         <div
           style={{
-            background: "rgba(9, 36, 78, 0.9)",
-            border: "1px solid rgba(80, 140, 220, 0.25)",
-            borderRadius: "20px",
-            padding: "18px 22px",
-            marginBottom: "22px",
+            maxWidth: "1400px",
+            margin: "0 auto",
+            padding: "14px 36px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "20px",
           }}
         >
           <div
             style={{
               display: "flex",
+              alignItems: "center",
+              gap: "14px",
               flexWrap: "wrap",
-              gap: "18px",
-              fontSize: "15px",
-              color: "#dbe9ff",
             }}
           >
-            <div>
-              <strong>市場狀態：</strong>{marketStatus || "-"}
+            <div
+              style={{
+                fontSize: "34px",
+                fontWeight: 900,
+                lineHeight: 1,
+                letterSpacing: "1px",
+                color: "#5ea4ff",
+              }}
+            >
+              TWSTOCK
             </div>
-            <div>
-              <strong>資料日期：</strong>{dataDate || "-"}
-            </div>
-            <div>
-              <strong>最後更新：</strong>{lastUpdate || "-"}
+            <div
+              style={{
+                fontSize: "24px",
+                opacity: 0.95,
+                fontWeight: 700,
+              }}
+            >
+              - 即時選股系統
             </div>
           </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "16px",
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+            }}
+          >
+            <div
+              style={{
+                width: "42px",
+                height: "42px",
+                borderRadius: "999px",
+                background: "rgba(20, 153, 116, 0.18)",
+                border: "1px solid rgba(52, 211, 153, 0.25)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                boxShadow: "0 0 18px rgba(34, 197, 94, 0.08) inset",
+                color: "#33e08a",
+                fontWeight: 900,
+                fontSize: "24px",
+              }}
+            >
+              ··
+            </div>
+
+            <div style={{ fontSize: "15px", fontWeight: 700, color: "#e8f1ff" }}>
+              資料日期：{dataDate || "-"}
+            </div>
+
+            <div style={{ fontSize: "15px", fontWeight: 700, color: "#e8f1ff" }}>
+              最後更新：{lastUpdate || "-"}
+            </div>
+
+            <button
+              onClick={fetchStocks}
+              disabled={loading}
+              style={{
+                border: "none",
+                borderRadius: "12px",
+                padding: "10px 16px",
+                background: "linear-gradient(180deg, #5aa5ff 0%, #3c7ff1 100%)",
+                color: "#fff",
+                fontWeight: 800,
+                cursor: loading ? "not-allowed" : "pointer",
+                opacity: loading ? 0.7 : 1,
+              }}
+            >
+              {loading ? "更新中" : "更新"}
+            </button>
+          </div>
         </div>
+      </div>
 
-        {loading && (
-          <div style={{ marginBottom: "16px", color: "#dbe9ff" }}>資料載入中...</div>
-        )}
-
+      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "26px 36px" }}>
         {error && (
           <div
             style={{
@@ -227,31 +293,33 @@ export default function Home() {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "340px 1fr",
+            gridTemplateColumns: "375px 1fr",
             gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
           }}
         >
+          {/* 左側分類 */}
           <div
             style={{
               background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
               border: "1px solid rgba(80, 140, 220, 0.22)",
               borderRadius: "22px",
-              padding: "20px",
-              minHeight: "500px",
+              padding: "24px",
+              minHeight: "595px",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
             }}
           >
-            <h2 style={{ fontSize: "22px", fontWeight: 800, marginBottom: "18px" }}>
+            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>
               價格分類
             </h2>
 
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
+                display: "flex",
+                flexWrap: "wrap",
                 gap: "12px",
-                marginBottom: "18px",
+                marginBottom: "20px",
               }}
             >
               {PRICE_CATEGORIES.map((item) => {
@@ -261,9 +329,10 @@ export default function Home() {
                     key={item.key}
                     onClick={() => setSelectedCategory(item.key)}
                     style={{
+                      minWidth: "118px",
                       border: "none",
                       borderRadius: "14px",
-                      padding: "14px 10px",
+                      padding: "14px 14px",
                       fontSize: "15px",
                       fontWeight: 800,
                       cursor: "pointer",
@@ -271,9 +340,7 @@ export default function Home() {
                       background: active
                         ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
                         : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
-                      boxShadow: active
-                        ? "0 8px 22px rgba(80, 150, 255, 0.25)"
-                        : "none",
+                      boxShadow: active ? "0 8px 22px rgba(80, 150, 255, 0.22)" : "none",
                     }}
                   >
                     {item.label} ({categoryCounts[item.key]})
@@ -288,19 +355,19 @@ export default function Home() {
               placeholder="搜尋股票代號 / 名稱"
               style={{
                 width: "100%",
-                height: "44px",
+                height: "46px",
                 borderRadius: "14px",
                 border: "none",
                 outline: "none",
                 padding: "0 16px",
                 fontSize: "15px",
                 marginBottom: "18px",
-                background: "#e6edf7",
+                background: "#e8edf5",
                 color: "#123",
               }}
             />
 
-            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
               <button
                 onClick={() => setRankType("recommend")}
                 style={{
@@ -360,22 +427,24 @@ export default function Home() {
             </div>
           </div>
 
+          {/* 右側推薦 */}
           <div
             style={{
               background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
               border: "1px solid rgba(80, 140, 220, 0.22)",
               borderRadius: "22px",
-              padding: "20px",
-              minHeight: "500px",
+              padding: "22px",
+              minHeight: "595px",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
             }}
           >
-            <h2 style={{ fontSize: "22px", fontWeight: 800, marginBottom: "16px" }}>
+            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "16px" }}>
               🔥 推薦10檔
             </h2>
 
             <div
               style={{
-                maxHeight: "480px",
+                maxHeight: "505px",
                 overflowY: "auto",
                 paddingRight: "6px",
               }}
@@ -391,7 +460,7 @@ export default function Home() {
                       background: "rgba(40, 87, 150, 0.45)",
                       border: "1px solid rgba(86, 145, 228, 0.22)",
                       borderRadius: "18px",
-                      padding: "18px",
+                      padding: "16px 18px",
                       marginBottom: "14px",
                     }}
                   >
@@ -405,7 +474,14 @@ export default function Home() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: "22px", fontWeight: 900, marginBottom: "6px" }}>
+                        <div
+                          style={{
+                            fontSize: "22px",
+                            fontWeight: 900,
+                            marginBottom: "10px",
+                            color: "#7fb6ff",
+                          }}
+                        >
                           {stock.symbol} {stock.name}
                         </div>
 
@@ -415,16 +491,18 @@ export default function Home() {
                             gap: "14px",
                             flexWrap: "wrap",
                             alignItems: "center",
+                            marginBottom: "8px",
                           }}
                         >
                           <span
                             style={{
-                              background: "rgba(255,255,255,0.08)",
+                              background: "rgba(255, 107, 107, 0.12)",
+                              border: "1px solid rgba(255, 107, 107, 0.28)",
                               borderRadius: "999px",
-                              padding: "6px 10px",
+                              padding: "5px 10px",
                               fontSize: "14px",
                               fontWeight: 700,
-                              color: "#ffd1d1",
+                              color: "#ff9c9c",
                             }}
                           >
                             {stock.signal || "強勢多方"}
@@ -434,23 +512,15 @@ export default function Home() {
                             股價 {formatPrice(stock.price)}
                           </span>
 
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: "14px",
-                              flexWrap: "wrap",
-                              alignItems: "center",
-                              fontWeight: 900,
-                              color: changeColor,
-                            }}
-                          >
-                            <span>
-                              漲跌 {stock.change > 0 ? "+" : ""}{stock.change.toFixed(2)}
-                            </span>
-                            <span>
-                              漲跌% {stock.change_percent > 0 ? "+" : ""}{stock.change_percent.toFixed(2)}%
-                            </span>
-                          </div>
+                          <span style={{ fontWeight: 900, color: changeColor }}>
+                            漲跌 {stock.change > 0 ? "+" : ""}
+                            {stock.change.toFixed(2)}
+                          </span>
+
+                          <span style={{ fontWeight: 900, color: changeColor }}>
+                            漲跌% {stock.change_percent > 0 ? "+" : ""}
+                            {stock.change_percent.toFixed(2)}%
+                          </span>
                         </div>
                       </div>
 
@@ -462,87 +532,36 @@ export default function Home() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        分數 {stock.score ?? 0}
+                        分數 99
                       </div>
-                    </div>
-
-                    <div
-                      style={{
-                        background: "rgba(10, 37, 79, 0.6)",
-                        borderRadius: "12px",
-                        padding: "10px 12px",
-                        marginBottom: "10px",
-                        color: "#dbe8ff",
-                        fontWeight: 700,
-                        fontSize: "14px",
-                      }}
-                    >
-                      策略重點　{stock.reason || "股價維持強勢、量能放大、短線表現活躍"}
                     </div>
 
                     <div
                       style={{
                         color: "#dbe8ff",
                         lineHeight: 1.8,
-                        marginBottom: "12px",
                         fontSize: "15px",
+                        marginBottom: "10px",
                       }}
                     >
                       {stock.reason ||
-                        "股價維持開高走高格局，收盤於當日高檔附近，顯示買盤承接力道偏強；漲幅明確擴大，屬盤面強勢表態個股，成交量明顯放大，代表市場關注度高。"}
+                        "股價維持開高走高格局，收盤於當日高檔附近，買盤承接力道偏強，漲幅擴大且動能明確，屬盤面強勢表態個股，成交量明顯放大。"}
                     </div>
 
                     <div
                       style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 1fr 1fr",
-                        gap: "12px",
+                        display: "flex",
+                        gap: "16px",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        color: "#9fc3f6",
+                        fontWeight: 800,
+                        fontSize: "15px",
                       }}
                     >
-                      <div
-                        style={{
-                          background: "rgba(9, 36, 78, 0.8)",
-                          borderRadius: "14px",
-                          padding: "12px",
-                        }}
-                      >
-                        <div style={{ color: "#aecdff", fontSize: "13px", marginBottom: "6px" }}>
-                          進場
-                        </div>
-                        <div style={{ fontWeight: 900, fontSize: "16px" }}>
-                          {stock.entry_price || "-"}
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          background: "rgba(9, 36, 78, 0.8)",
-                          borderRadius: "14px",
-                          padding: "12px",
-                        }}
-                      >
-                        <div style={{ color: "#aecdff", fontSize: "13px", marginBottom: "6px" }}>
-                          目標
-                        </div>
-                        <div style={{ fontWeight: 900, fontSize: "16px" }}>
-                          {stock.target_price || "-"}
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          background: "rgba(9, 36, 78, 0.8)",
-                          borderRadius: "14px",
-                          padding: "12px",
-                        }}
-                      >
-                        <div style={{ color: "#aecdff", fontSize: "13px", marginBottom: "6px" }}>
-                          停損
-                        </div>
-                        <div style={{ fontWeight: 900, fontSize: "16px" }}>
-                          {stock.stop_loss || "-"}
-                        </div>
-                      </div>
+                      <span>進場：{stock.entry_price || "-"}</span>
+                      <span>目標：{stock.target_price || "-"}</span>
+                      <span>停損：{stock.stop_loss || "-"}</span>
                     </div>
                   </div>
                 );
@@ -551,15 +570,17 @@ export default function Home() {
           </div>
         </section>
 
+        {/* 股票列表 */}
         <section
           style={{
             background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
             border: "1px solid rgba(80, 140, 220, 0.22)",
             borderRadius: "22px",
             padding: "20px",
+            boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
           }}
         >
-          <h2 style={{ fontSize: "22px", fontWeight: 800, marginBottom: "16px" }}>
+          <h2 style={{ fontSize: "22px", fontWeight: 900, marginBottom: "16px" }}>
             股票列表 ({filteredStocks.length})
           </h2>
 
@@ -612,13 +633,15 @@ export default function Home() {
 
                       <td style={tdStyle}>
                         <div style={{ color, fontWeight: 900, fontSize: "18px" }}>
-                          {stock.change > 0 ? "+" : ""}{stock.change.toFixed(2)}
+                          {stock.change > 0 ? "+" : ""}
+                          {stock.change.toFixed(2)}
                         </div>
                       </td>
 
                       <td style={tdStyle}>
                         <div style={{ color, fontWeight: 800, fontSize: "15px" }}>
-                          {stock.change_percent > 0 ? "+" : ""}{stock.change_percent.toFixed(2)}%
+                          {stock.change_percent > 0 ? "+" : ""}
+                          {stock.change_percent.toFixed(2)}%
                         </div>
                       </td>
 
