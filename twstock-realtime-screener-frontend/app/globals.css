@@ -26,13 +26,95 @@ button {
 
 .page {
   min-height: 100vh;
-  padding: 24px 16px 40px;
+  padding: 0 16px 40px;
   background: #031b3d;
 }
 
 .container {
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.topbar {
+  min-height: 64px;
+  padding: 0 20px;
+  margin-bottom: 24px;
+  background: linear-gradient(90deg, #101923 0%, #121f2d 100%);
+  border: 1px solid #22364d;
+  border-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brand-title {
+  color: #59a5ff;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.brand-dot {
+  color: #5f6f83;
+  font-size: 16px;
+}
+
+.brand-subtitle {
+  color: #c9d4e0;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.topbar-status-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.topbar-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #153d22;
+  color: #66e087;
+  border: 1px solid #1e5f33;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.topbar-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2fd16a;
+  display: inline-block;
+}
+
+.topbar-info {
+  color: #b9c6d5;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.topbar-label {
+  color: #a9b7c7;
+}
+
+.topbar-value {
+  color: #dfe8f1;
+  font-weight: 600;
 }
 
 .hero {
@@ -63,36 +145,6 @@ button {
   margin: 0 0 18px;
   font-size: 24px;
   line-height: 1.2;
-}
-
-.status-panel {
-  padding: 20px;
-  margin-bottom: 20px;
-}
-
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.status-item {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid #224f88;
-  border-radius: 14px;
-  padding: 14px;
-}
-
-.status-label {
-  color: #b9d2f8;
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-.status-value {
-  font-size: 18px;
-  font-weight: 700;
-  word-break: break-word;
 }
 
 .top-grid {
@@ -314,8 +366,16 @@ button {
 }
 
 @media (max-width: 1100px) {
-  .status-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .topbar {
+    padding: 14px 16px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar-status-wrap {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 14px;
   }
 
   .top-grid {
@@ -330,7 +390,29 @@ button {
 
 @media (max-width: 640px) {
   .page {
-    padding: 16px 10px 28px;
+    padding: 0 10px 28px;
+  }
+
+  .topbar {
+    margin-bottom: 18px;
+  }
+
+  .brand-wrap {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .brand-title {
+    font-size: 17px;
+  }
+
+  .brand-subtitle {
+    font-size: 15px;
+  }
+
+  .topbar-info,
+  .topbar-badge {
+    font-size: 14px;
   }
 
   .hero h1 {
@@ -341,14 +423,9 @@ button {
     font-size: 22px;
   }
 
-  .status-grid {
-    grid-template-columns: 1fr;
-  }
-
   .left-panel,
   .recommend-panel,
-  .list-panel,
-  .status-panel {
+  .list-panel {
     padding: 16px;
   }
 
