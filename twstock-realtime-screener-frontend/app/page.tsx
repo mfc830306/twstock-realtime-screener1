@@ -174,7 +174,7 @@ export default function Home() {
   border: "1px solid rgba(80, 140, 220, 0.22)",
   borderRadius: "22px",
   padding: "24px",
-  height: "560px",
+  height: "450px",
   boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
   overflow: "hidden",
   };
