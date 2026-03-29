@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from typing import List, Dict, Any
+from datetime import datetime
 
 app = FastAPI()
 
@@ -206,20 +207,32 @@ def get_stocks():
         tpex_stocks = fetch_tpex_stocks()
 
         all_stocks = twse_stocks + tpex_stocks
-        all_stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
+        all_stocks.sort(
+            key=lambda x: (x.get("score", 0), x.get("volume", 0)),
+            reverse=True
+        )
+
+        now = datetime.now()
+        data_date = now.strftime("%Y%m%d")
+        last_update = now.strftime("%Y/%m/%d %H:%M:%S")
 
         return {
             "success": True,
             "market_status": "收盤後資料",
-            "data_date": "",
-            "last_update": "",
+            "data_date": data_date,
+            "last_update": last_update,
             "total": len(all_stocks),
-            "stocks": all_stocks,
+            "stocks": all_stocks
         }
 
     except Exception as e:
+        now = datetime.now()
         return {
             "success": False,
-            "message": f"資料抓取失敗: {str(e)}",
-            "stocks": []
+            "market_status": "資料抓取失敗",
+            "data_date": now.strftime("%Y%m%d"),
+            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+            "total": 0,
+            "stocks": [],
+            "message": f"資料抓取失敗: {str(e)}"
         }
