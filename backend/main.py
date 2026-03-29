@@ -117,9 +117,9 @@ def fetch_twse_stocks() -> List[Dict[str, Any]]:
             if not symbol or not name or price <= 0:
                 continue
 
-            # TWSE 的 Change 有些會帶 + / -，有些已經是純數字
             change = safe_float(change_raw, 0.0)
-            change_percent = round((change / (price - change) * 100), 2) if (price - change) > 0 else 0.0
+            prev_close = price - change
+            change_percent = round((change / prev_close * 100), 2) if prev_close > 0 else 0.0
 
             extra = build_signal_and_reason(price, change, change_percent, volume)
 
@@ -128,7 +128,7 @@ def fetch_twse_stocks() -> List[Dict[str, Any]]:
                 "symbol": symbol,
                 "name": name,
                 "price": round(price, 2),
-                "change": round(change, 2),               # 這就是你要新增的欄位
+                "change": round(change, 2),
                 "change_percent": round(change_percent, 2),
                 "volume": volume,
                 **extra,
@@ -186,7 +186,7 @@ def fetch_tpex_stocks() -> List[Dict[str, Any]]:
                         "symbol": symbol,
                         "name": name,
                         "price": round(price, 2),
-                        "change": round(change, 2),        # 這就是你要新增的欄位
+                        "change": round(change, 2),
                         "change_percent": round(change_percent, 2),
                         "volume": volume,
                         **extra,
@@ -206,7 +206,6 @@ def get_stocks():
         tpex_stocks = fetch_tpex_stocks()
 
         all_stocks = twse_stocks + tpex_stocks
-
         all_stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
         return {
