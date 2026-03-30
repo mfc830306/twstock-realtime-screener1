@@ -41,7 +41,8 @@ type ApiResponse = {
   };
 };
 
-const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000";
+const BACKEND_URL =
+  "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -54,6 +55,8 @@ const PRICE_CATEGORIES = [
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
+
+const ITEMS_PER_PAGE = 50;
 
 function getPriceCategory(price: number): CategoryKey {
   if (price < 50) return "0-50";
@@ -146,19 +149,45 @@ function normalizeStock(s: Stock): Stock {
   };
 }
 
+function getPageNumbers(currentPage: number, totalPages: number): number[] {
+  const pages: number[] = [];
+
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pages.push(i);
+    return pages;
+  }
+
+  const start = Math.max(1, currentPage - 2);
+  const end = Math.min(totalPages, currentPage + 2);
+
+  if (start > 1) pages.push(1);
+  if (start > 2) pages.push(-1);
+
+  for (let i = start; i <= end; i++) pages.push(i);
+
+  if (end < totalPages - 1) pages.push(-2);
+  if (end < totalPages) pages.push(totalPages);
+
+  return pages;
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [recommendations, setRecommendations] = useState<Stock[]>([]);
-  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>([]);
+  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>(
+    []
+  );
   const [marketStatus, setMarketStatus] = useState("-");
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("all");
+  const [selectedCategory, setSelectedCategory] =
+    useState<CategoryKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [isMobile, setIsMobile] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   async function fetchStocks() {
     try {
@@ -245,6 +274,28 @@ export default function Home() {
 
     return result;
   }, [stocks, selectedCategory, searchTerm, rankType]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedCategory, rankType]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const pagedStocks = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    return filteredStocks.slice(start, end);
+  }, [filteredStocks, currentPage]);
+
+  const pageNumbers = useMemo(() => {
+    return getPageNumbers(currentPage, totalPages);
+  }, [currentPage, totalPages]);
 
   const recommendedStocks = useMemo(() => {
     if (recommendations.length > 0) return recommendations.slice(0, 10);
@@ -654,9 +705,30 @@ export default function Home() {
             boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
           }}
         >
-          <h2 style={{ fontSize: "22px", fontWeight: 900, marginBottom: "16px" }}>
-            股票列表 ({filteredStocks.length})
-          </h2>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: isMobile ? "flex-start" : "center",
+              gap: "12px",
+              marginBottom: "16px",
+              flexDirection: isMobile ? "column" : "row",
+            }}
+          >
+            <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>
+              股票列表 ({filteredStocks.length})
+            </h2>
+
+            <div
+              style={{
+                color: "#cfe2ff",
+                fontSize: "14px",
+                fontWeight: 700,
+              }}
+            >
+              第 {currentPage} / {totalPages} 頁，每頁 {ITEMS_PER_PAGE} 檔
+            </div>
+          </div>
 
           <div
             style={{
@@ -688,7 +760,7 @@ export default function Home() {
               </thead>
 
               <tbody>
-                {filteredStocks.map((stock) => {
+                {pagedStocks.map((stock) => {
                   const isUp = stock.change >= 0;
                   const color = isUp ? "#ff4d4f" : "#00c853";
 
@@ -724,6 +796,80 @@ export default function Home() {
               </tbody>
             </table>
           </div>
+
+          {totalPages > 1 && (
+            <div
+              style={{
+                marginTop: "18px",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: "8px",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                style={{
+                  ...pageBtnStyle,
+                  opacity: currentPage === 1 ? 0.45 : 1,
+                  cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                }}
+              >
+                上一頁
+              </button>
+
+              {pageNumbers.map((page, idx) => {
+                if (page < 0) {
+                  return (
+                    <span
+                      key={`ellipsis-${idx}`}
+                      style={{
+                        color: "#d9e7ff",
+                        padding: "0 4px",
+                        fontWeight: 800,
+                      }}
+                    >
+                      ...
+                    </span>
+                  );
+                }
+
+                const active = currentPage === page;
+                return (
+                  <button
+                    key={page}
+                    onClick={() => setCurrentPage(page)}
+                    style={{
+                      ...pageBtnStyle,
+                      background: active
+                        ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                        : "#184889",
+                      boxShadow: active
+                        ? "0 8px 22px rgba(80, 150, 255, 0.22)"
+                        : "none",
+                    }}
+                  >
+                    {page}
+                  </button>
+                );
+              })}
+
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                style={{
+                  ...pageBtnStyle,
+                  opacity: currentPage === totalPages ? 0.45 : 1,
+                  cursor:
+                    currentPage === totalPages ? "not-allowed" : "pointer",
+                }}
+              >
+                下一頁
+              </button>
+            </div>
+          )}
         </section>
       </div>
     </main>
@@ -752,6 +898,17 @@ const normalActionBtn: React.CSSProperties = {
   background: "#184889",
 };
 
+const pageBtnStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: "12px",
+  padding: "10px 14px",
+  minWidth: "44px",
+  fontSize: "14px",
+  fontWeight: 800,
+  color: "#fff",
+  background: "#184889",
+};
+
 const thStyle: React.CSSProperties = {
   padding: "16px 14px",
   textAlign: "center",
@@ -767,3 +924,4 @@ const tdStyle: React.CSSProperties = {
   fontSize: "15px",
   fontWeight: 700,
 };
+        
