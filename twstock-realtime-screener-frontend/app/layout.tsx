@@ -1,3 +1,4 @@
+
 import "./globals.css";
 import type { Metadata } from "next";
 
@@ -13,7 +14,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-Hant">
-      <body style={{ minHeight: "100vh", overflow: "hidden" }}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }
