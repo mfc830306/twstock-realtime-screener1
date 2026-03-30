@@ -260,56 +260,74 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
 
 def build_signal_and_reason(
     price: float,
+    change: float,
     change_percent: float,
     volume: int,
     high_price: float,
     low_price: float,
-    is_etf: bool,
+    open_price: float,
+    previous_close: float,
 ) -> Dict[str, str]:
-    if is_etf:
-        if change_percent >= 2:
-            return {
-                "signal": "偏多",
-                "reason": "ETF 走勢偏強、漲幅明顯，適合持續觀察",
-            }
-        if change_percent <= -2:
-            return {
-                "signal": "偏空",
-                "reason": "ETF 走勢偏弱、跌幅明顯，短線宜保守",
-            }
+    intraday_range = max(high_price - low_price, 0.0)
+    amplitude_pct = (intraday_range / previous_close * 100) if previous_close > 0 else 0.0
+
+    closed_near_high = price > 0 and high_price > 0 and (high_price - price) / price <= 0.01
+    closed_near_low = price > 0 and low_price > 0 and (price - low_price) / price <= 0.01
+    opened_strong = open_price > 0 and previous_close > 0 and open_price >= previous_close
+    heavy_volume = volume >= 3000
+    very_heavy_volume = volume >= 10000
+
+    if change_percent >= 6 and very_heavy_volume:
         return {
-            "signal": "中性",
-            "reason": "ETF 波動中性，建議等待更明確方向",
+            "signal": "強勢偏多",
+            "reason": "股價強勢上攻且漲幅擴大，成交量明顯放大，顯示市場資金集中，短線動能與追價意願均偏強，屬盤面主流強勢股。",
         }
 
-    intraday_range = max(high_price - low_price, 0)
-    bullish = change_percent > 3 and volume > 1000
-    bearish = change_percent < -3 and volume > 1000
-
-    if bullish:
+    if change_percent >= 3 and heavy_volume and closed_near_high:
         return {
             "signal": "偏多",
-            "reason": "股價強勢上漲，量能放大，短線多方較有優勢",
+            "reason": "股價維持多方推升結構，量能同步放大，且收盤接近當日高檔，代表買盤承接積極，短線續強機率相對較高。",
         }
-    if bearish:
+
+    if 0.8 <= change_percent < 3 and opened_strong:
+        return {
+            "signal": "中性偏多",
+            "reason": "股價呈現穩定墊高走勢，開盤後維持相對強勢，顯示多方控盤力道尚可，適合觀察是否持續放量突破。",
+        }
+
+    if -0.8 < change_percent < 0.8 and amplitude_pct <= 3:
+        return {
+            "signal": "中性整理",
+            "reason": "股價位於區間整理階段，日內波動受控，市場追價與殺低意願皆不明顯，短線需等待方向進一步表態。",
+        }
+
+    if change_percent <= -3 and heavy_volume and closed_near_low:
         return {
             "signal": "偏空",
-            "reason": "股價明顯轉弱且量能放大，短線需留意賣壓",
+            "reason": "股價明顯轉弱，賣壓持續釋放且收盤貼近低檔，反映市場偏向保守，短線宜留意支撐是否失守。",
         }
+
+    if change_percent <= -6 and very_heavy_volume:
+        return {
+            "signal": "弱勢偏空",
+            "reason": "股價出現明顯修正，且伴隨大量換手，顯示市場避險或調節力道升高，短線風險相對偏高。",
+        }
+
     if change_percent > 0:
         return {
             "signal": "中性偏多",
-            "reason": f"股價收紅，波動區間約 {round(intraday_range, 2)} 元，走勢偏穩",
+            "reason": "股價小幅收高，整體結構仍偏穩，多方略具優勢，但尚需後續量能與價格延續性進一步確認。",
         }
+
     if change_percent < 0:
         return {
             "signal": "中性偏空",
-            "reason": f"股價收黑，波動區間約 {round(intraday_range, 2)} 元，仍需觀察支撐",
+            "reason": "股價小幅收低，短線買盤力道略顯不足，需持續觀察是否有量縮止穩或支撐轉強訊號。",
         }
 
     return {
         "signal": "中性",
-        "reason": "股價變動不大，建議等待更明確的方向",
+        "reason": "股價變動有限，市場觀望氣氛較濃，短線以等待明確方向與量價配合為主。",
     }
 
 
@@ -318,7 +336,6 @@ def build_trade_plan(
     change_percent: float,
     high_price: float,
     low_price: float,
-    is_etf: bool,
 ) -> Dict[str, str]:
     if price <= 0:
         return {
@@ -331,19 +348,15 @@ def build_trade_plan(
     entry_low = max(price - swing * 0.25, 0.01)
     entry_high = price
 
-    if is_etf:
-        target = price * 1.03
+    if change_percent >= 5:
+        target = price * 1.06
+        stop = price * 0.96
+    elif change_percent >= 0:
+        target = price * 1.04
         stop = price * 0.97
     else:
-        if change_percent >= 5:
-            target = price * 1.06
-            stop = price * 0.96
-        elif change_percent >= 0:
-            target = price * 1.04
-            stop = price * 0.97
-        else:
-            target = price * 1.03
-            stop = price * 0.95
+        target = price * 1.03
+        stop = price * 0.95
 
     return {
         "entry_price": f"{round(entry_low, 2)} ~ {round(entry_high, 2)}",
@@ -378,6 +391,10 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     if price <= 0:
         return None
 
+    etf = is_etf_symbol(symbol, name)
+    if etf:
+        return None
+
     change = safe_float(row.get("change") or row.get("priceChange") or row.get("changePrice"))
     previous_close = safe_float(row.get("previousClose") or row.get("referencePrice"))
     change_percent = safe_float(row.get("changePercent"))
@@ -406,27 +423,33 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     update_time_raw = row.get("lastUpdated") or row.get("time") or 0
     update_time_str = micros_to_taipei_str(update_time_raw)
 
-    etf = is_etf_symbol(symbol, name)
     category = price_category(price)
 
-    score = round(abs(change_percent) * 10 + min(volume / 100000, 50), 2)
     liquidity_bonus = min(volume / 5000, 20)
-    stability_penalty = 0 if low_price <= 0 or high_price <= 0 else min((high_price - low_price) / max(price, 1) * 10, 10)
+    volatility_ratio = (max(high_price - low_price, 0) / max(price, 1)) * 10 if price > 0 else 0
+    stability_penalty = min(volatility_ratio, 10)
+
+    score = round(abs(change_percent) * 10 + min(volume / 100000, 50), 2)
     recommendation_score = round(
         max(
             0.0,
-            abs(change_percent) * 6 + liquidity_bonus + (2 if not etf else -1) - stability_penalty * 0.3,
+            abs(change_percent) * 6
+            + liquidity_bonus
+            + 2
+            - stability_penalty * 0.3,
         ),
         2,
     )
 
     signal_info = build_signal_and_reason(
         price=price,
+        change=change,
         change_percent=change_percent,
         volume=volume,
         high_price=high_price,
         low_price=low_price,
-        is_etf=etf,
+        open_price=open_price,
+        previous_close=previous_close,
     )
 
     plan = build_trade_plan(
@@ -434,7 +457,6 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         change_percent=change_percent,
         high_price=high_price,
         low_price=low_price,
-        is_etf=etf,
     )
 
     return {
@@ -455,7 +477,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         "update_time": update_time_str,
         "update_time_raw": update_time_raw,
         "category": category,
-        "is_etf": etf,
+        "is_etf": False,
         "signal": signal_info["signal"],
         "reason": signal_info["reason"],
         "entry_price": plan["entry_price"],
@@ -552,7 +574,10 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
 def build_categories(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     order = ["0-10", "10-20", "20-50", "50-100", "100-200", "200-500", "500-1000", "1000+"]
     counts = {k: 0 for k in order}
+
     for s in stocks:
+        if s.get("is_etf", False):
+            continue
         c = s.get("category", "")
         if c in counts:
             counts[c] += 1
@@ -567,9 +592,12 @@ def filter_stocks(
     q: str = "",
     price_min: float = 0.0,
     price_max: float = 0.0,
-    include_etf: bool = True,
+    include_etf: bool = False,
 ) -> List[Dict[str, Any]]:
     result = stocks
+
+    if not include_etf:
+        result = [s for s in result if not s.get("is_etf", False)]
 
     if market != "all":
         market_map = {
@@ -596,9 +624,6 @@ def filter_stocks(
 
     if price_max > 0:
         result = [s for s in result if safe_float(s.get("price")) <= price_max]
-
-    if not include_etf:
-        result = [s for s in result if not s.get("is_etf", False)]
 
     return result
 
@@ -706,7 +731,7 @@ def get_stocks(
     offset: int = Query(0, ge=0),
     price_min: float = Query(0),
     price_max: float = Query(0),
-    include_etf: bool = Query(True),
+    include_etf: bool = Query(False),
     force_refresh: bool = Query(False),
 ):
     try:
