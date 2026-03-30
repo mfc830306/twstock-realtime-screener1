@@ -1,6 +1,7 @@
 import os
 import math
 import traceback
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
@@ -24,6 +25,8 @@ app.add_middleware(
 # =========================
 _fubon_sdk = None
 _fubon_login_info = None
+
+TW_TZ = timezone(timedelta(hours=8))
 
 
 # =========================
@@ -161,6 +164,83 @@ def market_label(market: str) -> str:
     return market
 
 
+def resolve_fubon_cert_path() -> str:
+    raw_path = (os.getenv("FUBON_CERT_PATH") or "").strip().strip('"').strip("'")
+    if not raw_path:
+        raise Exception("FUBON_CERT_PATH 未設定")
+
+    if os.path.exists(raw_path) and os.path.isfile(raw_path):
+        return raw_path
+
+    filename = os.path.basename(raw_path)
+    candidates = [
+        raw_path,
+        f"/opt/render/project/src/{filename}",
+        f"/opt/render/project/src/certs/{filename}",
+        f"/opt/render/project/src/backend/certs/{filename}",
+        os.path.join(os.getcwd(), filename),
+        os.path.join(os.getcwd(), "certs", filename),
+        os.path.join(os.getcwd(), "backend", "certs", filename),
+    ]
+
+    checked = []
+    for p in candidates:
+        if not p:
+            continue
+        checked.append(p)
+        if os.path.exists(p) and os.path.isfile(p):
+            return p
+
+    raise Exception(f"找不到憑證檔，已檢查路徑: {checked}")
+
+
+def format_last_updated(value: Any) -> str:
+    """
+    富邦 lastUpdated 看起來是微秒 timestamp，例如:
+    1774848600000000
+    """
+    try:
+        if value is None or value == "":
+            return ""
+
+        iv = int(str(value).strip())
+
+        # 微秒
+        if iv > 10**14:
+            dt = datetime.fromtimestamp(iv / 1_000_000, tz=timezone.utc).astimezone(TW_TZ)
+        # 毫秒
+        elif iv > 10**11:
+            dt = datetime.fromtimestamp(iv / 1_000, tz=timezone.utc).astimezone(TW_TZ)
+        # 秒
+        else:
+            dt = datetime.fromtimestamp(iv, tz=timezone.utc).astimezone(TW_TZ)
+
+        return dt.strftime("%Y/%m/%d %H:%M:%S")
+    except Exception:
+        return str(value)
+
+
+def market_status_from_now() -> str:
+    now = datetime.now(TW_TZ)
+    minutes = now.hour * 60 + now.minute
+    open_start = 9 * 60
+    close_end = 13 * 60 + 30
+
+    if now.weekday() >= 5:
+        return "休市"
+
+    if open_start <= minutes <= close_end:
+        return "開盤"
+    return "收盤"
+
+
+def get_best_last_update(stocks: List[Dict[str, Any]]) -> str:
+    candidates = [s.get("update_time", "") for s in stocks if s.get("update_time")]
+    if not candidates:
+        return datetime.now(TW_TZ).strftime("%Y/%m/%d %H:%M:%S")
+    return max(candidates)
+
+
 # =========================
 # Fubon SDK
 # =========================
@@ -178,10 +258,10 @@ def get_fubon_sdk():
     if _fubon_sdk is not None:
         return _fubon_sdk
 
-    fubon_id = os.getenv("FUBON_ID", "").strip()
-    fubon_pwd = os.getenv("FUBON_PWD", os.getenv("FUBON_PASSWORD", "")).strip()
-    fubon_cert_path = os.getenv("FUBON_CERT_PATH", "").strip()
-    fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", os.getenv("FUBON_CERT_PASSWORD", "")).strip()
+    fubon_id = (os.getenv("FUBON_ID") or "").strip()
+    fubon_pwd = (os.getenv("FUBON_PWD", os.getenv("FUBON_PASSWORD", "")) or "").strip()
+    fubon_cert_pwd = (os.getenv("FUBON_CERT_PWD", os.getenv("FUBON_CERT_PASSWORD", "")) or "").strip()
+    fubon_cert_path = resolve_fubon_cert_path()
 
     if not all([fubon_id, fubon_pwd, fubon_cert_path, fubon_cert_pwd]):
         raise Exception(
@@ -195,41 +275,46 @@ def get_fubon_sdk():
     from fubon_neo.sdk import FubonSDK
 
     sdk = FubonSDK()
-
-    accounts = sdk.login(
+    login_info = sdk.login(
         fubon_id,
         fubon_pwd,
         fubon_cert_path,
         fubon_cert_pwd,
     )
 
-    # 先確認 login 真的成功，再 init_realtime
-    if not accounts:
-        raise Exception("Fubon SDK login 回傳空值，登入失敗")
+    is_success = False
+    message = None
+    data = None
 
-    login_msg = None
-    if hasattr(accounts, "message"):
-        login_msg = getattr(accounts, "message")
+    try:
+        is_success = bool(getattr(login_info, "is_success", False))
+    except Exception:
+        is_success = False
 
-    login_data = getattr(accounts, "data", None)
+    try:
+        message = getattr(login_info, "message", None)
+    except Exception:
+        message = None
 
-    # 有些版本 login 失敗不一定 raise exception，所以這裡手動擋
-    if login_data is None:
-        raise Exception(f"Fubon SDK login 失敗: {login_msg or accounts}")
+    try:
+        data = getattr(login_info, "data", None)
+    except Exception:
+        data = None
 
-    if isinstance(login_data, list) and len(login_data) == 0:
-        raise Exception(f"Fubon SDK login 失敗，data 為空: {login_msg or accounts}")
-
-    sdk.init_realtime()
+    if not is_success and not data:
+        raise Exception(f"Fubon SDK login 失敗: {message or login_info}")
 
     _fubon_sdk = sdk
-    _fubon_login_info = accounts
+    _fubon_login_info = login_info
     return _fubon_sdk
 
 
 def extract_rows_from_response(resp: Any) -> List[Dict[str, Any]]:
     if resp is None:
         return []
+
+    if isinstance(resp, list):
+        return resp
 
     if isinstance(resp, dict):
         data = resp.get("data", [])
@@ -257,7 +342,7 @@ def get_stock_rest_client():
 
     marketdata = getattr(sdk, "marketdata", None)
     if marketdata is None:
-        raise Exception("sdk.marketdata 不存在，請確認 login 與 init_realtime 是否成功")
+        raise Exception("sdk.marketdata 不存在，請確認 login 是否成功")
 
     rest_client = getattr(marketdata, "rest_client", None)
     if rest_client is None:
@@ -301,7 +386,7 @@ def map_snapshot_row(row: Dict[str, Any], market: str) -> Optional[Dict[str, Any
     if not symbol:
         return None
 
-    price = to_float(safe_get(row, "closePrice", "lastPrice", "price", "close", default=0))
+    price = to_float(safe_get(row, "lastPrice", "closePrice", "price", "close", default=0))
     open_price = to_float(safe_get(row, "openPrice", "open", default=0))
     high_price = to_float(safe_get(row, "highPrice", "high", default=0))
     low_price = to_float(safe_get(row, "lowPrice", "low", default=0))
@@ -309,7 +394,10 @@ def map_snapshot_row(row: Dict[str, Any], market: str) -> Optional[Dict[str, Any
     change_percent = to_float(safe_get(row, "changePercent", "change_percent", default=0))
     volume = to_int(safe_get(row, "tradeVolume", "volume", "totalVolume", default=0))
     prev_close = to_float(safe_get(row, "previousClose", "prevClose", "referencePrice", default=0))
-    last_updated = safe_get(row, "lastUpdated", "last_update", default="")
+    last_updated_raw = safe_get(row, "lastUpdated", "last_update", default="")
+
+    if price <= 0:
+        price = to_float(safe_get(row, "closePrice", default=0))
 
     if change_percent == 0 and price > 0 and change != 0:
         base = price - change
@@ -339,7 +427,7 @@ def map_snapshot_row(row: Dict[str, Any], market: str) -> Optional[Dict[str, Any
         "open": round(open_price, 2),
         "high": round(high_price, 2),
         "low": round(low_price, 2),
-        "update_time": str(last_updated),
+        "update_time": format_last_updated(last_updated_raw),
     }
 
 
@@ -352,10 +440,8 @@ def get_market_stocks_from_fubon(market: str) -> List[Dict[str, Any]]:
             mapped = map_snapshot_row(row, market)
             if mapped is None:
                 continue
-
             if mapped["price"] <= 0:
                 continue
-
             stocks.append(mapped)
         except Exception:
             continue
@@ -380,6 +466,27 @@ def health():
 def debug_env():
     fubon_pwd = os.getenv("FUBON_PWD", os.getenv("FUBON_PASSWORD", ""))
     fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", os.getenv("FUBON_CERT_PASSWORD", ""))
+    raw_path = (os.getenv("FUBON_CERT_PATH") or "").strip().strip('"').strip("'")
+    filename = os.path.basename(raw_path) if raw_path else ""
+
+    candidates = [
+        raw_path,
+        f"/opt/render/project/src/{filename}" if filename else "",
+        f"/opt/render/project/src/certs/{filename}" if filename else "",
+        f"/opt/render/project/src/backend/certs/{filename}" if filename else "",
+        os.path.join(os.getcwd(), filename) if filename else "",
+        os.path.join(os.getcwd(), "certs", filename) if filename else "",
+        os.path.join(os.getcwd(), "backend", "certs", filename) if filename else "",
+    ]
+
+    checked_paths = []
+    for p in candidates:
+        if p:
+            checked_paths.append({
+                "path": p,
+                "exists": os.path.exists(p),
+                "is_file": os.path.isfile(p),
+            })
 
     return {
         "success": True,
@@ -388,8 +495,11 @@ def debug_env():
         "has_FUBON_CERT_PATH": bool(os.getenv("FUBON_CERT_PATH")),
         "has_FUBON_CERT_PWD": bool(fubon_cert_pwd),
         "FUBON_CERT_PATH": os.getenv("FUBON_CERT_PATH", ""),
+        "resolved_cert_path": resolve_fubon_cert_path() if raw_path else "",
+        "cwd": os.getcwd(),
         "using_pwd_key": "FUBON_PWD" if os.getenv("FUBON_PWD") else ("FUBON_PASSWORD" if os.getenv("FUBON_PASSWORD") else ""),
         "using_cert_pwd_key": "FUBON_CERT_PWD" if os.getenv("FUBON_CERT_PWD") else ("FUBON_CERT_PASSWORD" if os.getenv("FUBON_CERT_PASSWORD") else ""),
+        "checked_paths": checked_paths,
     }
 
 
@@ -446,20 +556,37 @@ def debug_snapshot(market: str = "TSE"):
 @app.get("/stocks")
 def get_stocks():
     try:
-        tse_stocks = get_market_stocks_from_fubon("TSE")
-        otc_stocks = get_market_stocks_from_fubon("OTC")
+        errors = []
+
+        try:
+            tse_stocks = get_market_stocks_from_fubon("TSE")
+        except Exception as e:
+            tse_stocks = []
+            errors.append(f"TSE 失敗: {str(e)}")
+
+        try:
+            otc_stocks = get_market_stocks_from_fubon("OTC")
+        except Exception as e:
+            otc_stocks = []
+            errors.append(f"OTC 失敗: {str(e)}")
 
         stocks = tse_stocks + otc_stocks
         stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
+        if not stocks:
+            raise Exception("TSE 與 OTC 都沒有抓到資料" + (f"；{'; '.join(errors)}" if errors else ""))
+
+        last_update = get_best_last_update(stocks)
+
         return {
             "success": True,
             "source": "FUBON_SDK",
-            "market_status": "即時資料",
-            "data_date": "",
-            "last_update": "",
+            "market_status": market_status_from_now(),
+            "data_date": datetime.now(TW_TZ).strftime("%Y%m%d"),
+            "last_update": last_update,
             "total": len(stocks),
             "stocks": stocks,
+            "message": "；".join(errors) if errors else "",
         }
 
     except Exception as e:
@@ -489,6 +616,9 @@ def get_stocks_by_market(market: str):
             "source": "FUBON_SDK",
             "market": market,
             "market_label": market_label(market),
+            "market_status": market_status_from_now(),
+            "data_date": datetime.now(TW_TZ).strftime("%Y%m%d"),
+            "last_update": get_best_last_update(stocks),
             "total": len(stocks),
             "stocks": stocks,
         }
@@ -505,16 +635,28 @@ def get_stocks_by_market(market: str):
 @app.get("/top10")
 def get_top10():
     try:
-        tse_stocks = get_market_stocks_from_fubon("TSE")
-        otc_stocks = get_market_stocks_from_fubon("OTC")
-        stocks = tse_stocks + otc_stocks
+        errors = []
 
+        try:
+            tse_stocks = get_market_stocks_from_fubon("TSE")
+        except Exception as e:
+            tse_stocks = []
+            errors.append(f"TSE 失敗: {str(e)}")
+
+        try:
+            otc_stocks = get_market_stocks_from_fubon("OTC")
+        except Exception as e:
+            otc_stocks = []
+            errors.append(f"OTC 失敗: {str(e)}")
+
+        stocks = tse_stocks + otc_stocks
         stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
         return {
             "success": True,
             "total": min(10, len(stocks)),
             "stocks": stocks[:10],
+            "message": "；".join(errors) if errors else "",
         }
 
     except Exception as e:
