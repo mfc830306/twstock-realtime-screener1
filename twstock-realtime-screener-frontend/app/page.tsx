@@ -41,7 +41,7 @@ type ApiResponse = {
   };
 };
 
-const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
+const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
