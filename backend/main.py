@@ -1,5 +1,4 @@
 import os
-import math
 import traceback
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -126,54 +125,8 @@ def resolve_cert_path() -> Optional[str]:
     return None
 
 
-def get_env_debug_info() -> Dict[str, Any]:
-    original_cert = os.getenv("FUBON_CERT_PATH", "").strip()
-
-    raw = [
-        original_cert,
-        os.path.abspath(original_cert) if original_cert else "",
-        os.path.abspath(os.path.join(os.getcwd(), original_cert)) if original_cert else "",
-        os.path.join("/opt/render/project/src", os.path.basename(original_cert)) if original_cert else "",
-        os.path.join("/opt/render/project/src/certs", os.path.basename(original_cert)) if original_cert else "",
-        os.path.join("/opt/render/project/src/backend", os.path.basename(original_cert)) if original_cert else "",
-        os.path.join("/opt/render/project/src/backend/certs", os.path.basename(original_cert)) if original_cert else "",
-    ]
-
-    checked_paths = []
-    seen = set()
-    for p in raw:
-        if not p:
-            continue
-        rp = os.path.abspath(p)
-        if rp in seen:
-            continue
-        seen.add(rp)
-        checked_paths.append(
-            {
-                "path": rp,
-                "exists": os.path.exists(rp),
-                "is_file": os.path.isfile(rp),
-            }
-        )
-
-    return {
-        "success": True,
-        "has_FUBON_ID": bool(os.getenv("FUBON_ID")),
-        "has_FUBON_PWD": bool(os.getenv("FUBON_PASSWORD") or os.getenv("FUBON_PWD")),
-        "has_FUBON_CERT_PATH": bool(os.getenv("FUBON_CERT_PATH")),
-        "has_FUBON_CERT_PWD": bool(os.getenv("FUBON_CERT_PASSWORD") or os.getenv("FUBON_CERT_PWD")),
-        "FUBON_CERT_PATH": os.getenv("FUBON_CERT_PATH"),
-        "resolved_cert_path": resolve_cert_path(),
-        "cwd": os.getcwd(),
-        "using_pwd_key": "FUBON_PASSWORD" if os.getenv("FUBON_PASSWORD") else ("FUBON_PWD" if os.getenv("FUBON_PWD") else None),
-        "using_cert_pwd_key": "FUBON_CERT_PASSWORD" if os.getenv("FUBON_CERT_PASSWORD") else ("FUBON_CERT_PWD" if os.getenv("FUBON_CERT_PWD") else None),
-        "checked_paths": checked_paths,
-    }
-
-
 def is_market_open() -> bool:
     now = now_taipei()
-    # 週一~週五，09:00 ~ 13:30
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
@@ -195,19 +148,11 @@ def get_market_status_text() -> str:
 def is_etf_symbol(symbol: str, name: str) -> bool:
     s = safe_str(symbol)
     n = safe_str(name)
-    # 台股 ETF / ETN 常見規則
     if s.startswith("00"):
         return True
     if "ETF" in n.upper():
         return True
     return False
-
-
-def is_common_stock_candidate(symbol: str, name: str) -> bool:
-    if is_etf_symbol(symbol, name):
-        return False
-    # 只保留數字代號或 KY 類型也可
-    return True
 
 
 def price_category(price: float) -> str:
@@ -315,25 +260,27 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
 
 def build_signal_and_reason(
     price: float,
-    change: float,
     change_percent: float,
     volume: int,
-    open_price: float,
     high_price: float,
     low_price: float,
     is_etf: bool,
 ) -> Dict[str, str]:
     if is_etf:
         if change_percent >= 2:
-            signal = "偏多"
-            reason = "ETF 走勢偏強、漲幅明顯，適合持續觀察"
-        elif change_percent <= -2:
-            signal = "偏空"
-            reason = "ETF 走勢偏弱、跌幅明顯，短線宜保守"
-        else:
-            signal = "中性"
-            reason = "ETF 波動中性，建議等待更明確方向"
-        return {"signal": signal, "reason": reason}
+            return {
+                "signal": "偏多",
+                "reason": "ETF 走勢偏強、漲幅明顯，適合持續觀察",
+            }
+        if change_percent <= -2:
+            return {
+                "signal": "偏空",
+                "reason": "ETF 走勢偏弱、跌幅明顯，短線宜保守",
+            }
+        return {
+            "signal": "中性",
+            "reason": "ETF 波動中性，建議等待更明確方向",
+        }
 
     intraday_range = max(high_price - low_price, 0)
     bullish = change_percent > 3 and volume > 1000
@@ -349,13 +296,11 @@ def build_signal_and_reason(
             "signal": "偏空",
             "reason": "股價明顯轉弱且量能放大，短線需留意賣壓",
         }
-
     if change_percent > 0:
         return {
             "signal": "中性偏多",
             "reason": f"股價收紅，波動區間約 {round(intraday_range, 2)} 元，走勢偏穩",
         }
-
     if change_percent < 0:
         return {
             "signal": "中性偏空",
@@ -382,7 +327,6 @@ def build_trade_plan(
             "stop_loss": "",
         }
 
-    # 波動寬度
     swing = max(high_price - low_price, price * 0.02)
     entry_low = max(price - swing * 0.25, 0.01)
     entry_high = price
@@ -465,10 +409,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     etf = is_etf_symbol(symbol, name)
     category = price_category(price)
 
-    # 基本分數
     score = round(abs(change_percent) * 10 + min(volume / 100000, 50), 2)
-
-    # 推薦分數
     liquidity_bonus = min(volume / 5000, 20)
     stability_penalty = 0 if low_price <= 0 or high_price <= 0 else min((high_price - low_price) / max(price, 1) * 10, 10)
     recommendation_score = round(
@@ -481,14 +422,13 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 
     signal_info = build_signal_and_reason(
         price=price,
-        change=change,
         change_percent=change_percent,
         volume=volume,
-        open_price=open_price,
         high_price=high_price,
         low_price=low_price,
         is_etf=etf,
     )
+
     plan = build_trade_plan(
         price=price,
         change_percent=change_percent,
@@ -750,107 +690,9 @@ def root():
     return {"message": "TW Stock Realtime Screener is running"}
 
 
-@app.get("/debug-env")
-def debug_env():
-    return get_env_debug_info()
-
-
-@app.get("/debug-login")
-def debug_login():
-    try:
-        sdk = ensure_fubon_sdk()
-        return {
-            "success": True,
-            "sdk_type": str(type(sdk)),
-            "login_info_type": str(type(_login_info)),
-            "login_info": str(_login_info),
-            "marketdata_ready": _marketdata_ready,
-            "has_marketdata": hasattr(sdk, "marketdata") and getattr(sdk, "marketdata", None) is not None,
-            "message": "Fubon SDK login success",
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e), "trace": traceback.format_exc()}
-
-
-@app.get("/debug-sdk")
-def debug_sdk():
-    try:
-        sdk = ensure_fubon_sdk()
-        marketdata = getattr(sdk, "marketdata", None)
-        rest_client = getattr(marketdata, "rest_client", None) if marketdata else None
-        stock_client = getattr(rest_client, "stock", None) if rest_client else None
-
-        return {
-            "success": True,
-            "has_marketdata": marketdata is not None,
-            "marketdata_type": str(type(marketdata)) if marketdata is not None else None,
-            "has_rest_client": rest_client is not None,
-            "rest_client_type": str(type(rest_client)) if rest_client is not None else None,
-            "has_stock_client": stock_client is not None,
-            "stock_client_type": str(type(stock_client)) if stock_client is not None else None,
-            "has_intraday": hasattr(stock_client, "intraday") if stock_client is not None else False,
-            "has_snapshot": hasattr(stock_client, "snapshot") if stock_client is not None else False,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e), "trace": traceback.format_exc()}
-
-
-@app.get("/debug-snapshot")
-def debug_snapshot(symbol: str = "2330"):
-    try:
-        stock_client = get_stock_rest_client()
-        resp = stock_client.intraday.quote(symbol=symbol)
-        return {
-            "success": True,
-            "symbol": symbol,
-            "raw_type": str(type(resp)),
-            "raw": resp,
-        }
-    except Exception as e:
-        return {"success": False, "symbol": symbol, "error": str(e), "trace": traceback.format_exc()}
-
-
-@app.get("/debug-market-snapshot")
-def debug_market_snapshot(market: str = "TSE"):
-    try:
-        stock_client = get_stock_rest_client()
-        resp = stock_client.snapshot.quotes(market=market, type="ALLBUT0999")
-        rows = extract_rows(resp)
-        return {
-            "success": True,
-            "market": market,
-            "raw_type": str(type(resp)),
-            "count": len(rows),
-            "preview": rows[:5],
-        }
-    except Exception as e:
-        return {"success": False, "market": market, "error": str(e), "trace": traceback.format_exc()}
-
-
-@app.get("/recommendations")
-def recommendations():
-    try:
-        result = get_cached_all_stocks()
-        recs = build_recommendations(result["stocks"], top_n=10)
-        return {
-            "success": True,
-            "total": len(recs),
-            "recommendations": [clean_stock_output(x) for x in recs],
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e), "trace": traceback.format_exc(), "recommendations": []}
-
-
-@app.get("/categories")
-def categories():
-    try:
-        result = get_cached_all_stocks()
-        return {
-            "success": True,
-            "categories": build_categories(result["stocks"]),
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e), "trace": traceback.format_exc(), "categories": []}
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.get("/stocks")
