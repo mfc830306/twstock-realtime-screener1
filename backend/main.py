@@ -1,403 +1,320 @@
 import os
-import time
+import math
 import traceback
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
-import requests
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ========= 富邦 SDK =========
-try:
-    from fubon_neo.sdk import FubonSDK
-except Exception:
-    FubonSDK = None
-
-
+# =========================
+# App
+# =========================
 app = FastAPI(title="TW Stock Realtime Screener")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],   # 先全部開放，之後可改成你的前端網域
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ========= 環境變數 =========
-FUBON_ID = os.getenv("FUBON_ID", "").strip()
-FUBON_PASSWORD = os.getenv("FUBON_PASSWORD", "").strip()
-FUBON_CERT_PATH = os.getenv("FUBON_CERT_PATH", "").strip()
-FUBON_CERT_PASSWORD = os.getenv("FUBON_CERT_PASSWORD", "").strip()
-
-# ========= 全域快取 =========
-sdk = None
-sdk_logged_in = False
-sdk_login_message = ""
-last_login_ts = 0
-
-NAME_CACHE: Dict[str, Dict[str, str]] = {}
-LAST_STOCKS_CACHE: Dict[str, Any] = {
-    "ts": 0,
-    "data": []
-}
-
-STOCKS_CACHE_SECONDS = 20
+# =========================
+# Global SDK cache
+# =========================
+_fubon_sdk = None
+_fubon_login_info = None
 
 
 # =========================
-# 工具函式
+# Utils
 # =========================
-def safe_float(v, default=0.0) -> float:
+def to_float(v: Any, default: float = 0.0) -> float:
     try:
-        if v is None or v == "":
+        if v is None:
             return default
-        if isinstance(v, str):
-            v = v.replace(",", "").replace("%", "").strip()
-        return float(v)
+        if isinstance(v, (int, float)):
+            if math.isnan(v):
+                return default
+            return float(v)
+        s = str(v).strip().replace(",", "")
+        if s == "" or s == "-":
+            return default
+        return float(s)
     except Exception:
         return default
 
 
-def safe_int(v, default=0) -> int:
+def to_int(v: Any, default: int = 0) -> int:
     try:
-        if v is None or v == "":
+        if v is None:
             return default
-        if isinstance(v, str):
-            v = v.replace(",", "").strip()
-        return int(float(v))
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float):
+            if math.isnan(v):
+                return default
+            return int(v)
+        s = str(v).strip().replace(",", "")
+        if s == "" or s == "-":
+            return default
+        return int(float(s))
     except Exception:
         return default
 
 
-def to_tw_market_label(market_text: str) -> str:
-    market_text = (market_text or "").strip().upper()
-
-    if market_text in ["TSE", "TWSE", "上市"]:
-        return "上市"
-    if market_text in ["OTC", "TPEX", "上櫃"]:
-        return "上櫃"
-    if market_text in ["ESB", "興櫃"]:
-        return "興櫃"
-    if market_text in ["ETF"]:
-        return "ETF"
-    return market_text or "未知"
+def safe_get(d: Dict[str, Any], *keys: str, default=None):
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
+    return default
 
 
-def normalize_market_for_sdk(market_text: Optional[str]) -> Optional[str]:
-    if not market_text:
-        return None
+def calc_score(price: float, change_percent: float, volume: int) -> float:
+    """
+    簡單推薦分數，可依你需求再調整
+    """
+    vol_score = min(volume / 100000, 100)
+    move_score = abs(change_percent) * 8
+    price_score = 0
 
-    mt = str(market_text).strip().upper()
+    if 10 <= price <= 200:
+        price_score = 10
+    elif 200 < price <= 500:
+        price_score = 6
+    elif 0 < price < 10:
+        price_score = 3
 
-    if mt in ["TSE", "TWSE", "上市"]:
-        return "TSE"
-    if mt in ["OTC", "TPEX", "上櫃"]:
-        return "OTC"
-    if mt in ["ESB", "興櫃"]:
-        return "ESB"
-    return mt
-
-
-def guess_is_etf(symbol: str, name: str) -> bool:
-    symbol = str(symbol or "").strip().upper()
-    name = str(name or "").strip().upper()
-
-    if symbol.startswith("00"):
-        return True
-    if "ETF" in name:
-        return True
-    return False
+    return round(move_score + vol_score + price_score, 2)
 
 
-def calc_score(price: float, change: float, change_percent: float, volume: int) -> float:
-    cp = abs(change_percent)
-    vol_score = min(volume / 50000, 20)
-    change_score = min(cp * 8, 80)
-    change_abs_score = min(abs(change) * 2, 20)
+def build_reason(change_percent: float, volume: int, price: float) -> str:
+    reasons = []
 
-    score = change_score + vol_score + change_abs_score
-    return round(min(score, 100), 2)
-
-
-def build_signal_and_reason(change: float, change_percent: float, volume: int) -> Dict[str, str]:
-    cp = safe_float(change_percent)
-    vol = safe_int(volume)
-
-    if cp >= 5:
-        signal = "偏多"
-        reason = "漲幅擴大且量能活躍，短線偏強"
-    elif cp >= 2:
-        signal = "偏多"
-        reason = "股價走強，漲幅穩定"
-    elif cp > -2:
-        signal = "中性"
-        reason = "價格維持紅綠盤，走勢偏穩"
-    elif cp > -5:
-        signal = "偏空"
-        reason = "股價轉弱，留意賣壓"
+    if change_percent >= 3:
+        reasons.append("漲幅強勢")
+    elif change_percent <= -3:
+        reasons.append("跌幅明顯")
     else:
-        signal = "偏空"
-        reason = "跌幅擴大，短線偏弱"
+        reasons.append("股價波動中性")
 
-    if vol > 100000:
-        reason += "，成交量明顯放大"
+    if volume >= 20000:
+        reasons.append("成交量活躍")
+    elif volume >= 5000:
+        reasons.append("量能尚可")
+    else:
+        reasons.append("量能偏低")
 
-    return {
-        "signal": signal,
-        "reason": reason
-    }
+    if 10 <= price <= 200:
+        reasons.append("股價區間適中")
+
+    return "、".join(reasons)
 
 
-def build_trade_prices(price: float, signal: str) -> Dict[str, str]:
-    p = safe_float(price)
-    if p <= 0:
-        return {
-            "entry_price": "-",
-            "target_price": "-",
-            "stop_loss": "-"
-        }
+def build_signal(change_percent: float, volume: int) -> str:
+    if change_percent >= 3 and volume >= 5000:
+        return "偏多"
+    if change_percent <= -3 and volume >= 5000:
+        return "偏空"
+    return "中性"
+
+
+def build_trade_plan(price: float, signal: str):
+    if price <= 0:
+        return "-", "-", "-"
 
     if signal == "偏多":
-        entry_low = round(p * 0.99, 2)
-        entry_high = round(p * 1.01, 2)
-        target = round(p * 1.03, 2)
-        stop_loss = round(p * 0.97, 2)
+        entry_low = round(price * 0.985, 2)
+        entry_high = round(price * 1.005, 2)
+        target = round(price * 1.05, 2)
+        stop_loss = round(price * 0.965, 2)
     elif signal == "偏空":
-        entry_low = round(p * 0.98, 2)
-        entry_high = round(p * 0.995, 2)
-        target = round(p * 0.95, 2)
-        stop_loss = round(p * 1.02, 2)
+        entry_low = round(price * 0.995, 2)
+        entry_high = round(price * 1.015, 2)
+        target = round(price * 0.95, 2)
+        stop_loss = round(price * 1.03, 2)
     else:
-        entry_low = round(p * 0.995, 2)
-        entry_high = round(p * 1.005, 2)
-        target = round(p * 1.01, 2)
-        stop_loss = round(p * 0.98, 2)
+        entry_low = round(price * 0.99, 2)
+        entry_high = round(price * 1.01, 2)
+        target = round(price * 1.03, 2)
+        stop_loss = round(price * 0.97, 2)
 
-    return {
-        "entry_price": f"{entry_low} ~ {entry_high}",
-        "target_price": str(target),
-        "stop_loss": str(stop_loss),
-    }
+    return f"{entry_low} ~ {entry_high}", str(target), str(stop_loss)
 
 
-# =========================
-# 名稱快取
-# =========================
-def load_name_cache():
-    global NAME_CACHE
+def normalize_market(market: str) -> str:
+    market = (market or "").upper().strip()
+    if market in ["TSE", "TWSE", "上市"]:
+        return "TSE"
+    if market in ["OTC", "TPEX", "上櫃"]:
+        return "OTC"
+    return market
 
-    cache: Dict[str, Dict[str, str]] = {}
 
-    # TWSE 上市名稱
-    try:
-        twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-        res = requests.get(twse_url, timeout=15)
-        rows = res.json()
-        for row in rows:
-            symbol = str(row.get("Code", "")).strip()
-            name = str(row.get("Name", "")).strip()
-            if symbol:
-                cache[symbol] = {
-                    "name": name,
-                    "market": "上市"
-                }
-    except Exception:
-        pass
-
-    # TPEX 上櫃名稱
-    try:
-        tpex_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
-        res = requests.get(tpex_url, timeout=15)
-        rows = res.json()
-        for row in rows:
-            symbol = str(
-                row.get("SecuritiesCompanyCode")
-                or row.get("股票代號")
-                or row.get("Code")
-                or ""
-            ).strip()
-            name = str(
-                row.get("CompanyName")
-                or row.get("股票名稱")
-                or row.get("Name")
-                or ""
-            ).strip()
-
-            if symbol:
-                cache[symbol] = {
-                    "name": name,
-                    "market": "上櫃"
-                }
-    except Exception:
-        pass
-
-    if cache:
-        NAME_CACHE = cache
+def market_label(market: str) -> str:
+    market = normalize_market(market)
+    if market == "TSE":
+        return "上市"
+    if market == "OTC":
+        return "上櫃"
+    return market
 
 
 # =========================
-# 富邦 SDK 登入
+# Fubon SDK
 # =========================
-def ensure_sdk_login():
-    global sdk, sdk_logged_in, sdk_login_message, last_login_ts
+def get_fubon_sdk():
+    """
+    初始化並快取富邦 SDK
+    需要環境變數：
+    FUBON_ID
+    FUBON_PWD
+    FUBON_CERT_PATH
+    FUBON_CERT_PWD
+    """
+    global _fubon_sdk, _fubon_login_info
 
-    if sdk_logged_in and time.time() - last_login_ts < 600:
-        return True
+    if _fubon_sdk is not None:
+        return _fubon_sdk
 
-    if FubonSDK is None:
-        sdk_logged_in = False
-        sdk_login_message = "fubon_neo 未安裝"
-        return False
+    fubon_id = os.getenv("FUBON_ID", "").strip()
+    fubon_pwd = os.getenv("FUBON_PWD", "").strip()
+    fubon_cert_path = os.getenv("FUBON_CERT_PATH", "").strip()
+    fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", "").strip()
 
-    if not FUBON_ID or not FUBON_PASSWORD or not FUBON_CERT_PATH or not FUBON_CERT_PASSWORD:
-        sdk_logged_in = False
-        sdk_login_message = "FUBON 環境變數未設定完整"
-        return False
+    if not all([fubon_id, fubon_pwd, fubon_cert_path, fubon_cert_pwd]):
+        raise Exception("FUBON 環境變數未設定完整")
 
-    if not os.path.exists(FUBON_CERT_PATH):
-        sdk_logged_in = False
-        sdk_login_message = f"憑證不存在: {FUBON_CERT_PATH}"
-        return False
+    from fubon_neo.sdk import FubonSDK
 
-    try:
-        sdk = FubonSDK()
+    sdk = FubonSDK()
+    accounts = sdk.login(
+        fubon_id,
+        fubon_pwd,
+        fubon_cert_path,
+        fubon_cert_pwd,
+    )
 
-        login_result = sdk.login(
-            FUBON_ID,
-            FUBON_PASSWORD,
-            FUBON_CERT_PATH,
-            FUBON_CERT_PASSWORD
-        )
+    # 官方文件要求：登入後建立行情連線
+    sdk.init_realtime()
 
-        ok = False
-        msg = ""
-
-        try:
-            ok = bool(getattr(login_result, "is_success", False))
-            msg = str(getattr(login_result, "message", ""))
-        except Exception:
-            pass
-
-        if not ok:
-            try:
-                data = getattr(login_result, "data", None)
-                if data is not None:
-                    ok = True
-            except Exception:
-                pass
-
-        if ok:
-            sdk_logged_in = True
-            sdk_login_message = msg or "已登入"
-            last_login_ts = time.time()
-            return True
-
-        sdk_logged_in = False
-        sdk_login_message = msg or "登入失敗"
-        return False
-
-    except Exception as e:
-        sdk_logged_in = False
-        sdk_login_message = f"登入例外: {e}"
-        return False
+    _fubon_sdk = sdk
+    _fubon_login_info = accounts
+    return _fubon_sdk
 
 
-# =========================
-# 富邦快照讀取
-# =========================
+def extract_rows_from_response(resp: Any) -> List[Dict[str, Any]]:
+    """
+    兼容 SDK 不同回傳格式
+    """
+    if resp is None:
+        return []
+
+    if isinstance(resp, dict):
+        data = resp.get("data", [])
+        return data if isinstance(data, list) else []
+
+    data = getattr(resp, "data", None)
+    if isinstance(data, list):
+        return data
+
+    if hasattr(resp, "__dict__"):
+        data = resp.__dict__.get("data", [])
+        if isinstance(data, list):
+            return data
+
+    return []
+
+
+def get_stock_rest_client():
+    """
+    兼容:
+    sdk.marketdata.rest_client.stock
+    sdk.marketdata.restClient.stock
+    """
+    sdk = get_fubon_sdk()
+
+    marketdata = getattr(sdk, "marketdata", None)
+    if marketdata is None:
+        raise Exception("sdk.marketdata 不存在，請確認 login 與 init_realtime 是否成功")
+
+    rest_client = getattr(marketdata, "rest_client", None)
+    if rest_client is None:
+        rest_client = getattr(marketdata, "restClient", None)
+
+    if rest_client is None:
+        raise Exception("找不到 marketdata.rest_client / restClient")
+
+    stock_client = getattr(rest_client, "stock", None)
+    if stock_client is None:
+        raise Exception("找不到 marketdata.rest_client.stock")
+
+    return stock_client
+
+
 def get_sdk_market_snapshot(market: str) -> List[Dict[str, Any]]:
-    if not ensure_sdk_login():
-        raise Exception(sdk_login_message or "富邦 SDK 登入失敗")
+    """
+    用富邦 SDK 讀整個市場 snapshot
+    """
+    market = normalize_market(market)
+    stock_client = get_stock_rest_client()
 
-    market = normalize_market_for_sdk(market) or "TSE"
-    last_error = None
-    candidates = []
+    snapshot = getattr(stock_client, "snapshot", None)
+    if snapshot is None:
+        raise Exception("找不到 stock.snapshot")
 
-    try:
-        candidates.append(sdk.marketdata.rest_client.stock.snapshot.quotes)
-    except Exception:
-        pass
+    quotes_fn = getattr(snapshot, "quotes", None)
+    if not callable(quotes_fn):
+        raise Exception("找不到可用的 stock.snapshot.quotes 方法")
 
-    try:
-        candidates.append(sdk.marketdata.rest.stock.snapshot.quotes)
-    except Exception:
-        pass
+    resp = quotes_fn(market=market)
+    rows = extract_rows_from_response(resp)
 
-    try:
-        candidates.append(sdk.rest_client.stock.snapshot.quotes)
-    except Exception:
-        pass
+    if not isinstance(rows, list):
+        raise Exception(f"snapshot.quotes 回傳格式異常: {type(rows)}")
 
-    if not candidates:
-        raise Exception("找不到可用的 snapshot.quotes 方法")
-
-    for fn in candidates:
-        try:
-            result = fn(market=market)
-
-            if isinstance(result, dict):
-                data = result.get("data") or result.get("items") or result.get("stocks") or []
-                if isinstance(data, list):
-                    return data
-
-            data = getattr(result, "data", None)
-            if isinstance(data, list):
-                return data
-
-            if isinstance(result, list):
-                return result
-
-        except Exception as e:
-            last_error = e
-            continue
-
-    raise Exception(f"snapshot 讀取失敗: {last_error}")
+    return rows
 
 
-# =========================
-# 資料轉換
-# =========================
-def convert_snapshot_item(item: Dict[str, Any], default_market: str) -> Dict[str, Any]:
-    symbol = str(item.get("symbol", "")).strip()
-    raw_name = str(item.get("name", "")).strip()
+def map_snapshot_row(row: Dict[str, Any], market: str) -> Optional[Dict[str, Any]]:
+    """
+    把富邦 snapshot 的欄位整理成前端用格式
+    """
+    symbol = str(safe_get(row, "symbol", "code", default="")).strip()
+    name = str(safe_get(row, "name", default="")).strip()
 
-    market_label = to_tw_market_label(item.get("market") or default_market)
+    if not symbol:
+        return None
 
-    name_from_cache = NAME_CACHE.get(symbol, {}).get("name", "")
-    market_from_cache = NAME_CACHE.get(symbol, {}).get("market", "")
+    price = to_float(
+        safe_get(row, "closePrice", "lastPrice", "price", "close", default=0)
+    )
+    open_price = to_float(safe_get(row, "openPrice", "open", default=0))
+    high_price = to_float(safe_get(row, "highPrice", "high", default=0))
+    low_price = to_float(safe_get(row, "lowPrice", "low", default=0))
+    change = to_float(safe_get(row, "change", default=0))
+    change_percent = to_float(safe_get(row, "changePercent", "change_percent", default=0))
+    volume = to_int(
+        safe_get(row, "tradeVolume", "volume", "totalVolume", default=0)
+    )
+    prev_close = to_float(
+        safe_get(row, "previousClose", "prevClose", "referencePrice", default=0)
+    )
+    last_updated = safe_get(row, "lastUpdated", "last_update", default="")
 
-    name = raw_name or name_from_cache or symbol
-    if market_from_cache:
-        market_label = market_from_cache
-
-    price = safe_float(item.get("lastPrice", item.get("closePrice", item.get("price", 0))))
-    open_price = safe_float(item.get("openPrice", item.get("open", 0)))
-    high_price = safe_float(item.get("highPrice", item.get("high", 0)))
-    low_price = safe_float(item.get("lowPrice", item.get("low", 0)))
-    volume = safe_int(item.get("tradeVolume", item.get("volume", 0)))
-    last_updated = item.get("lastUpdated", item.get("update_time", ""))
-
-    change = safe_float(item.get("change", 0))
-    change_percent = safe_float(item.get("changePercent", item.get("change_percent", 0)))
-
-    if change == 0 and open_price > 0 and price > 0:
-        change = round(price - open_price, 2)
-
+    # 若 changePercent 沒有，自己算
     if change_percent == 0 and price > 0 and change != 0:
         base = price - change
-        if base > 0:
-            change_percent = round(change / base * 100, 2)
+        if base != 0:
+            change_percent = round((change / base) * 100, 2)
 
-    score = calc_score(price, change, change_percent, volume)
-    sr = build_signal_and_reason(change, change_percent, volume)
-    tp = build_trade_prices(price, sr["signal"])
-
-    if guess_is_etf(symbol, name):
-        market_label = "ETF"
+    score = calc_score(price, change_percent, volume)
+    signal = build_signal(change_percent, volume)
+    reason = build_reason(change_percent, volume, price)
+    entry_price, target_price, stop_loss = build_trade_plan(price, signal)
 
     return {
-        "market": market_label,
+        "market": market_label(market),
         "symbol": symbol,
         "name": name,
         "price": round(price, 2),
@@ -405,79 +322,105 @@ def convert_snapshot_item(item: Dict[str, Any], default_market: str) -> Dict[str
         "change_percent": round(change_percent, 2),
         "volume": volume,
         "score": score,
+        "signal": signal,
+        "reason": reason,
+        "entry_price": entry_price,
+        "target_price": target_price,
+        "stop_loss": stop_loss,
+        "prev_close": round(prev_close, 2),
         "open": round(open_price, 2),
         "high": round(high_price, 2),
         "low": round(low_price, 2),
         "update_time": str(last_updated),
-        "type": item.get("type", "EQUITY"),
-        "signal": sr["signal"],
-        "reason": sr["reason"],
-        "entry_price": tp["entry_price"],
-        "target_price": tp["target_price"],
-        "stop_loss": tp["stop_loss"],
     }
 
 
-def fetch_all_stocks_from_fubon() -> List[Dict[str, Any]]:
-    all_rows: List[Dict[str, Any]] = []
+def get_market_stocks_from_fubon(market: str) -> List[Dict[str, Any]]:
+    rows = get_sdk_market_snapshot(market)
+    stocks: List[Dict[str, Any]] = []
 
-    for mk in ["TSE", "OTC"]:
+    for row in rows:
         try:
-            rows = get_sdk_market_snapshot(mk)
-            for row in rows:
-                try:
-                    all_rows.append(convert_snapshot_item(row, mk))
-                except Exception:
-                    continue
+            mapped = map_snapshot_row(row, market)
+            if mapped is None:
+                continue
+
+            # 過濾明顯異常資料
+            if mapped["price"] <= 0:
+                continue
+
+            stocks.append(mapped)
         except Exception:
             continue
 
-    return all_rows
+    return stocks
 
 
 # =========================
-# 啟動時載入名稱快取
-# =========================
-@app.on_event("startup")
-def startup_event():
-    try:
-        load_name_cache()
-    except Exception:
-        pass
-
-
-# =========================
-# API
+# Routes
 # =========================
 @app.get("/")
 def root():
-    return {"message": "TW Stock Realtime Screener is running"}
+    return {"message": "TW Stock Realtime Screener backend running"}
 
 
 @app.get("/health")
 def health():
-    cert_exists = bool(FUBON_CERT_PATH and os.path.exists(FUBON_CERT_PATH))
+    return {"success": True, "message": "ok"}
 
+
+@app.get("/debug_env")
+def debug_env():
     return {
         "success": True,
-        "cert_exists": cert_exists,
-        "name_cache_count": len(NAME_CACHE),
-        "sdk_ready": sdk_logged_in,
-        "sdk_message": sdk_login_message
+        "has_FUBON_ID": bool(os.getenv("FUBON_ID")),
+        "has_FUBON_PWD": bool(os.getenv("FUBON_PWD")),
+        "has_FUBON_CERT_PATH": bool(os.getenv("FUBON_CERT_PATH")),
+        "has_FUBON_CERT_PWD": bool(os.getenv("FUBON_CERT_PWD")),
+        "FUBON_CERT_PATH": os.getenv("FUBON_CERT_PATH", ""),
     }
 
 
-@app.get("/debug-snapshot/{market}")
-def debug_snapshot(market: str):
+@app.get("/debug_snapshot")
+def debug_snapshot(market: str = "TSE"):
     try:
-        market = normalize_market_for_sdk(market) or "TSE"
+        sdk = get_fubon_sdk()
+        market = normalize_market(market)
+
+        marketdata = getattr(sdk, "marketdata", None)
+        rest_client = getattr(marketdata, "rest_client", None) if marketdata else None
+        rest_client2 = getattr(marketdata, "restClient", None) if marketdata else None
+
+        stock_client = None
+        if rest_client is not None:
+            stock_client = getattr(rest_client, "stock", None)
+        elif rest_client2 is not None:
+            stock_client = getattr(rest_client2, "stock", None)
+
+        snapshot = getattr(stock_client, "snapshot", None) if stock_client else None
+        quotes_fn = getattr(snapshot, "quotes", None) if snapshot else None
+
         rows = get_sdk_market_snapshot(market)
 
         return {
             "success": True,
             "market": market,
             "count": len(rows),
-            "first_item": rows[0] if rows else None
+            "sample": rows[:3],
+            "debug": {
+                "has_marketdata": marketdata is not None,
+                "has_rest_client": rest_client is not None,
+                "has_restClient": rest_client2 is not None,
+                "has_stock": stock_client is not None,
+                "has_snapshot": snapshot is not None,
+                "has_quotes": callable(quotes_fn),
+                "marketdata_type": str(type(marketdata)),
+                "stock_type": str(type(stock_client)),
+                "snapshot_type": str(type(snapshot)),
+                "marketdata_dir": dir(marketdata) if marketdata else [],
+                "stock_dir": dir(stock_client) if stock_client else [],
+                "snapshot_dir": dir(snapshot) if snapshot else [],
+            }
         }
     except Exception as e:
         return {
@@ -489,136 +432,108 @@ def debug_snapshot(market: str):
 
 
 @app.get("/stocks")
-def get_stocks(
-    limit: int = Query(200, ge=1, le=6000),
-    market: Optional[str] = Query(None, description="可選: TSE / OTC / ALL / 上市 / 上櫃 / ETF"),
-    search: Optional[str] = Query(None, description="股票代號或名稱搜尋"),
-    sort_by: str = Query("score", description="score / change_percent / volume / price / change"),
-    sort_order: str = Query("desc", description="asc / desc")
-):
-    global LAST_STOCKS_CACHE
-
+def get_stocks():
+    """
+    抓上市 + 上櫃
+    """
     try:
-        now = time.time()
+        tse_stocks = get_market_stocks_from_fubon("TSE")
+        otc_stocks = get_market_stocks_from_fubon("OTC")
 
-        use_cache = False
-        if LAST_STOCKS_CACHE["data"] and (now - LAST_STOCKS_CACHE["ts"] <= STOCKS_CACHE_SECONDS):
-            all_stocks = LAST_STOCKS_CACHE["data"]
-            use_cache = True
-        else:
-            all_stocks = fetch_all_stocks_from_fubon()
-            LAST_STOCKS_CACHE = {
-                "ts": now,
-                "data": all_stocks
-            }
+        stocks = tse_stocks + otc_stocks
 
-        stocks = list(all_stocks)
-
-        if market:
-            market_text = str(market).strip().upper()
-
-            if market_text in ["TSE", "TWSE", "上市"]:
-                stocks = [s for s in stocks if s.get("market") == "上市"]
-            elif market_text in ["OTC", "TPEX", "上櫃"]:
-                stocks = [s for s in stocks if s.get("market") == "上櫃"]
-            elif market_text in ["ETF"]:
-                stocks = [s for s in stocks if s.get("market") == "ETF"]
-            elif market_text in ["ALL", "全部"]:
-                pass
-
-        if search:
-            kw = str(search).strip().lower()
-            stocks = [
-                s for s in stocks
-                if kw in str(s.get("symbol", "")).lower() or kw in str(s.get("name", "")).lower()
-            ]
-
-        allowed_sort = {"score", "change_percent", "volume", "price", "change"}
-        if sort_by not in allowed_sort:
-            sort_by = "score"
-
-        reverse = str(sort_order).lower() != "asc"
-        stocks.sort(key=lambda x: safe_float(x.get(sort_by, 0)), reverse=reverse)
-
-        total = len(stocks)
-        stocks = stocks[:limit]
-
-        market_status = "已連接富邦 API"
-        last_update = str(int(time.time()))
+        # 排序：分數高的在前面，再看成交量
+        stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
         return {
             "success": True,
-            "source": "Fubon + TWSE/TPEX Name Map",
-            "market_status": market_status,
-            "last_update": last_update,
-            "total": total,
+            "source": "FUBON_SDK",
+            "market_status": "即時資料",
+            "data_date": "",
+            "last_update": "",
+            "total": len(stocks),
             "stocks": stocks,
-            "cache_used": use_cache
         }
 
     except Exception as e:
         return {
             "success": False,
+            "source": "FUBON_SDK",
             "error": str(e),
-            "total": 0,
-            "stocks": [],
-            "trace": traceback.format_exc()
+            "trace": traceback.format_exc(),
         }
 
 
-@app.get("/top-recommendations")
-def top_recommendations(
-    market: Optional[str] = Query(None, description="可選: TSE / OTC / ALL / 上市 / 上櫃 / ETF"),
-    limit: int = Query(10, ge=1, le=50)
-):
+@app.get("/stocks/{market}")
+def get_stocks_by_market(market: str):
+    """
+    market: TSE / OTC
+    """
     try:
-        result = get_stocks(
-            limit=5000,
-            market=market,
-            search=None,
-            sort_by="score",
-            sort_order="desc"
-        )
-
-        if not isinstance(result, dict) or not result.get("success"):
+        market = normalize_market(market)
+        if market not in ["TSE", "OTC"]:
             return {
                 "success": False,
-                "error": "無法取得股票資料",
-                "total": 0,
-                "stocks": []
+                "error": "market 只支援 TSE 或 OTC"
             }
 
-        stocks = result.get("stocks", [])
-
-        valid_stocks = []
-        for s in stocks:
-            try:
-                s["score"] = round(float(s.get("score", 0)), 2)
-                valid_stocks.append(s)
-            except Exception:
-                continue
-
-        valid_stocks.sort(key=lambda x: x.get("score", 0), reverse=True)
-        top_stocks = valid_stocks[:limit]
+        stocks = get_market_stocks_from_fubon(market)
+        stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
         return {
             "success": True,
-            "market": market if market else "ALL",
-            "total": len(top_stocks),
-            "stocks": top_stocks
+            "source": "FUBON_SDK",
+            "market": market,
+            "market_label": market_label(market),
+            "total": len(stocks),
+            "stocks": stocks,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "market": market,
+            "error": str(e),
+            "trace": traceback.format_exc(),
+        }
+
+
+@app.get("/top10")
+def get_top10():
+    try:
+        tse_stocks = get_market_stocks_from_fubon("TSE")
+        otc_stocks = get_market_stocks_from_fubon("OTC")
+        stocks = tse_stocks + otc_stocks
+
+        stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
+
+        return {
+            "success": True,
+            "total": min(10, len(stocks)),
+            "stocks": stocks[:10],
         }
 
     except Exception as e:
         return {
             "success": False,
             "error": str(e),
-            "total": 0,
-            "stocks": [],
-            "trace": traceback.format_exc()
+            "trace": traceback.format_exc(),
         }
 
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+@app.get("/debug_login")
+def debug_login():
+    try:
+        sdk = get_fubon_sdk()
+        return {
+            "success": True,
+            "sdk_type": str(type(sdk)),
+            "login_info_type": str(type(_fubon_login_info)),
+            "message": "Fubon SDK login success"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }
