@@ -57,7 +57,6 @@ const MARKET_CATEGORIES = [
   { key: "all", label: "全部" },
   { key: "tse", label: "上市" },
   { key: "otc", label: "上櫃" },
-  { key: "etf", label: "ETF" },
 ] as const;
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
@@ -179,22 +178,8 @@ function getPageNumbers(currentPage: number, totalPages: number): number[] {
   return pages;
 }
 
-function detectMarket(stock: Stock): "上市" | "上櫃" | "ETF" | "-" {
+function detectMarket(stock: Stock): "上市" | "上櫃" | "-" {
   const market = String(stock.market || "").trim();
-  const symbol = String(stock.symbol || "").trim();
-  const name = String(stock.name || "").trim();
-
-  if (market === "ETF") return "ETF";
-  if (/^00\d+/.test(symbol)) return "ETF";
-  if (
-    name.includes("ETF") ||
-    name.includes("槓桿") ||
-    name.includes("反向") ||
-    name.includes("正2") ||
-    name.includes("反1")
-  ) {
-    return "ETF";
-  }
 
   if (market === "上市") return "上市";
   if (market === "上櫃") return "上櫃";
@@ -208,7 +193,6 @@ function matchMarket(stock: Stock, selectedMarket: MarketKey) {
   if (selectedMarket === "all") return true;
   if (selectedMarket === "tse") return market === "上市";
   if (selectedMarket === "otc") return market === "上櫃";
-  if (selectedMarket === "etf") return market === "ETF";
 
   return true;
 }
@@ -216,7 +200,6 @@ function matchMarket(stock: Stock, selectedMarket: MarketKey) {
 function getSelectedMarketLabel(selectedMarket: MarketKey) {
   if (selectedMarket === "tse") return "（上市）";
   if (selectedMarket === "otc") return "（上櫃）";
-  if (selectedMarket === "etf") return "（ETF）";
   return "";
 }
 
@@ -291,13 +274,11 @@ export default function Home() {
   const marketCounts = useMemo(() => {
     const tse = stocks.filter((stock) => detectMarket(stock) === "上市").length;
     const otc = stocks.filter((stock) => detectMarket(stock) === "上櫃").length;
-    const etf = stocks.filter((stock) => detectMarket(stock) === "ETF").length;
 
     return {
       all: stocks.length,
       tse,
       otc,
-      etf,
     };
   }, [stocks]);
 
@@ -368,8 +349,7 @@ export default function Home() {
   }, [currentPage, totalPages]);
 
   const recommendedStocks = useMemo(() => {
-    const source =
-      recommendations.length > 0 ? recommendations : stocks;
+    const source = recommendations.length > 0 ? recommendations : stocks;
 
     return [...source]
       .filter((stock) => matchMarket(stock, selectedMarket))
@@ -497,7 +477,6 @@ export default function Home() {
               <span>最後更新：{lastUpdate}</span>
               <span>上市：{formatNumber(marketCounts.tse)}</span>
               <span>上櫃：{formatNumber(marketCounts.otc)}</span>
-              <span>ETF：{formatNumber(marketCounts.etf)}</span>
             </div>
 
             <button
@@ -581,15 +560,14 @@ export default function Home() {
                 }}
               >
                 {MARKET_CATEGORIES.map((item) => {
-                  const active = selectedMarket === item.key;
                   const count =
                     item.key === "all"
                       ? marketCounts.all
                       : item.key === "tse"
                       ? marketCounts.tse
-                      : item.key === "otc"
-                      ? marketCounts.otc
-                      : marketCounts.etf;
+                      : marketCounts.otc;
+
+                  const active = selectedMarket === item.key;
 
                   return (
                     <button
