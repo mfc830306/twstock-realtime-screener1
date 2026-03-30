@@ -38,24 +38,47 @@ def safe_int(value, default=0):
         return default
 
 
-def get_latest_trading_date() -> str:
-    """
-    回傳最近一個交易日（先處理週末）
-    週六 -> 週五
-    週日 -> 週五
-    其餘平日 -> 當天
-    """
+def get_previous_weekday(date_obj: datetime) -> datetime:
+    d = date_obj - timedelta(days=1)
+    while d.weekday() >= 5:  # 5=Sat, 6=Sun
+        d -= timedelta(days=1)
+    return d
+
+
+def get_market_info():
     now = datetime.now()
-    weekday = now.weekday()  # Monday=0 ... Sunday=6
+    weekday = now.weekday()  # Mon=0 ... Sun=6
+    current_hhmm = now.hour * 100 + now.minute
 
-    if weekday == 5:  # Saturday
-        trading_day = now - timedelta(days=1)
-    elif weekday == 6:  # Sunday
-        trading_day = now - timedelta(days=2)
-    else:
-        trading_day = now
+    # 非交易日：週六、週日
+    if weekday >= 5:
+        last_trading_day = get_previous_weekday(now)
+        return {
+            "market_status": "非交易日",
+            "data_date": last_trading_day.strftime("%Y%m%d"),
+            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+        }
 
-    return trading_day.strftime("%Y%m%d")
+    # 平日
+    if 900 <= current_hhmm <= 1330:
+        return {
+            "market_status": "開盤中",
+            "data_date": now.strftime("%Y%m%d"),
+            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+        }
+
+    if current_hhmm < 900:
+        return {
+            "market_status": "開盤前",
+            "data_date": now.strftime("%Y%m%d"),
+            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+        }
+
+    return {
+        "market_status": "收盤後資料",
+        "data_date": now.strftime("%Y%m%d"),
+        "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+    }
 
 
 def build_signal_and_reason(price: float, change: float, change_percent: float, volume: int):
@@ -232,26 +255,25 @@ def get_stocks():
             reverse=True
         )
 
-        now = datetime.now()
-        data_date = get_latest_trading_date()
-        last_update = now.strftime("%Y/%m/%d %H:%M:%S")
+        market_info = get_market_info()
 
         return {
             "success": True,
-            "market_status": "收盤後資料",
-            "data_date": data_date,
-            "last_update": last_update,
+            "market_status": market_info["market_status"],
+            "data_date": market_info["data_date"],
+            "last_update": market_info["last_update"],
             "total": len(all_stocks),
             "stocks": all_stocks
         }
 
     except Exception as e:
-        now = datetime.now()
+        market_info = get_market_info()
+
         return {
             "success": False,
-            "market_status": "資料抓取失敗",
-            "data_date": get_latest_trading_date(),
-            "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
+            "market_status": market_info["market_status"],
+            "data_date": market_info["data_date"],
+            "last_update": market_info["last_update"],
             "total": 0,
             "stocks": [],
             "message": f"資料抓取失敗: {str(e)}"
