@@ -1,6 +1,5 @@
 import os
 import time
-import math
 import traceback
 from typing import Optional, List, Dict, Any
 
@@ -9,8 +8,6 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 # ========= 富邦 SDK =========
-# 你的環境若已安裝 fubon_neo，這段就能正常載入
-# 若匯入失敗，health 仍可檢查，但 snapshot 相關功能會失敗
 try:
     from fubon_neo.sdk import FubonSDK
 except Exception:
@@ -45,7 +42,6 @@ LAST_STOCKS_CACHE: Dict[str, Any] = {
     "data": []
 }
 
-# 你可以調整 stocks 的快取秒數
 STOCKS_CACHE_SECONDS = 20
 
 
@@ -115,12 +111,9 @@ def guess_is_etf(symbol: str, name: str) -> bool:
 
 
 def calc_score(price: float, change: float, change_percent: float, volume: int) -> float:
-    """
-    簡單評分規則，可自行再調整
-    """
     cp = abs(change_percent)
-    vol_score = min(volume / 50000, 20)     # 量能最多加 20
-    change_score = min(cp * 8, 80)          # 漲跌幅最多加 80
+    vol_score = min(volume / 50000, 20)
+    change_score = min(cp * 8, 80)
     change_abs_score = min(abs(change) * 2, 20)
 
     score = change_score + vol_score + change_abs_score
@@ -129,7 +122,6 @@ def calc_score(price: float, change: float, change_percent: float, volume: int) 
 
 def build_signal_and_reason(change: float, change_percent: float, volume: int) -> Dict[str, str]:
     cp = safe_float(change_percent)
-    ch = safe_float(change)
     vol = safe_int(volume)
 
     if cp >= 5:
@@ -158,9 +150,6 @@ def build_signal_and_reason(change: float, change_percent: float, volume: int) -
 
 
 def build_trade_prices(price: float, signal: str) -> Dict[str, str]:
-    """
-    給你一個簡單版的進出場/止損邏輯
-    """
     p = safe_float(price)
     if p <= 0:
         return {
@@ -200,7 +189,7 @@ def load_name_cache():
 
     cache: Dict[str, Dict[str, str]] = {}
 
-    # TWSE 上市資料
+    # TWSE 上市名稱
     try:
         twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
         res = requests.get(twse_url, timeout=15)
@@ -216,8 +205,7 @@ def load_name_cache():
     except Exception:
         pass
 
-    # TPEX 上櫃資料
-    # 這裡用 openapi 來源，欄位格式可能不同，所以做防呆
+    # TPEX 上櫃名稱
     try:
         tpex_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
         res = requests.get(tpex_url, timeout=15)
@@ -244,7 +232,6 @@ def load_name_cache():
     except Exception:
         pass
 
-    # 若 openapi 沒抓到，也至少保留原快取
     if cache:
         NAME_CACHE = cache
 
@@ -255,7 +242,6 @@ def load_name_cache():
 def ensure_sdk_login():
     global sdk, sdk_logged_in, sdk_login_message, last_login_ts
 
-    # 10 分鐘內不重複登入
     if sdk_logged_in and time.time() - last_login_ts < 600:
         return True
 
@@ -284,7 +270,6 @@ def ensure_sdk_login():
             FUBON_CERT_PASSWORD
         )
 
-        # login_result 格式可能依版本不同，所以做寬鬆處理
         ok = False
         msg = ""
 
@@ -294,7 +279,6 @@ def ensure_sdk_login():
         except Exception:
             pass
 
-        # 若沒有 is_success 欄位，盡量用 data 判斷
         if not ok:
             try:
                 data = getattr(login_result, "data", None)
@@ -323,18 +307,11 @@ def ensure_sdk_login():
 # 富邦快照讀取
 # =========================
 def get_sdk_market_snapshot(market: str) -> List[Dict[str, Any]]:
-    """
-    依你目前截圖回傳格式，盡量做通用處理
-    market: TSE / OTC / ESB
-    """
     if not ensure_sdk_login():
         raise Exception(sdk_login_message or "富邦 SDK 登入失敗")
 
     market = normalize_market_for_sdk(market) or "TSE"
-
-    # 不同版本 SDK 的層級可能略不同，這裡用多種寫法嘗試
     last_error = None
-
     candidates = []
 
     try:
@@ -359,7 +336,6 @@ def get_sdk_market_snapshot(market: str) -> List[Dict[str, Any]]:
         try:
             result = fn(market=market)
 
-            # 可能回傳 dict / object
             if isinstance(result, dict):
                 data = result.get("data") or result.get("items") or result.get("stocks") or []
                 if isinstance(data, list):
@@ -405,11 +381,9 @@ def convert_snapshot_item(item: Dict[str, Any], default_market: str) -> Dict[str
     change = safe_float(item.get("change", 0))
     change_percent = safe_float(item.get("changePercent", item.get("change_percent", 0)))
 
-    # 若 SDK 沒給 change，就自己算
     if change == 0 and open_price > 0 and price > 0:
         change = round(price - open_price, 2)
 
-    # 若 SDK 沒給 changePercent，就自己算
     if change_percent == 0 and price > 0 and change != 0:
         base = price - change
         if base > 0:
@@ -462,7 +436,7 @@ def fetch_all_stocks_from_fubon() -> List[Dict[str, Any]]:
 
 
 # =========================
-# 啟動時預先載入名稱快取
+# 啟動時載入名稱快取
 # =========================
 @app.on_event("startup")
 def startup_event():
@@ -519,7 +493,7 @@ def get_stocks(
     limit: int = Query(200, ge=1, le=6000),
     market: Optional[str] = Query(None, description="可選: TSE / OTC / ALL / 上市 / 上櫃 / ETF"),
     search: Optional[str] = Query(None, description="股票代號或名稱搜尋"),
-    sort_by: str = Query("score", description="score / change_percent / volume / price"),
+    sort_by: str = Query("score", description="score / change_percent / volume / price / change"),
     sort_order: str = Query("desc", description="asc / desc")
 ):
     global LAST_STOCKS_CACHE
@@ -527,7 +501,6 @@ def get_stocks(
     try:
         now = time.time()
 
-        # 快取
         use_cache = False
         if LAST_STOCKS_CACHE["data"] and (now - LAST_STOCKS_CACHE["ts"] <= STOCKS_CACHE_SECONDS):
             all_stocks = LAST_STOCKS_CACHE["data"]
@@ -541,7 +514,6 @@ def get_stocks(
 
         stocks = list(all_stocks)
 
-        # 市場篩選
         if market:
             market_text = str(market).strip().upper()
 
@@ -554,7 +526,6 @@ def get_stocks(
             elif market_text in ["ALL", "全部"]:
                 pass
 
-        # 搜尋
         if search:
             kw = str(search).strip().lower()
             stocks = [
@@ -562,7 +533,6 @@ def get_stocks(
                 if kw in str(s.get("symbol", "")).lower() or kw in str(s.get("name", "")).lower()
             ]
 
-        # 排序
         allowed_sort = {"score", "change_percent", "volume", "price", "change"}
         if sort_by not in allowed_sort:
             sort_by = "score"
@@ -598,11 +568,17 @@ def get_stocks(
 
 @app.get("/top-recommendations")
 def top_recommendations(
-    market: Optional[str] = Query(None, description="可選: TSE / OTC / ALL / 上市 / 上櫃"),
+    market: Optional[str] = Query(None, description="可選: TSE / OTC / ALL / 上市 / 上櫃 / ETF"),
     limit: int = Query(10, ge=1, le=50)
 ):
     try:
-        result = get_stocks(limit=5000, market=market, search=None, sort_by="score", sort_order="desc")
+        result = get_stocks(
+            limit=5000,
+            market=market,
+            search=None,
+            sort_by="score",
+            sort_order="desc"
+        )
 
         if not isinstance(result, dict) or not result.get("success"):
             return {
@@ -617,8 +593,7 @@ def top_recommendations(
         valid_stocks = []
         for s in stocks:
             try:
-                score = float(s.get("score", 0))
-                s["score"] = round(score, 2)
+                s["score"] = round(float(s.get("score", 0)), 2)
                 valid_stocks.append(s)
             except Exception:
                 continue
@@ -643,7 +618,6 @@ def top_recommendations(
         }
 
 
-# Render / 本地啟動
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
