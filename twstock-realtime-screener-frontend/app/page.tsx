@@ -52,7 +52,7 @@ const priceRanges = [
   { key: "200-500", label: "200~500" },
   { key: "500-1000", label: "500~1000" },
   { key: "1000+", label: "1000+" },
-];
+] as const;
 
 type MarketTabKey = (typeof marketTabs)[number]["key"];
 
@@ -113,16 +113,16 @@ function formatVolume(volume?: number) {
 }
 
 function getChangeClass(change: number) {
-  if (change > 0) return "text-red-500";
-  if (change < 0) return "text-green-500";
-  return "text-slate-300";
+  if (change > 0) return "change-up";
+  if (change < 0) return "change-down";
+  return "change-flat";
 }
 
-function getSignalDot(status?: string) {
-  if (!status) return "bg-slate-500";
-  if (status.includes("開盤")) return "bg-green-500";
-  if (status.includes("收盤")) return "bg-red-500";
-  return "bg-yellow-500";
+function getMarketStatusDotClass(status?: string) {
+  if (!status) return "status-dot status-dot-neutral";
+  if (status.includes("開盤")) return "status-dot status-dot-open";
+  if (status.includes("收盤")) return "status-dot status-dot-close";
+  return "status-dot status-dot-neutral";
 }
 
 export default function Home() {
@@ -238,6 +238,13 @@ export default function Home() {
     return sorted;
   }, [stocks, searchTerm, selectedMarket, selectedCategory, sortType]);
 
+  const recommendedStocks = useMemo(() => {
+    return [...stocks]
+      .filter((s) => matchMarket(s, selectedMarket))
+      .sort((a, b) => safeNumber(b.score) - safeNumber(a.score))
+      .slice(0, 10);
+  }, [stocks, selectedMarket]);
+
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / PAGE_SIZE));
 
   const pagedStocks = useMemo(() => {
@@ -245,12 +252,13 @@ export default function Home() {
     return filteredStocks.slice(start, start + PAGE_SIZE);
   }, [filteredStocks, currentPage]);
 
-  const recommendedStocks = useMemo(() => {
-    return [...stocks]
-      .filter((s) => matchMarket(s, selectedMarket))
-      .sort((a, b) => safeNumber(b.score) - safeNumber(a.score))
-      .slice(0, 10);
-  }, [stocks, selectedMarket]);
+  const pageNumbers = useMemo(() => {
+    const pages: number[] = [];
+    const start = Math.max(1, currentPage - 3);
+    const end = Math.min(totalPages, currentPage + 3);
+    for (let i = start; i <= end; i++) pages.push(i);
+    return pages;
+  }, [currentPage, totalPages]);
 
   function goToPage(page: number) {
     const next = Math.min(Math.max(page, 1), totalPages);
@@ -264,104 +272,76 @@ export default function Home() {
     setJumpPage("");
   }
 
-  const pageNumbers = useMemo(() => {
-    const pages: number[] = [];
-    const start = Math.max(1, currentPage - 3);
-    const end = Math.min(totalPages, currentPage + 3);
-    for (let i = start; i <= end; i++) pages.push(i);
-    return pages;
-  }, [currentPage, totalPages]);
-
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-7xl px-4 py-5 md:px-6">
-        <div className="mb-5 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`inline-block h-3 w-3 rounded-full ${getSignalDot(
-                    marketStatus
-                  )}`}
-                />
-                <span className="text-slate-300">市場狀態：</span>
-                <span className="font-semibold text-white">
-                  {marketStatus || "-"}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-300">資料日期：</span>
-                <span className="font-semibold text-white">
-                  {dataDate || "-"}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-300">最後更新：</span>
-                <span className="font-semibold text-white">
-                  {lastUpdate || "-"}
-                </span>
-              </div>
+    <main className="page-shell">
+      <div className="page-wrap">
+        <section className="top-bar">
+          <div className="top-bar-left">
+            <div className="status-line">
+              <span className={getMarketStatusDotClass(marketStatus)} />
+              <span className="label">市場狀態：</span>
+              <span className="value">{marketStatus || "-"}</span>
             </div>
-
-            <button
-              onClick={fetchStocks}
-              className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold hover:bg-blue-500"
-            >
-              重新整理
-            </button>
+            <div className="status-line">
+              <span className="label">資料日期：</span>
+              <span className="value">{dataDate || "-"}</span>
+            </div>
+            <div className="status-line">
+              <span className="label">最後更新：</span>
+              <span className="value">{lastUpdate || "-"}</span>
+            </div>
           </div>
-        </div>
 
-        <div className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="space-y-5">
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
-              <h2 className="mb-3 text-lg font-bold">篩選與分類</h2>
+          <button className="refresh-btn" onClick={fetchStocks}>
+            重新整理
+          </button>
+        </section>
 
-              <div className="mb-4">
-                <label className="mb-2 block text-sm text-slate-300">市場分類</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {marketTabs.map((tab) => {
-                    const active = selectedMarket === tab.key;
-                    return (
-                      <button
-                        key={tab.key}
-                        onClick={() => setSelectedMarket(tab.key)}
-                        className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                          active
-                            ? "border-blue-500 bg-blue-600 text-white"
-                            : "border-slate-700 bg-slate-950 text-slate-200 hover:border-slate-500"
-                        }`}
-                      >
-                        {tab.label} ({marketCounts[tab.key] || 0})
-                      </button>
-                    );
-                  })}
+        <div className="content-grid">
+          <aside className="left-column">
+            <section className="panel">
+              <h2 className="panel-title">篩選與分類</h2>
+
+              <div className="field-block">
+                <div className="field-label">市場分類</div>
+                <div className="tab-grid">
+                  {marketTabs.map((tab) => (
+                    <button
+                      key={tab.key}
+                      onClick={() => setSelectedMarket(tab.key)}
+                      className={
+                        selectedMarket === tab.key
+                          ? "tab-btn tab-btn-active"
+                          : "tab-btn"
+                      }
+                    >
+                      {tab.label} ({marketCounts[tab.key] || 0})
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div className="mb-4">
-                <label className="mb-2 block text-sm text-slate-300">搜尋股票</label>
+              <div className="field-block">
+                <div className="field-label">搜尋股票</div>
                 <input
+                  className="control-input"
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="輸入代號或名稱"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white outline-none placeholder:text-slate-500 focus:border-blue-500"
                 />
               </div>
 
-              <div className="mb-4">
-                <label className="mb-2 block text-sm text-slate-300">排序方式</label>
+              <div className="field-block">
+                <div className="field-label">排序方式</div>
                 <select
+                  className="control-input"
                   value={sortType}
                   onChange={(e) =>
                     setSortType(
                       e.target.value as "score" | "up" | "down" | "volume"
                     )
                   }
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white outline-none focus:border-blue-500"
                 >
                   <option value="score">推薦分數</option>
                   <option value="up">漲幅 % 由高到低</option>
@@ -370,31 +350,28 @@ export default function Home() {
                 </select>
               </div>
 
-              <div>
-                <label className="mb-2 block text-sm text-slate-300">股價分類</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {priceRanges.map((range) => {
-                    const active = selectedCategory === range.key;
-                    return (
-                      <button
-                        key={range.key}
-                        onClick={() => setSelectedCategory(range.key)}
-                        className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                          active
-                            ? "border-blue-500 bg-blue-600 text-white"
-                            : "border-slate-700 bg-slate-950 text-slate-200 hover:border-slate-500"
-                        }`}
-                      >
-                        {range.label} ({categoryCounts[range.key] || 0})
-                      </button>
-                    );
-                  })}
+              <div className="field-block">
+                <div className="field-label">股價分類</div>
+                <div className="tab-grid">
+                  {priceRanges.map((range) => (
+                    <button
+                      key={range.key}
+                      onClick={() => setSelectedCategory(range.key)}
+                      className={
+                        selectedCategory === range.key
+                          ? "tab-btn tab-btn-active"
+                          : "tab-btn"
+                      }
+                    >
+                      {range.label} ({categoryCounts[range.key] || 0})
+                    </button>
+                  ))}
                 </div>
               </div>
             </section>
 
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
-              <h2 className="mb-3 text-lg font-bold">
+            <section className="panel">
+              <h2 className="panel-title">
                 推薦 10 檔
                 {selectedMarket === "tse"
                   ? "（上市）"
@@ -405,31 +382,26 @@ export default function Home() {
                   : ""}
               </h2>
 
-              <div className="space-y-3">
+              <div className="recommend-list">
                 {recommendedStocks.map((stock, idx) => {
                   const change = safeNumber(stock.change);
                   const changePercent = safeNumber(stock.change_percent);
 
                   return (
-                    <div
-                      key={`${stock.symbol}-${idx}`}
-                      className="rounded-xl border border-slate-800 bg-slate-950 p-3"
-                    >
-                      <div className="mb-1 flex items-start justify-between gap-2">
+                    <article className="recommend-card" key={`${stock.symbol}-${idx}`}>
+                      <div className="recommend-top">
                         <div>
-                          <div className="font-bold">
+                          <div className="recommend-name">
                             {stock.symbol} {stock.name}
                           </div>
-                          <div className="text-xs text-slate-400">
-                            {isETFStock(stock)
-                              ? "ETF"
-                              : stock.market || "-"}
+                          <div className="recommend-market">
+                            {isETFStock(stock) ? "ETF" : stock.market || "-"}
                           </div>
                         </div>
 
-                        <div className="text-right">
-                          <div className="font-bold">{stock.price}</div>
-                          <div className={`text-sm font-semibold ${getChangeClass(change)}`}>
+                        <div className="recommend-price-box">
+                          <div className="recommend-price">{stock.price}</div>
+                          <div className={`recommend-change ${getChangeClass(change)}`}>
                             {change > 0 ? "+" : ""}
                             {change.toFixed(2)} / {changePercent > 0 ? "+" : ""}
                             {changePercent.toFixed(2)}%
@@ -437,23 +409,23 @@ export default function Home() {
                         </div>
                       </div>
 
-                      <div className="mt-2 space-y-1 text-sm text-slate-300">
+                      <div className="recommend-info">
                         <div>進場價位：{stock.entry_price || "-"}</div>
                         <div>目標價位：{stock.target_price || "-"}</div>
                         <div>止損價位：{stock.stop_loss || "-"}</div>
                         <div>推薦原因：{stock.reason || "-"}</div>
                       </div>
-                    </div>
+                    </article>
                   );
                 })}
               </div>
             </section>
           </aside>
 
-          <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <section className="panel right-panel">
+            <div className="list-header">
               <div>
-                <h2 className="text-xl font-bold">
+                <h2 className="panel-title no-margin">
                   股票列表
                   {selectedMarket === "tse"
                     ? "（上市）"
@@ -463,30 +435,30 @@ export default function Home() {
                     ? "（ETF）"
                     : ""}
                 </h2>
-                <div className="mt-1 text-sm text-slate-400">
+                <div className="list-count">
                   共 {filteredStocks.length.toLocaleString("zh-TW")} 檔
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="pager-toolbar">
                 <button
+                  className="pager-btn"
                   onClick={() => goToPage(currentPage - 1)}
                   disabled={currentPage === 1}
-                  className="rounded-xl border border-slate-700 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   上一頁
                 </button>
 
-                <div className="flex items-center gap-1">
+                <div className="page-number-group">
                   {pageNumbers.map((page) => (
                     <button
                       key={page}
-                      onClick={() => goToPage(page)}
-                      className={`min-w-[40px] rounded-xl px-3 py-2 text-sm font-semibold ${
+                      className={
                         currentPage === page
-                          ? "bg-blue-600 text-white"
-                          : "border border-slate-700 text-slate-200"
-                      }`}
+                          ? "page-number-btn page-number-btn-active"
+                          : "page-number-btn"
+                      }
+                      onClick={() => goToPage(page)}
                     >
                       {page}
                     </button>
@@ -494,27 +466,24 @@ export default function Home() {
                 </div>
 
                 <button
+                  className="pager-btn"
                   onClick={() => goToPage(currentPage + 1)}
                   disabled={currentPage === totalPages}
-                  className="rounded-xl border border-slate-700 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   下一頁
                 </button>
 
-                <div className="ml-1 flex items-center gap-2">
+                <div className="jump-box">
                   <input
+                    className="jump-input"
                     type="number"
                     min={1}
                     max={totalPages}
                     value={jumpPage}
                     onChange={(e) => setJumpPage(e.target.value)}
                     placeholder="頁碼"
-                    className="w-20 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-blue-500"
                   />
-                  <button
-                    onClick={handleJumpPage}
-                    className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold hover:bg-blue-500"
-                  >
+                  <button className="jump-btn" onClick={handleJumpPage}>
                     跳頁
                   </button>
                 </div>
@@ -522,29 +491,23 @@ export default function Home() {
             </div>
 
             {loading ? (
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center text-slate-300">
-                載入中...
-              </div>
+              <div className="empty-box">載入中...</div>
             ) : error ? (
-              <div className="rounded-xl border border-red-900 bg-red-950/40 p-6 text-center text-red-300">
-                {error}
-              </div>
+              <div className="empty-box empty-box-error">{error}</div>
             ) : pagedStocks.length === 0 ? (
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center text-slate-300">
-                查無符合條件的股票
-              </div>
+              <div className="empty-box">查無符合條件的股票</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
+              <div className="table-wrap">
+                <table className="stock-table">
                   <thead>
-                    <tr className="border-b border-slate-800 text-slate-300">
-                      <th className="px-3 py-3 text-left">股票</th>
-                      <th className="px-3 py-3 text-right">價格</th>
-                      <th className="px-3 py-3 text-right">漲跌</th>
-                      <th className="px-3 py-3 text-right">漲跌幅%</th>
-                      <th className="px-3 py-3 text-right">成交量</th>
-                      <th className="px-3 py-3 text-right">分數</th>
-                      <th className="px-3 py-3 text-left">訊號</th>
+                    <tr>
+                      <th>股票</th>
+                      <th className="text-right">價格</th>
+                      <th className="text-right">漲跌</th>
+                      <th className="text-right">漲跌幅%</th>
+                      <th className="text-right">成交量</th>
+                      <th className="text-right">分數</th>
+                      <th>訊號</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -553,53 +516,38 @@ export default function Home() {
                       const changePercent = safeNumber(stock.change_percent);
 
                       return (
-                        <tr
-                          key={stock.symbol}
-                          className="border-b border-slate-800/80 hover:bg-slate-800/40"
-                        >
-                          <td className="px-3 py-3">
-                            <div className="font-semibold text-white">
+                        <tr key={stock.symbol}>
+                          <td>
+                            <div className="stock-name">
                               {stock.symbol} {stock.name}
                             </div>
-                            <div className="text-xs text-slate-400">
+                            <div className="stock-subtext">
                               {isETFStock(stock) ? "ETF" : stock.market || "-"}
                             </div>
                           </td>
 
-                          <td className="px-3 py-3 text-right font-semibold">
-                            {stock.price}
-                          </td>
+                          <td className="text-right stock-price">{stock.price}</td>
 
-                          <td
-                            className={`px-3 py-3 text-right font-semibold ${getChangeClass(
-                              change
-                            )}`}
-                          >
+                          <td className={`text-right ${getChangeClass(change)}`}>
                             {change > 0 ? "+" : ""}
                             {change.toFixed(2)}
                           </td>
 
-                          <td
-                            className={`px-3 py-3 text-right font-semibold ${getChangeClass(
-                              change
-                            )}`}
-                          >
+                          <td className={`text-right ${getChangeClass(change)}`}>
                             {changePercent > 0 ? "+" : ""}
                             {changePercent.toFixed(2)}%
                           </td>
 
-                          <td className="px-3 py-3 text-right text-slate-300">
+                          <td className="text-right muted-text">
                             {formatVolume(stock.volume)}
                           </td>
 
-                          <td className="px-3 py-3 text-right text-slate-300">
+                          <td className="text-right muted-text">
                             {safeNumber(stock.score)}
                           </td>
 
-                          <td className="px-3 py-3 text-left">
-                            <span className="rounded-lg bg-slate-800 px-2 py-1 text-xs text-slate-200">
-                              {stock.signal || "-"}
-                            </span>
+                          <td>
+                            <span className="signal-badge">{stock.signal || "-"}</span>
                           </td>
                         </tr>
                       );
@@ -609,7 +557,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className="mt-4 flex flex-col gap-2 text-sm text-slate-400 md:flex-row md:items-center md:justify-between">
+            <div className="list-footer">
               <div>
                 第 {currentPage} / {totalPages} 頁
               </div>
