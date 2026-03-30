@@ -13,7 +13,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-Hant">
-      <body>{children}</body>
+      <body style={{ minHeight: "100vh", overflow: "hidden" }}>{children}</body>
     </html>
   );
 }
