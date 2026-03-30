@@ -56,7 +56,7 @@ const PRICE_CATEGORIES = [
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
-const ITEMS_PER_PAGE = 50;
+const ITEMS_PER_PAGE = 20;
 
 function getPriceCategory(price: number): CategoryKey {
   if (price < 50) return "0-50";
