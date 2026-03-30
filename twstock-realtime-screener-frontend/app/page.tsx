@@ -52,9 +52,10 @@ const priceRanges = [
   { key: "200-500", label: "200~500" },
   { key: "500-1000", label: "500~1000" },
   { key: "1000+", label: "1000+" },
-] as const;
+];
 
 type MarketTabKey = (typeof marketTabs)[number]["key"];
+type SortType = "score" | "up" | "down" | "volume";
 
 function safeNumber(value: unknown, fallback = 0) {
   const n = Number(value);
@@ -68,6 +69,7 @@ function isETFStock(stock: Stock) {
   if (/^00\d+/.test(symbol)) return true;
   if (name.includes("ETF")) return true;
   if (name.includes("槓桿") || name.includes("反向")) return true;
+  if (name.includes("正2") || name.includes("反1")) return true;
 
   return false;
 }
@@ -77,17 +79,9 @@ function matchMarket(stock: Stock, selectedMarket: MarketTabKey) {
 
   const market = String(stock.market || "").trim();
 
-  if (selectedMarket === "etf") {
-    return isETFStock(stock);
-  }
-
-  if (selectedMarket === "tse") {
-    return market === "上市" && !isETFStock(stock);
-  }
-
-  if (selectedMarket === "otc") {
-    return market === "上櫃" && !isETFStock(stock);
-  }
+  if (selectedMarket === "etf") return isETFStock(stock);
+  if (selectedMarket === "tse") return market === "上市" && !isETFStock(stock);
+  if (selectedMarket === "otc") return market === "上櫃" && !isETFStock(stock);
 
   return true;
 }
@@ -112,17 +106,29 @@ function formatVolume(volume?: number) {
   return v.toLocaleString("zh-TW");
 }
 
-function getChangeClass(change: number) {
-  if (change > 0) return "change-up";
-  if (change < 0) return "change-down";
-  return "change-flat";
+function getMarketStatusDotClass(status?: string) {
+  if (!status) return "status-dot neutral";
+  if (status.includes("開盤")) return "status-dot open";
+  if (status.includes("收盤")) return "status-dot closed";
+  return "status-dot neutral";
 }
 
-function getMarketStatusDotClass(status?: string) {
-  if (!status) return "status-dot status-dot-neutral";
-  if (status.includes("開盤")) return "status-dot status-dot-open";
-  if (status.includes("收盤")) return "status-dot status-dot-close";
-  return "status-dot status-dot-neutral";
+function getChangeClass(change: number) {
+  if (change > 0) return "up";
+  if (change < 0) return "down";
+  return "flat";
+}
+
+function getMarketLabel(stock: Stock) {
+  if (isETFStock(stock)) return "ETF";
+  return stock.market || "-";
+}
+
+function getSectionSuffix(selectedMarket: MarketTabKey) {
+  if (selectedMarket === "tse") return "（上市）";
+  if (selectedMarket === "otc") return "（上櫃）";
+  if (selectedMarket === "etf") return "（ETF）";
+  return "";
 }
 
 export default function Home() {
@@ -136,9 +142,7 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMarket, setSelectedMarket] = useState<MarketTabKey>("all");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [sortType, setSortType] = useState<"score" | "up" | "down" | "volume">(
-    "score"
-  );
+  const [sortType, setSortType] = useState<SortType>("score");
   const [currentPage, setCurrentPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("");
 
@@ -213,8 +217,8 @@ export default function Home() {
     const list = stocks.filter((stock) => {
       const hitKeyword =
         !keyword ||
-        stock.symbol.toLowerCase().includes(keyword) ||
-        stock.name.toLowerCase().includes(keyword);
+        String(stock.symbol || "").toLowerCase().includes(keyword) ||
+        String(stock.name || "").toLowerCase().includes(keyword);
 
       const hitMarket = matchMarket(stock, selectedMarket);
       const hitCategory = matchPriceCategory(stock.price, selectedCategory);
@@ -238,19 +242,19 @@ export default function Home() {
     return sorted;
   }, [stocks, searchTerm, selectedMarket, selectedCategory, sortType]);
 
-  const recommendedStocks = useMemo(() => {
-    return [...stocks]
-      .filter((s) => matchMarket(s, selectedMarket))
-      .sort((a, b) => safeNumber(b.score) - safeNumber(a.score))
-      .slice(0, 10);
-  }, [stocks, selectedMarket]);
-
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / PAGE_SIZE));
 
   const pagedStocks = useMemo(() => {
     const start = (currentPage - 1) * PAGE_SIZE;
     return filteredStocks.slice(start, start + PAGE_SIZE);
   }, [filteredStocks, currentPage]);
+
+  const recommendedStocks = useMemo(() => {
+    return [...stocks]
+      .filter((s) => matchMarket(s, selectedMarket))
+      .sort((a, b) => safeNumber(b.score) - safeNumber(a.score))
+      .slice(0, 10);
+  }, [stocks, selectedMarket]);
 
   const pageNumbers = useMemo(() => {
     const pages: number[] = [];
@@ -273,28 +277,32 @@ export default function Home() {
   }
 
   return (
-    <main className="page-shell">
-      <div className="page-wrap">
-        <section className="top-bar">
-          <div className="top-bar-left">
-            <div className="status-line">
-              <span className={getMarketStatusDotClass(marketStatus)} />
-              <span className="label">市場狀態：</span>
-              <span className="value">{marketStatus || "-"}</span>
-            </div>
-            <div className="status-line">
-              <span className="label">資料日期：</span>
-              <span className="value">{dataDate || "-"}</span>
-            </div>
-            <div className="status-line">
-              <span className="label">最後更新：</span>
-              <span className="value">{lastUpdate || "-"}</span>
-            </div>
-          </div>
+    <main className="tw-page">
+      <div className="tw-shell">
+        <section className="top-panel">
+          <div className="top-panel-row">
+            <div className="status-group">
+              <div className="status-item">
+                <span className={getMarketStatusDotClass(marketStatus)} />
+                <span className="label">市場狀態：</span>
+                <span className="value">{marketStatus || "-"}</span>
+              </div>
 
-          <button className="refresh-btn" onClick={fetchStocks}>
-            重新整理
-          </button>
+              <div className="status-item">
+                <span className="label">資料日期：</span>
+                <span className="value">{dataDate || "-"}</span>
+              </div>
+
+              <div className="status-item">
+                <span className="label">最後更新：</span>
+                <span className="value">{lastUpdate || "-"}</span>
+              </div>
+            </div>
+
+            <button className="refresh-btn" onClick={fetchStocks}>
+              重新整理
+            </button>
+          </div>
         </section>
 
         <div className="content-grid">
@@ -303,16 +311,16 @@ export default function Home() {
               <h2 className="panel-title">篩選與分類</h2>
 
               <div className="field-block">
-                <div className="field-label">市場分類</div>
-                <div className="tab-grid">
+                <label className="field-label">市場分類</label>
+                <div className="btn-grid">
                   {marketTabs.map((tab) => (
                     <button
                       key={tab.key}
                       onClick={() => setSelectedMarket(tab.key)}
                       className={
                         selectedMarket === tab.key
-                          ? "tab-btn tab-btn-active"
-                          : "tab-btn"
+                          ? "filter-btn active"
+                          : "filter-btn"
                       }
                     >
                       {tab.label} ({marketCounts[tab.key] || 0})
@@ -322,26 +330,22 @@ export default function Home() {
               </div>
 
               <div className="field-block">
-                <div className="field-label">搜尋股票</div>
+                <label className="field-label">搜尋股票</label>
                 <input
-                  className="control-input"
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="輸入代號或名稱"
+                  className="text-input"
                 />
               </div>
 
               <div className="field-block">
-                <div className="field-label">排序方式</div>
+                <label className="field-label">排序方式</label>
                 <select
-                  className="control-input"
                   value={sortType}
-                  onChange={(e) =>
-                    setSortType(
-                      e.target.value as "score" | "up" | "down" | "volume"
-                    )
-                  }
+                  onChange={(e) => setSortType(e.target.value as SortType)}
+                  className="select-input"
                 >
                   <option value="score">推薦分數</option>
                   <option value="up">漲幅 % 由高到低</option>
@@ -351,16 +355,16 @@ export default function Home() {
               </div>
 
               <div className="field-block">
-                <div className="field-label">股價分類</div>
-                <div className="tab-grid">
+                <label className="field-label">股價分類</label>
+                <div className="btn-grid">
                   {priceRanges.map((range) => (
                     <button
                       key={range.key}
                       onClick={() => setSelectedCategory(range.key)}
                       className={
                         selectedCategory === range.key
-                          ? "tab-btn tab-btn-active"
-                          : "tab-btn"
+                          ? "filter-btn active"
+                          : "filter-btn"
                       }
                     >
                       {range.label} ({categoryCounts[range.key] || 0})
@@ -372,14 +376,7 @@ export default function Home() {
 
             <section className="panel">
               <h2 className="panel-title">
-                推薦 10 檔
-                {selectedMarket === "tse"
-                  ? "（上市）"
-                  : selectedMarket === "otc"
-                  ? "（上櫃）"
-                  : selectedMarket === "etf"
-                  ? "（ETF）"
-                  : ""}
+                推薦 10 檔{getSectionSuffix(selectedMarket)}
               </h2>
 
               <div className="recommend-list">
@@ -388,22 +385,23 @@ export default function Home() {
                   const changePercent = safeNumber(stock.change_percent);
 
                   return (
-                    <article className="recommend-card" key={`${stock.symbol}-${idx}`}>
+                    <div className="recommend-card" key={`${stock.symbol}-${idx}`}>
                       <div className="recommend-top">
                         <div>
-                          <div className="recommend-name">
+                          <div className="stock-name">
                             {stock.symbol} {stock.name}
                           </div>
-                          <div className="recommend-market">
-                            {isETFStock(stock) ? "ETF" : stock.market || "-"}
+                          <div className="stock-market">
+                            {getMarketLabel(stock)}
                           </div>
                         </div>
 
-                        <div className="recommend-price-box">
-                          <div className="recommend-price">{stock.price}</div>
-                          <div className={`recommend-change ${getChangeClass(change)}`}>
+                        <div className="price-block">
+                          <div className="price-main">{stock.price}</div>
+                          <div className={`price-change ${getChangeClass(change)}`}>
                             {change > 0 ? "+" : ""}
-                            {change.toFixed(2)} / {changePercent > 0 ? "+" : ""}
+                            {change.toFixed(2)} /{" "}
+                            {changePercent > 0 ? "+" : ""}
                             {changePercent.toFixed(2)}%
                           </div>
                         </div>
@@ -415,34 +413,27 @@ export default function Home() {
                         <div>止損價位：{stock.stop_loss || "-"}</div>
                         <div>推薦原因：{stock.reason || "-"}</div>
                       </div>
-                    </article>
+                    </div>
                   );
                 })}
               </div>
             </section>
           </aside>
 
-          <section className="panel right-panel">
-            <div className="list-header">
+          <section className="panel main-panel">
+            <div className="main-header">
               <div>
-                <h2 className="panel-title no-margin">
-                  股票列表
-                  {selectedMarket === "tse"
-                    ? "（上市）"
-                    : selectedMarket === "otc"
-                    ? "（上櫃）"
-                    : selectedMarket === "etf"
-                    ? "（ETF）"
-                    : ""}
+                <h2 className="panel-title">
+                  股票列表{getSectionSuffix(selectedMarket)}
                 </h2>
-                <div className="list-count">
+                <div className="sub-info">
                   共 {filteredStocks.length.toLocaleString("zh-TW")} 檔
                 </div>
               </div>
 
-              <div className="pager-toolbar">
+              <div className="pager-tools">
                 <button
-                  className="pager-btn"
+                  className="page-btn"
                   onClick={() => goToPage(currentPage - 1)}
                   disabled={currentPage === 1}
                 >
@@ -453,12 +444,12 @@ export default function Home() {
                   {pageNumbers.map((page) => (
                     <button
                       key={page}
+                      onClick={() => goToPage(page)}
                       className={
                         currentPage === page
-                          ? "page-number-btn page-number-btn-active"
-                          : "page-number-btn"
+                          ? "page-number active"
+                          : "page-number"
                       }
-                      onClick={() => goToPage(page)}
                     >
                       {page}
                     </button>
@@ -466,22 +457,22 @@ export default function Home() {
                 </div>
 
                 <button
-                  className="pager-btn"
+                  className="page-btn"
                   onClick={() => goToPage(currentPage + 1)}
                   disabled={currentPage === totalPages}
                 >
                   下一頁
                 </button>
 
-                <div className="jump-box">
+                <div className="jump-group">
                   <input
-                    className="jump-input"
                     type="number"
                     min={1}
                     max={totalPages}
                     value={jumpPage}
                     onChange={(e) => setJumpPage(e.target.value)}
                     placeholder="頁碼"
+                    className="jump-input"
                   />
                   <button className="jump-btn" onClick={handleJumpPage}>
                     跳頁
@@ -493,7 +484,7 @@ export default function Home() {
             {loading ? (
               <div className="empty-box">載入中...</div>
             ) : error ? (
-              <div className="empty-box empty-box-error">{error}</div>
+              <div className="empty-box error-box">{error}</div>
             ) : pagedStocks.length === 0 ? (
               <div className="empty-box">查無符合條件的股票</div>
             ) : (
@@ -502,11 +493,11 @@ export default function Home() {
                   <thead>
                     <tr>
                       <th>股票</th>
-                      <th className="text-right">價格</th>
-                      <th className="text-right">漲跌</th>
-                      <th className="text-right">漲跌幅%</th>
-                      <th className="text-right">成交量</th>
-                      <th className="text-right">分數</th>
+                      <th className="ta-right">價格</th>
+                      <th className="ta-right">漲跌</th>
+                      <th className="ta-right">漲跌幅%</th>
+                      <th className="ta-right">成交量</th>
+                      <th className="ta-right">分數</th>
                       <th>訊號</th>
                     </tr>
                   </thead>
@@ -521,33 +512,25 @@ export default function Home() {
                             <div className="stock-name">
                               {stock.symbol} {stock.name}
                             </div>
-                            <div className="stock-subtext">
-                              {isETFStock(stock) ? "ETF" : stock.market || "-"}
+                            <div className="stock-market">
+                              {getMarketLabel(stock)}
                             </div>
                           </td>
-
-                          <td className="text-right stock-price">{stock.price}</td>
-
-                          <td className={`text-right ${getChangeClass(change)}`}>
+                          <td className="ta-right price-main">{stock.price}</td>
+                          <td className={`ta-right ${getChangeClass(change)}`}>
                             {change > 0 ? "+" : ""}
                             {change.toFixed(2)}
                           </td>
-
-                          <td className={`text-right ${getChangeClass(change)}`}>
+                          <td className={`ta-right ${getChangeClass(change)}`}>
                             {changePercent > 0 ? "+" : ""}
                             {changePercent.toFixed(2)}%
                           </td>
-
-                          <td className="text-right muted-text">
-                            {formatVolume(stock.volume)}
-                          </td>
-
-                          <td className="text-right muted-text">
-                            {safeNumber(stock.score)}
-                          </td>
-
+                          <td className="ta-right">{formatVolume(stock.volume)}</td>
+                          <td className="ta-right">{safeNumber(stock.score)}</td>
                           <td>
-                            <span className="signal-badge">{stock.signal || "-"}</span>
+                            <span className="signal-badge">
+                              {stock.signal || "-"}
+                            </span>
                           </td>
                         </tr>
                       );
@@ -557,7 +540,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className="list-footer">
+            <div className="footer-info">
               <div>
                 第 {currentPage} / {totalPages} 頁
               </div>
