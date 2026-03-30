@@ -279,28 +279,32 @@ export default function Home() {
   return (
     <main className="tw-page">
       <div className="tw-shell">
-        <section className="top-panel">
-          <div className="top-panel-row">
-            <div className="status-group">
-              <div className="status-item">
-                <span className={getMarketStatusDotClass(marketStatus)} />
-                <span className="label">市場狀態：</span>
-                <span className="value">{marketStatus || "-"}</span>
-              </div>
-
-              <div className="status-item">
-                <span className="label">資料日期：</span>
-                <span className="value">{dataDate || "-"}</span>
-              </div>
-
-              <div className="status-item">
-                <span className="label">最後更新：</span>
-                <span className="value">{lastUpdate || "-"}</span>
-              </div>
+        <section className="top-status-bar">
+          <div className="top-status-left">
+            <div className="status-item">
+              <span className={getMarketStatusDotClass(marketStatus)} />
+              <span className="label">市場狀態：</span>
+              <span className="value">{marketStatus || "-"}</span>
             </div>
 
-            <button className="refresh-btn" onClick={fetchStocks}>
-              重新整理
+            <div className="status-item">
+              <span className="label">資料日期：</span>
+              <span className="value">{dataDate || "-"}</span>
+            </div>
+
+            <div className="status-item">
+              <span className="label">最後更新：</span>
+              <span className="value">{lastUpdate || "-"}</span>
+            </div>
+          </div>
+
+          <div className="top-status-right">
+            <button
+              className="refresh-btn"
+              onClick={fetchStocks}
+              disabled={loading}
+            >
+              {loading ? "更新中..." : "更新"}
             </button>
           </div>
         </section>
