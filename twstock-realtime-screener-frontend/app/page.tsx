@@ -180,10 +180,8 @@ function getPageNumbers(currentPage: number, totalPages: number): number[] {
 
 function detectMarket(stock: Stock): "上市" | "上櫃" | "-" {
   const market = String(stock.market || "").trim();
-
   if (market === "上市") return "上市";
   if (market === "上櫃") return "上櫃";
-
   return "-";
 }
 
