@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 * {
   box-sizing: border-box;
 }
@@ -39,6 +43,7 @@ textarea {
 
 button {
   outline: none;
+  cursor: pointer;
 }
 
 input,
