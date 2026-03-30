@@ -254,6 +254,11 @@ def normalize_snapshot_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if change_percent == 0 and previous_close > 0 and change != 0:
         change_percent = (change / previous_close) * 100
+    elif change_percent == 0 and previous_close <= 0 and price > 0 and change != 0:
+        prev = price - change
+        if prev > 0:
+            previous_close = prev
+            change_percent = (change / prev) * 100
 
     total = row.get("total") if isinstance(row.get("total"), dict) else {}
     volume = safe_int(
@@ -279,13 +284,13 @@ def normalize_snapshot_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "open": round(safe_float(row.get("openPrice")), 2),
         "high": round(safe_float(row.get("highPrice")), 2),
         "low": round(safe_float(row.get("lowPrice")), 2),
-        "update_time": safe_str(row.get("lastUpdated")),
+        "update_time": safe_str(row.get("lastUpdated") or total.get("time")),
     }
 
 
 def fetch_snapshot_market(market: str) -> List[Dict[str, Any]]:
     stock_client = get_stock_rest_client()
-    resp = stock_client.snapshot.quotes(market=market, type="ALLBUT099")
+    resp = stock_client.snapshot.quotes(market=market, type="ALLBUT0999")
     rows = extract_rows(resp)
 
     result: List[Dict[str, Any]] = []
@@ -297,21 +302,23 @@ def fetch_snapshot_market(market: str) -> List[Dict[str, Any]]:
     dedup = {}
     for item in result:
         dedup[item["symbol"]] = item
+
     return list(dedup.values())
 
 
 def get_all_stocks() -> List[Dict[str, Any]]:
     all_stocks: List[Dict[str, Any]] = []
+    errors: List[str] = []
 
     try:
         all_stocks.extend(fetch_snapshot_market("TSE"))
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"TSE 失敗: {e}")
 
     try:
         all_stocks.extend(fetch_snapshot_market("OTC"))
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"OTC 失敗: {e}")
 
     dedup = {}
     for item in all_stocks:
@@ -319,6 +326,10 @@ def get_all_stocks() -> List[Dict[str, Any]]:
 
     stocks = list(dedup.values())
     stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
+
+    if not stocks and errors:
+        raise Exception("；".join(errors))
+
     return stocks
 
 
@@ -400,7 +411,7 @@ def debug_snapshot(symbol: str = "2330"):
 def debug_market_snapshot(market: str = "TSE"):
     try:
         stock_client = get_stock_rest_client()
-        resp = stock_client.snapshot.quotes(market=market, type="ALLBUT099")
+        resp = stock_client.snapshot.quotes(market=market, type="ALLBUT0999")
         rows = extract_rows(resp)
         return {
             "success": True,
