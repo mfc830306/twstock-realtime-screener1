@@ -403,4 +403,65 @@ def get_stocks():
             "stocks": [],
             "top_recommendations": [],
             "message": str(e),
+
+            import os
+from fubon_neo.sdk import FubonSDK
+
+@app.get("/test-fubon")
+def test_fubon():
+    sdk = FubonSDK()
+
+    id_no = os.getenv("FUBON_ID")
+    password = os.getenv("FUBON_PWD")
+    cert_path = os.getenv("FUBON_CERT_PATH", "/etc/secrets/API_20270327.p12")
+    cert_password = os.getenv("FUBON_CERT_PWD")
+
+    if not all([id_no, password, cert_path, cert_password]):
+        return {
+            "success": False,
+            "message": "富邦環境變數未設定完整"
+        }
+
+    try:
+        accounts = sdk.login(id_no, password, cert_path, cert_password)
+
+        if not accounts.is_success:
+            return {
+                "success": False,
+                "message": accounts.message
+            }
+
+        sdk.init_realtime()
+
+        reststock = sdk.marketdata.rest_client.stock
+        res = reststock.intraday.quote(symbol="2330")
+
+        return {
+            "success": True,
+            "stock": {
+                "symbol": res.get("symbol"),
+                "name": res.get("name"),
+                "price": res.get("lastPrice"),
+                "change": res.get("change"),
+                "change_percent": res.get("changePercent"),
+                "open": res.get("openPrice"),
+                "high": res.get("highPrice"),
+                "low": res.get("lowPrice"),
+                "volume": res.get("total", {}).get("tradeVolume", 0),
+                "market": res.get("market"),
+                "date": res.get("date"),
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+    finally:
+        try:
+            sdk.logout()
+        except:
+            pass
         }
