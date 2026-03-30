@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+/* ─── Types ──────────────────────────────────────────────── */
 type Stock = {
   market?: string;
   symbol: string;
@@ -41,178 +42,465 @@ type ApiResponse = {
   };
 };
 
+/* ─── Constants ──────────────────────────────────────────── */
 const BACKEND_URL =
   "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000";
 
 const PRICE_CATEGORIES = [
-  { key: "all", label: "全部" },
-  { key: "0-50", label: "0-50" },
-  { key: "50-100", label: "50-100" },
-  { key: "100-200", label: "100-200" },
-  { key: "200-500", label: "200-500" },
-  { key: "500+", label: "500+" },
+  { key: "all",     label: "全部" },
+  { key: "0-50",    label: "0 ~ 50 元" },
+  { key: "50-100",  label: "50 ~ 100 元" },
+  { key: "100-200", label: "100 ~ 200 元" },
+  { key: "200-500", label: "200 ~ 500 元" },
+  { key: "500+",    label: "500 元以上" },
 ] as const;
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
-const ITEMS_PER_PAGE = 20;
-
+/* ─── Helpers ────────────────────────────────────────────── */
 function getPriceCategory(price: number): CategoryKey {
-  if (price < 50) return "0-50";
+  if (price < 50)  return "0-50";
   if (price < 100) return "50-100";
   if (price < 200) return "100-200";
   if (price < 500) return "200-500";
   return "500+";
 }
 
-function formatNumber(num?: number) {
-  if (num === undefined || num === null || Number.isNaN(num)) return "-";
-  return num.toLocaleString("zh-TW");
+function fmtNum(n?: number) {
+  if (n === undefined || n === null || Number.isNaN(n)) return "-";
+  return n.toLocaleString("zh-TW");
 }
 
-function formatPrice(num?: number) {
-  if (num === undefined || num === null || Number.isNaN(num)) return "-";
-  return num.toLocaleString("zh-TW");
+function fmtPrice(n?: number) {
+  if (n === undefined || n === null || Number.isNaN(n)) return "-";
+  return n.toLocaleString("zh-TW");
 }
 
-function formatSigned(num?: number, digits = 2) {
-  if (num === undefined || num === null || Number.isNaN(num)) return "-";
-  return `${num > 0 ? "+" : num < 0 ? "" : ""}${num.toFixed(digits)}`;
+function fmtSigned(n?: number, digits = 2) {
+  if (n === undefined || n === null || Number.isNaN(n)) return "-";
+  return `${n > 0 ? "+" : ""}${n.toFixed(digits)}`;
 }
 
-function formatDateString(dateText?: string) {
-  if (!dateText || dateText === "-") return "-";
-  const clean = String(dateText).replace(/\D/g, "");
-  if (clean.length === 8) {
-    return `${clean.slice(0, 4)}/${clean.slice(4, 6)}/${clean.slice(6, 8)}`;
-  }
-  return dateText;
+function fmtDate(s?: string) {
+  if (!s || s === "-") return "-";
+  const c = String(s).replace(/\D/g, "");
+  if (c.length === 8)
+    return `${c.slice(0, 4)}/${c.slice(4, 6)}/${c.slice(6, 8)}`;
+  return s;
 }
 
-function getMarketLightColor(status?: string) {
-  if (!status) return "#f59e0b";
-  if (status.includes("開盤")) return "#22c55e";
-  if (status.includes("收盤")) return "#ef4444";
-  return "#f59e0b";
+function marketColor(status?: string) {
+  if (!status) return "var(--yellow)";
+  if (status.includes("開盤")) return "var(--green)";
+  if (status.includes("收盤")) return "var(--red)";
+  return "var(--yellow)";
 }
 
-function buildCategoryCounts(
+function buildCounts(
   stocks: Stock[],
-  backendCategories?: BackendCategory[]
+  backend?: BackendCategory[]
 ): Record<CategoryKey, number> {
-  const emptyCounts: Record<CategoryKey, number> = {
-    all: stocks.length,
-    "0-50": 0,
-    "50-100": 0,
-    "100-200": 0,
-    "200-500": 0,
-    "500+": 0,
+  const base: Record<CategoryKey, number> = {
+    all: stocks.length, "0-50": 0, "50-100": 0,
+    "100-200": 0, "200-500": 0, "500+": 0,
   };
-
-  if (!backendCategories || backendCategories.length === 0) {
-    for (const stock of stocks) {
-      emptyCounts[getPriceCategory(stock.price)] += 1;
-    }
-    return emptyCounts;
+  if (!backend?.length) {
+    for (const s of stocks) base[getPriceCategory(s.price)] += 1;
+    return base;
   }
-
-  const backendMap = new Map<string, number>();
-  for (const item of backendCategories) {
-    backendMap.set(item.key, Number(item.count || 0));
-  }
-
+  const m = new Map(backend.map((b) => [b.key, Number(b.count || 0)]));
   return {
     all: stocks.length,
-    "0-50":
-      (backendMap.get("0-10") || 0) +
-      (backendMap.get("10-20") || 0) +
-      (backendMap.get("20-50") || 0),
-    "50-100": backendMap.get("50-100") || 0,
-    "100-200": backendMap.get("100-200") || 0,
-    "200-500": backendMap.get("200-500") || 0,
-    "500+":
-      (backendMap.get("500-1000") || 0) +
-      (backendMap.get("1000+") || 0),
+    "0-50":    (m.get("0-10") || 0) + (m.get("10-20") || 0) + (m.get("20-50") || 0),
+    "50-100":  m.get("50-100") || 0,
+    "100-200": m.get("100-200") || 0,
+    "200-500": m.get("200-500") || 0,
+    "500+":    (m.get("500-1000") || 0) + (m.get("1000+") || 0),
   };
 }
 
-function normalizeStock(s: Stock): Stock {
+function normalize(s: Stock): Stock {
   return {
     ...s,
-    price: Number(s.price ?? 0),
-    change: Number(s.change ?? 0),
-    change_percent: Number(s.change_percent ?? 0),
-    volume: Number(s.volume ?? 0),
-    score: Number(s.score ?? 0),
+    price:              Number(s.price ?? 0),
+    change:             Number(s.change ?? 0),
+    change_percent:     Number(s.change_percent ?? 0),
+    volume:             Number(s.volume ?? 0),
+    score:              Number(s.score ?? 0),
     recommendation_score: Number(s.recommendation_score ?? 0),
   };
 }
 
-function getPageNumbers(currentPage: number, totalPages: number): number[] {
-  const pages: number[] = [];
+/* ─── Inline styles (no separate CSS file needed) ───────── */
+const S = {
+  /* layout */
+  page: {
+    display: "grid" as const,
+    gridTemplateRows: "50px 1fr",
+    height: "100vh",
+    overflow: "hidden",
+    background: "var(--navy)",
+    color: "var(--text)",
+  },
+  topbar: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-between" as const,
+    padding: "0 24px",
+    background: "var(--navy2)",
+    borderBottom: "1px solid var(--border)",
+    gap: "16px",
+    flexShrink: 0,
+  },
+  body: {
+    display: "grid" as const,
+    gridTemplateColumns: "210px 1fr",
+    overflow: "hidden",
+    minHeight: 0,
+  },
+  sidebar: {
+    background: "var(--navy2)",
+    borderRight: "1px solid var(--border)",
+    overflowY: "auto" as const,
+    padding: "16px 0 24px",
+  },
+  main: {
+    overflowY: "auto" as const,
+    padding: "20px 24px 32px",
+  },
+  /* topbar elements */
+  logo: {
+    fontFamily: "var(--mono)",
+    fontSize: "15px",
+    fontWeight: 900,
+    color: "var(--blue)",
+    letterSpacing: "1px",
+    flexShrink: 0,
+  } as React.CSSProperties,
+  logoSub: {
+    fontFamily: "var(--sans)",
+    fontSize: "13px",
+    fontWeight: 400,
+    color: "var(--text2)",
+    marginLeft: "10px",
+  },
+  metaRow: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: "14px",
+    fontSize: "12px",
+    color: "var(--text2)",
+    flexWrap: "wrap" as const,
+  },
+  marketPill: (color: string): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "4px 10px",
+    borderRadius: "20px",
+    background: color === "var(--green)" ? "var(--green-dim)" : "rgba(245,158,11,.12)",
+    border: `1px solid ${color}40`,
+    color,
+    fontSize: "12px",
+    fontWeight: 700,
+  }),
+  dot: (color: string): React.CSSProperties => ({
+    width: "7px",
+    height: "7px",
+    borderRadius: "50%",
+    background: color,
+    flexShrink: 0,
+  }),
+  refreshBtn: (loading: boolean): React.CSSProperties => ({
+    border: "1px solid var(--border2)",
+    borderRadius: "var(--radius-sm)",
+    padding: "6px 14px",
+    background: "transparent",
+    color: loading ? "var(--text3)" : "var(--blue)",
+    fontSize: "12px",
+    fontWeight: 700,
+    cursor: loading ? "not-allowed" : "pointer",
+    opacity: loading ? 0.6 : 1,
+    transition: "all .15s",
+  }),
+  /* sidebar */
+  sLabel: {
+    fontSize: "10px",
+    fontWeight: 700,
+    letterSpacing: ".1em",
+    textTransform: "uppercase" as const,
+    color: "var(--text3)",
+    padding: "0 14px",
+    marginBottom: "8px",
+    marginTop: "18px",
+    display: "block" as const,
+  },
+  statGrid: {
+    display: "grid" as const,
+    gridTemplateColumns: "1fr 1fr",
+    gap: "5px",
+    padding: "0 10px",
+  },
+  statBox: (accent = false): React.CSSProperties => ({
+    background: accent ? "var(--blue-dim)" : "var(--navy3)",
+    border: `1px solid ${accent ? "rgba(94,164,255,.35)" : "var(--border)"}`,
+    borderRadius: "var(--radius-sm)",
+    padding: "8px",
+    textAlign: "center",
+    gridColumn: accent ? "1 / -1" : undefined,
+  }),
+  statVal: (accent = false): React.CSSProperties => ({
+    fontFamily: "var(--mono)",
+    fontSize: accent ? "20px" : "17px",
+    fontWeight: 700,
+    color: accent ? "var(--blue)" : "var(--text)",
+    lineHeight: 1.2,
+  }),
+  statLabel: {
+    fontSize: "10px",
+    color: "var(--text2)",
+    marginTop: "2px",
+  },
+  divider: {
+    height: "1px",
+    background: "var(--border)",
+    margin: "12px 14px",
+  },
+  mktabs: {
+    display: "flex" as const,
+    gap: "4px",
+    padding: "0 10px",
+  },
+  mktab: (on: boolean): React.CSSProperties => ({
+    flex: 1,
+    textAlign: "center",
+    padding: "5px 0",
+    borderRadius: "var(--radius-sm)",
+    cursor: "pointer",
+    fontSize: "11px",
+    fontWeight: on ? 700 : 400,
+    color: on ? "var(--blue)" : "var(--text2)",
+    background: on ? "var(--blue-dim)" : "var(--navy3)",
+    border: `1px solid ${on ? "var(--blue)" : "var(--border)"}`,
+    transition: "all .12s",
+  }),
+  pfItem: (on: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "7px 10px",
+    margin: "0 8px 1px",
+    borderRadius: "var(--radius-sm)",
+    cursor: "pointer",
+    fontSize: "12px",
+    fontWeight: on ? 700 : 400,
+    color: on ? "var(--blue)" : "var(--text2)",
+    background: on ? "var(--blue-dim)" : "transparent",
+    border: "none",
+    width: "calc(100% - 16px)",
+    textAlign: "left" as const,
+    transition: "all .12s",
+  }),
+  pfCnt: (on: boolean): React.CSSProperties => ({
+    fontFamily: "var(--mono)",
+    fontSize: "10px",
+    color: on ? "var(--blue)" : "var(--text3)",
+    background: "rgba(0,0,0,.2)",
+    padding: "1px 6px",
+    borderRadius: "10px",
+  }),
+  /* main */
+  sectionHd: {
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: ".08em",
+    textTransform: "uppercase" as const,
+    color: "var(--text2)",
+    marginBottom: "10px",
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: "8px",
+  },
+  recGrid: {
+    display: "grid" as const,
+    gridTemplateColumns: "repeat(5, 1fr)",
+    gap: "8px",
+    marginBottom: "24px",
+  },
+  recCard: {
+    background: "var(--navy2)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-md)",
+    padding: "10px 12px",
+    cursor: "pointer",
+    transition: "transform .18s",
+  },
+  /* toolbar */
+  toolbar: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: "8px",
+    marginBottom: "12px",
+    flexWrap: "wrap" as const,
+  },
+  sortBtn: (on: boolean): React.CSSProperties => ({
+    padding: "6px 12px",
+    borderRadius: "var(--radius-sm)",
+    border: `1px solid ${on ? "var(--blue)" : "var(--border)"}`,
+    background: on ? "var(--blue-dim)" : "transparent",
+    color: on ? "var(--blue)" : "var(--text2)",
+    fontSize: "12px",
+    fontWeight: on ? 700 : 400,
+    cursor: "pointer",
+    transition: "all .12s",
+  }),
+  searchInput: {
+    background: "var(--navy2)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-sm)",
+    padding: "6px 10px",
+    color: "var(--text)",
+    fontSize: "12px",
+    outline: "none",
+    width: "180px",
+    transition: "border-color .12s",
+  } as React.CSSProperties,
+  tInfo: {
+    marginLeft: "auto",
+    fontSize: "12px",
+    color: "var(--text2)",
+  },
+  /* table */
+  th: {
+    padding: "8px 12px",
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: ".05em",
+    textTransform: "uppercase" as const,
+    color: "var(--text3)",
+    borderBottom: "1px solid var(--border)",
+    background: "var(--navy2)",
+    textAlign: "left" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  thR: {
+    padding: "8px 12px",
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: ".05em",
+    textTransform: "uppercase" as const,
+    color: "var(--text3)",
+    borderBottom: "1px solid var(--border)",
+    background: "var(--navy2)",
+    textAlign: "right" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  td: {
+    padding: "10px 12px",
+    fontSize: "13px",
+    borderBottom: "1px solid rgba(80,140,220,.08)",
+    verticalAlign: "middle" as const,
+  },
+  tdR: {
+    padding: "10px 12px",
+    fontSize: "13px",
+    borderBottom: "1px solid rgba(80,140,220,.08)",
+    verticalAlign: "middle" as const,
+    textAlign: "right" as const,
+  },
+  /* error */
+  error: {
+    marginBottom: "16px",
+    background: "var(--red-dim)",
+    border: "1px solid rgba(248,81,73,.3)",
+    color: "#ffd4d4",
+    padding: "12px 16px",
+    borderRadius: "var(--radius-md)",
+    fontSize: "13px",
+  },
+};
 
-  if (totalPages <= 7) {
-    for (let i = 1; i <= totalPages; i++) pages.push(i);
-    return pages;
-  }
-
-  const start = Math.max(1, currentPage - 2);
-  const end = Math.min(totalPages, currentPage + 2);
-
-  if (start > 1) pages.push(1);
-  if (start > 2) pages.push(-1);
-
-  for (let i = start; i <= end; i++) pages.push(i);
-
-  if (end < totalPages - 1) pages.push(-2);
-  if (end < totalPages) pages.push(totalPages);
-
-  return pages;
+/* ─── Sub-components ─────────────────────────────────────── */
+function SectionLine() {
+  return (
+    <span
+      style={{
+        flex: 1,
+        height: "1px",
+        background: "var(--border)",
+        display: "inline-block",
+      }}
+    />
+  );
 }
 
-export default function Home() {
-  const [stocks, setStocks] = useState<Stock[]>([]);
-  const [recommendations, setRecommendations] = useState<Stock[]>([]);
-  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>(
-    []
+function ChangeColor(pct: number) {
+  if (pct > 0) return "var(--red)";
+  if (pct < 0) return "var(--green)";
+  return "var(--text2)";
+}
+
+function ChangeArrow(pct: number) {
+  if (pct > 0) return "▲";
+  if (pct < 0) return "▼";
+  return "—";
+}
+
+function ChangeBadge({ pct, ch }: { pct: number; ch: number }) {
+  const color = ChangeColor(pct);
+  const bg =
+    pct > 0 ? "var(--red-dim)" : pct < 0 ? "var(--green-dim)" : "rgba(255,255,255,.06)";
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "2px 7px",
+        borderRadius: "3px",
+        fontSize: "11px",
+        fontWeight: 700,
+        color,
+        background: bg,
+        fontFamily: "var(--mono)",
+      }}
+    >
+      {ChangeArrow(pct)} {fmtSigned(ch)} ({fmtSigned(pct)}%)
+    </span>
   );
-  const [marketStatus, setMarketStatus] = useState("-");
-  const [dataDate, setDataDate] = useState("-");
-  const [lastUpdate, setLastUpdate] = useState("-");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] =
-    useState<CategoryKey>("all");
-  const [rankType, setRankType] = useState<RankType>("recommend");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [isMobile, setIsMobile] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
+}
+
+/* ─── Main component ─────────────────────────────────────── */
+export default function Home() {
+  const [stocks,            setStocks]            = useState<Stock[]>([]);
+  const [recommendations,   setRecommendations]   = useState<Stock[]>([]);
+  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>([]);
+  const [marketStatus,      setMarketStatus]      = useState("-");
+  const [dataDate,          setDataDate]          = useState("-");
+  const [lastUpdate,        setLastUpdate]        = useState("-");
+  const [searchTerm,        setSearchTerm]        = useState("");
+  const [selectedCategory,  setSelectedCategory]  = useState<CategoryKey>("all");
+  const [rankType,          setRankType]          = useState<RankType>("recommend");
+  const [loading,           setLoading]           = useState(false);
+  const [error,             setError]             = useState("");
+  const [mktFilter,         setMktFilter]         = useState("全部");
 
   async function fetchStocks() {
     try {
       setLoading(true);
       setError("");
-
-      const res = await fetch(BACKEND_URL, { cache: "no-store" });
+      const res  = await fetch(BACKEND_URL, { cache: "no-store" });
       const data: ApiResponse = await res.json();
+      if (!data.success) throw new Error(data.message || "取得資料失敗");
 
-      if (!data.success) {
-        throw new Error(data.message || "取得資料失敗");
-      }
-
-      const safeStocks = (data.stocks || []).map(normalizeStock);
-      const safeRecommendations = (data.recommendations || []).map(normalizeStock);
-
-      setStocks(safeStocks);
-      setRecommendations(safeRecommendations);
+      setStocks((data.stocks || []).map(normalize));
+      setRecommendations((data.recommendations || []).map(normalize));
       setBackendCategories(data.categories || []);
       setMarketStatus(data.market_status || "-");
       setDataDate(
         data.data_date ||
-          data.source_summary?.twse_data_date ||
-          data.source_summary?.tpex_data_date ||
-          "-"
+        data.source_summary?.twse_data_date ||
+        data.source_summary?.tpex_data_date ||
+        "-"
       );
       setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
     } catch (err) {
@@ -224,704 +512,313 @@ export default function Home() {
 
   useEffect(() => {
     fetchStocks();
-    const timer = setInterval(fetchStocks, 120000);
-    return () => clearInterval(timer);
+    const t = setInterval(fetchStocks, 120_000);
+    return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth <= 900);
-    };
+  const counts = useMemo(
+    () => buildCounts(stocks, backendCategories),
+    [stocks, backendCategories]
+  );
 
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  const categoryCounts = useMemo(() => {
-    return buildCategoryCounts(stocks, backendCategories);
-  }, [stocks, backendCategories]);
+  const mktCounts = useMemo(() => {
+    const twse = stocks.filter((s) => s.market === "twse").length;
+    const tpex = stocks.filter((s) => s.market === "tpex").length;
+    const etf  = stocks.filter((s) => s.symbol.startsWith("0")).length;
+    return { twse, tpex, etf };
+  }, [stocks]);
 
   const filteredStocks = useMemo(() => {
-    let result = [...stocks];
-
-    if (selectedCategory !== "all") {
-      result = result.filter(
-        (stock) => getPriceCategory(stock.price) === selectedCategory
-      );
-    }
-
+    let r = [...stocks];
+    if (mktFilter === "上市") r = r.filter((s) => s.market === "twse");
+    else if (mktFilter === "上櫃") r = r.filter((s) => s.market === "tpex");
+    else if (mktFilter === "ETF")  r = r.filter((s) => s.symbol.startsWith("0"));
+    if (selectedCategory !== "all")
+      r = r.filter((s) => getPriceCategory(s.price) === selectedCategory);
     if (searchTerm.trim()) {
-      const keyword = searchTerm.trim().toLowerCase();
-      result = result.filter(
-        (stock) =>
-          stock.symbol.toLowerCase().includes(keyword) ||
-          stock.name.toLowerCase().includes(keyword)
+      const kw = searchTerm.trim().toLowerCase();
+      r = r.filter(
+        (s) =>
+          s.symbol.toLowerCase().includes(kw) ||
+          s.name.toLowerCase().includes(kw)
       );
     }
+    if (rankType === "up")   r.sort((a, b) => b.change_percent - a.change_percent);
+    else if (rankType === "down") r.sort((a, b) => a.change_percent - b.change_percent);
+    else r.sort((a, b) => (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0));
+    return r;
+  }, [stocks, selectedCategory, searchTerm, rankType, mktFilter]);
 
-    if (rankType === "up") {
-      result.sort((a, b) => b.change_percent - a.change_percent);
-    } else if (rankType === "down") {
-      result.sort((a, b) => a.change_percent - b.change_percent);
-    } else {
-      result.sort(
-        (a, b) =>
-          (b.recommendation_score || b.score || 0) -
-          (a.recommendation_score || a.score || 0)
-      );
-    }
-
-    return result;
-  }, [stocks, selectedCategory, searchTerm, rankType]);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, selectedCategory, rankType]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  const pagedStocks = useMemo(() => {
-    const start = (currentPage - 1) * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    return filteredStocks.slice(start, end);
-  }, [filteredStocks, currentPage]);
-
-  const pageNumbers = useMemo(() => {
-    return getPageNumbers(currentPage, totalPages);
-  }, [currentPage, totalPages]);
-
-  const recommendedStocks = useMemo(() => {
+  const recommended = useMemo(() => {
     if (recommendations.length > 0) return recommendations.slice(0, 10);
-
     return [...stocks]
-      .sort(
-        (a, b) =>
-          (b.recommendation_score || b.score || 0) -
-          (a.recommendation_score || a.score || 0)
-      )
+      .sort((a, b) => (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0))
       .slice(0, 10);
   }, [stocks, recommendations]);
 
-  const panelStyle: React.CSSProperties = {
-    background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
-    border: "1px solid rgba(80, 140, 220, 0.22)",
-    borderRadius: "22px",
-    padding: isMobile ? "18px" : "24px",
-    minHeight: isMobile ? "auto" : "540px",
-    boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
-    overflow: "hidden",
-  };
-
-  const marketLightColor = getMarketLightColor(marketStatus);
+  const mktColor = marketColor(marketStatus);
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "linear-gradient(180deg, #08264d 0%, #0a2d5e 100%)",
-        color: "#ffffff",
-      }}
-    >
-      <div
-        style={{
-          width: "100%",
-          borderBottom: "1px solid rgba(80, 140, 220, 0.15)",
-          background: "rgba(7, 33, 70, 0.55)",
-          backdropFilter: "blur(6px)",
-        }}
-      >
-        <div
-          style={{
-            maxWidth: "1400px",
-            margin: "0 auto",
-            padding: isMobile ? "14px 16px" : "14px 36px",
-            display: "flex",
-            alignItems: isMobile ? "flex-start" : "center",
-            justifyContent: "space-between",
-            gap: "16px",
-            flexWrap: "wrap",
-            flexDirection: isMobile ? "column" : "row",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "14px",
-              flexWrap: "wrap",
-            }}
-          >
-            <div
-              style={{
-                fontSize: isMobile ? "28px" : "34px",
-                fontWeight: 900,
-                lineHeight: 1,
-                letterSpacing: "1px",
-                color: "#5ea4ff",
-              }}
-            >
-              TWSTOCK
-            </div>
-            <div
-              style={{
-                fontSize: isMobile ? "20px" : "24px",
-                opacity: 0.95,
-                fontWeight: 700,
-              }}
-            >
-              - 即時選股系統
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              alignItems: isMobile ? "stretch" : "center",
-              gap: "12px",
-              flexWrap: "wrap",
-              justifyContent: "flex-end",
-              width: isMobile ? "100%" : "auto",
-              flexDirection: isMobile ? "column" : "row",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "12px 18px",
-                padding: "10px 16px",
-                borderRadius: "14px",
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                color: "#e8f1ff",
-                fontSize: "14px",
-                fontWeight: 700,
-                flexWrap: "wrap",
-                width: isMobile ? "100%" : "auto",
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span
-                  style={{
-                    width: "10px",
-                    height: "10px",
-                    borderRadius: "50%",
-                    background: marketLightColor,
-                    boxShadow: `0 0 6px ${marketLightColor}`,
-                    display: "inline-block",
-                  }}
-                />
-                市場狀態：{marketStatus}
-              </span>
-
-              <span>資料日期：{formatDateString(dataDate)}</span>
-              <span>最後更新：{lastUpdate}</span>
-            </div>
-
-            <button
-              onClick={fetchStocks}
-              disabled={loading}
-              style={{
-                border: "none",
-                borderRadius: "12px",
-                padding: "10px 16px",
-                background: "linear-gradient(180deg, #5aa5ff 0%, #3c7ff1 100%)",
-                color: "#fff",
-                fontWeight: 800,
-                cursor: loading ? "not-allowed" : "pointer",
-                opacity: loading ? 0.7 : 1,
-                minWidth: "78px",
-                width: isMobile ? "100%" : "auto",
-              }}
-            >
-              {loading ? "更新中" : "更新"}
-            </button>
-          </div>
+    <div style={S.page}>
+      {/* ── Topbar ── */}
+      <header style={S.topbar}>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <span style={S.logo}>TWSTOCK</span>
+          <span style={S.logoSub}>即時選股系統</span>
         </div>
-      </div>
 
-      <div
-        style={{
-          maxWidth: "1400px",
-          margin: "0 auto",
-          padding: isMobile ? "18px 16px 24px" : "26px 36px",
-        }}
-      >
-        {error && (
-          <div
-            style={{
-              marginBottom: "16px",
-              background: "rgba(255, 80, 80, 0.15)",
-              border: "1px solid rgba(255, 120, 120, 0.35)",
-              color: "#ffd4d4",
-              padding: "12px 16px",
-              borderRadius: "12px",
-            }}
-          >
-            {error}
+        <div style={S.metaRow}>
+          <div style={S.marketPill(mktColor)}>
+            <span style={S.dot(mktColor)} />
+            {marketStatus}
           </div>
-        )}
+          <span>資料日期：{fmtDate(dataDate)}</span>
+          <span>最後更新：{lastUpdate}</span>
+          <button
+            onClick={fetchStocks}
+            disabled={loading}
+            style={S.refreshBtn(loading)}
+          >
+            {loading ? "更新中…" : "更新"}
+          </button>
+        </div>
+      </header>
 
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: isMobile
-              ? "1fr"
-              : "minmax(300px, 375px) minmax(0, 1fr)",
-            gap: "20px",
-            alignItems: "start",
-            marginBottom: "22px",
-          }}
-        >
-          <div style={panelStyle}>
-            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>
-              價格分類
-            </h2>
+      {/* ── Body ── */}
+      <div style={S.body}>
+        {/* ── Sidebar ── */}
+        <aside style={S.sidebar}>
+          {/* Stat cards */}
+          <span style={S.sLabel}>市場概況</span>
+          <div style={S.statGrid}>
+            <div style={S.statBox()}>
+              <div style={S.statVal()}>{fmtNum(mktCounts.twse) || stocks.length}</div>
+              <div style={S.statLabel}>上市</div>
+            </div>
+            <div style={S.statBox()}>
+              <div style={S.statVal()}>{fmtNum(mktCounts.tpex)}</div>
+              <div style={S.statLabel}>上櫃</div>
+            </div>
+            <div style={S.statBox()}>
+              <div style={S.statVal()}>{fmtNum(mktCounts.etf)}</div>
+              <div style={S.statLabel}>ETF</div>
+            </div>
+            <div style={S.statBox(true)}>
+              <div style={S.statVal(true)}>{fmtNum(stocks.length)}</div>
+              <div style={S.statLabel}>總檔數</div>
+            </div>
+          </div>
 
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "12px",
-                marginBottom: "20px",
-              }}
-            >
-              {PRICE_CATEGORIES.map((item) => {
-                const active = selectedCategory === item.key;
-                return (
-                  <button
-                    key={item.key}
-                    onClick={() => setSelectedCategory(item.key)}
+          <div style={S.divider} />
+
+          {/* Market tabs */}
+          <span style={{ ...S.sLabel, marginTop: 0 }}>市場</span>
+          <div style={S.mktabs}>
+            {["全部", "上市", "上櫃", "ETF"].map((t) => (
+              <div
+                key={t}
+                style={S.mktab(mktFilter === t)}
+                onClick={() => setMktFilter(t)}
+              >
+                {t}
+              </div>
+            ))}
+          </div>
+
+          <div style={S.divider} />
+
+          {/* Price filter */}
+          <span style={{ ...S.sLabel, marginTop: 0 }}>價格區間</span>
+          {PRICE_CATEGORIES.map((cat) => {
+            const on = selectedCategory === cat.key;
+            return (
+              <button
+                key={cat.key}
+                style={S.pfItem(on)}
+                onClick={() => setSelectedCategory(cat.key)}
+              >
+                {cat.label}
+                <span style={S.pfCnt(on)}>{counts[cat.key]}</span>
+              </button>
+            );
+          })}
+        </aside>
+
+        {/* ── Main ── */}
+        <main style={S.main}>
+          {error && <div style={S.error}>{error}</div>}
+
+          {/* Recommend */}
+          <div style={S.sectionHd}>
+            推薦 10 檔 <SectionLine />
+          </div>
+          <div style={S.recGrid}>
+            {recommended.map((s) => {
+              const color = ChangeColor(s.change_percent);
+              return (
+                <div key={s.symbol} style={S.recCard}>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: "11px", color: "var(--text3)" }}>
+                    {s.symbol}
+                  </div>
+                  <div
                     style={{
-                      minWidth: isMobile ? "calc(50% - 6px)" : "118px",
-                      border: "none",
-                      borderRadius: "14px",
-                      padding: "14px 14px",
-                      fontSize: "15px",
-                      fontWeight: 800,
-                      cursor: "pointer",
-                      color: "#fff",
-                      background: active
-                        ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
-                        : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
-                      boxShadow: active
-                        ? "0 8px 22px rgba(80, 150, 255, 0.22)"
-                        : "none",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "var(--text)",
+                      margin: "2px 0 8px",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
                     }}
                   >
-                    {item.label} ({categoryCounts[item.key]})
-                  </button>
-                );
-              })}
-            </div>
+                    {s.name}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: "15px",
+                      fontWeight: 700,
+                      color,
+                      marginBottom: "5px",
+                    }}
+                  >
+                    {fmtPrice(s.price)}
+                  </div>
+                  <ChangeBadge pct={s.change_percent} ch={s.change} />
+                </div>
+              );
+            })}
+          </div>
 
+          {/* Toolbar */}
+          <div style={S.toolbar}>
+            {(["recommend", "up", "down"] as RankType[]).map((r) => {
+              const labels = { recommend: "推薦排序", up: "▲ 漲幅", down: "▼ 跌幅" };
+              return (
+                <button
+                  key={r}
+                  style={S.sortBtn(rankType === r)}
+                  onClick={() => setRankType(r)}
+                >
+                  {labels[r]}
+                </button>
+              );
+            })}
             <input
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜尋股票代號 / 名稱"
-              style={{
-                width: "100%",
-                height: "46px",
-                borderRadius: "14px",
-                border: "none",
-                outline: "none",
-                padding: "0 16px",
-                fontSize: "15px",
-                marginBottom: "18px",
-                background: "#e8edf5",
-                color: "#123",
-              }}
+              placeholder="搜尋代號 / 名稱"
+              style={S.searchInput}
             />
-
-            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-              <button
-                onClick={() => setRankType("recommend")}
-                style={rankType === "recommend" ? activeActionBtn : normalActionBtn}
+            <div style={S.tInfo}>
+              分類：{PRICE_CATEGORIES.find((c) => c.key === selectedCategory)?.label} /{" "}
+              共{" "}
+              <span
+                style={{
+                  fontFamily: "var(--mono)",
+                  color: "var(--blue)",
+                  fontWeight: 700,
+                }}
               >
-                推薦
-              </button>
-
-              <button
-                onClick={() => setRankType("up")}
-                style={rankType === "up" ? activeActionBtn : normalActionBtn}
-              >
-                漲幅
-              </button>
-
-              <button
-                onClick={() => setRankType("down")}
-                style={rankType === "down" ? activeActionBtn : normalActionBtn}
-              >
-                跌幅
-              </button>
+                {filteredStocks.length}
+              </span>{" "}
+              檔
             </div>
           </div>
 
-          <div style={panelStyle}>
-            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "10px" }}>
-              🔥 推薦10檔
-            </h2>
-
-            <div
-              style={{
-                maxHeight: isMobile ? "none" : "470px",
-                overflowY: isMobile ? "visible" : "auto",
-                paddingRight: isMobile ? "0" : "6px",
-              }}
-            >
-              {recommendedStocks.map((stock) => {
-                const isUp = stock.change >= 0;
-                const changeColor = isUp ? "#ff4d4f" : "#00c853";
-
-                return (
-                  <div
-                    key={stock.symbol}
-                    style={{
-                      background: "rgba(40, 87, 150, 0.45)",
-                      border: "1px solid rgba(86, 145, 228, 0.22)",
-                      borderRadius: "18px",
-                      padding: "16px 18px",
-                      marginBottom: "12px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        gap: "12px",
-                        marginBottom: "10px",
-                        flexDirection: isMobile ? "column" : "row",
-                      }}
-                    >
-                      <div style={{ width: "100%" }}>
-                        <div
-                          style={{
-                            fontSize: isMobile ? "20px" : "22px",
-                            fontWeight: 900,
-                            marginBottom: "10px",
-                            color: "#7fb6ff",
-                          }}
-                        >
-                          {stock.symbol} {stock.name}
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: "14px",
-                            flexWrap: "wrap",
-                            alignItems: "center",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              background: "rgba(255, 107, 107, 0.12)",
-                              border: "1px solid rgba(255, 107, 107, 0.28)",
-                              borderRadius: "999px",
-                              padding: "5px 10px",
-                              fontSize: "14px",
-                              fontWeight: 700,
-                              color: "#ff9c9c",
-                            }}
-                          >
-                            {stock.signal || "強勢多方"}
-                          </span>
-
-                          <span style={{ fontWeight: 700, color: "#dce9ff" }}>
-                            股價 {formatPrice(stock.price)}
-                          </span>
-
-                          <span style={{ fontWeight: 900, color: changeColor }}>
-                            漲跌 {formatSigned(stock.change)}
-                          </span>
-
-                          <span style={{ fontWeight: 900, color: changeColor }}>
-                            漲跌% {formatSigned(stock.change_percent)}%
-                          </span>
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          color: "#ffd95f",
-                          fontSize: "18px",
-                          fontWeight: 900,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        分數 {stock.score ?? 0}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        color: "#dbe8ff",
-                        lineHeight: 1.8,
-                        fontSize: "15px",
-                        marginBottom: "10px",
-                      }}
-                    >
-                      {stock.reason ||
-                        "股價維持開高走高格局，收盤於當日高檔附近，買盤承接力道偏強，漲幅擴大且動能明確，屬盤面強勢表態個股，成交量明顯放大。"}
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "16px",
-                        flexWrap: "wrap",
-                        alignItems: "center",
-                        color: "#9fc3f6",
-                        fontWeight: 800,
-                        fontSize: "15px",
-                      }}
-                    >
-                      <span>進場：{stock.entry_price || "-"}</span>
-                      <span>目標：{stock.target_price || "-"}</span>
-                      <span>停損：{stock.stop_loss || "-"}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-
-        <section
-          style={{
-            background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
-            border: "1px solid rgba(80, 140, 220, 0.22)",
-            borderRadius: "22px",
-            padding: isMobile ? "16px" : "20px",
-            boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: isMobile ? "flex-start" : "center",
-              gap: "12px",
-              marginBottom: "16px",
-              flexDirection: isMobile ? "column" : "row",
-            }}
-          >
-            <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>
-              股票列表 ({filteredStocks.length})
-            </h2>
-
-            <div
-              style={{
-                color: "#cfe2ff",
-                fontSize: "14px",
-                fontWeight: 700,
-              }}
-            >
-              第 {currentPage} / {totalPages} 頁，每頁 {ITEMS_PER_PAGE} 檔
-            </div>
-          </div>
-
-          <div
-            style={{
-              overflowX: "auto",
-              borderRadius: "18px",
-            }}
-          >
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                minWidth: "1080px",
-              }}
-            >
+          {/* Table */}
+          <div style={{ overflowX: "auto", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>
+            <table style={{ width: "100%", minWidth: "820px" }}>
               <thead>
-                <tr
-                  style={{
-                    background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)",
-                  }}
-                >
-                  <th style={thStyle}>代號</th>
-                  <th style={thStyle}>名稱</th>
-                  <th style={thStyle}>股價</th>
-                  <th style={thStyle}>漲跌</th>
-                  <th style={thStyle}>漲跌%</th>
-                  <th style={thStyle}>成交量</th>
-                  <th style={thStyle}>分數</th>
+                <tr>
+                  <th style={S.th}>代號</th>
+                  <th style={S.th}>名稱</th>
+                  <th style={S.thR}>股價</th>
+                  <th style={S.thR}>漲跌 / 漲跌%</th>
+                  <th style={S.thR}>成交量</th>
+                  <th style={S.thR}>分數</th>
+                  <th style={S.th}>進出場</th>
                 </tr>
               </thead>
-
               <tbody>
-                {pagedStocks.map((stock) => {
-                  const isUp = stock.change >= 0;
-                  const color = isUp ? "#ff4d4f" : "#00c853";
-
+                {filteredStocks.map((s) => {
+                  const color = ChangeColor(s.change_percent);
                   return (
                     <tr
-                      key={stock.symbol}
-                      style={{
-                        borderBottom: "1px solid rgba(255,255,255,0.08)",
-                        background: "rgba(8, 36, 76, 0.55)",
-                      }}
+                      key={s.symbol}
+                      style={{ transition: "background .1s", cursor: "pointer" }}
+                      onMouseEnter={(e) =>
+                        ((e.currentTarget as HTMLTableRowElement).style.background =
+                          "var(--navy2)")
+                      }
+                      onMouseLeave={(e) =>
+                        ((e.currentTarget as HTMLTableRowElement).style.background =
+                          "transparent")
+                      }
                     >
-                      <td style={tdStyle}>{stock.symbol}</td>
-                      <td style={tdStyle}>{stock.name}</td>
-                      <td style={tdStyle}>{formatPrice(stock.price)}</td>
-
-                      <td style={tdStyle}>
-                        <div style={{ color, fontWeight: 900, fontSize: "18px" }}>
-                          {formatSigned(stock.change)}
-                        </div>
+                      <td style={S.td}>
+                        <span
+                          style={{
+                            fontFamily: "var(--mono)",
+                            fontSize: "12px",
+                            color: "var(--text2)",
+                          }}
+                        >
+                          {s.symbol}
+                        </span>
                       </td>
-
-                      <td style={tdStyle}>
-                        <div style={{ color, fontWeight: 800, fontSize: "15px" }}>
-                          {formatSigned(stock.change_percent)}%
-                        </div>
+                      <td style={S.td}>
+                        <span style={{ fontWeight: 700 }}>{s.name}</span>
                       </td>
-
-                      <td style={tdStyle}>{formatNumber(stock.volume)}</td>
-                      <td style={tdStyle}>{stock.score ?? 0}</td>
+                      <td style={S.tdR}>
+                        <span
+                          style={{
+                            fontFamily: "var(--mono)",
+                            fontSize: "14px",
+                            fontWeight: 700,
+                            color,
+                          }}
+                        >
+                          {fmtPrice(s.price)}
+                        </span>
+                      </td>
+                      <td style={S.tdR}>
+                        <ChangeBadge pct={s.change_percent} ch={s.change} />
+                      </td>
+                      <td style={{ ...S.tdR, fontFamily: "var(--mono)", fontSize: "12px", color: "var(--text2)" }}>
+                        {fmtNum(s.volume)}
+                      </td>
+                      <td style={S.tdR}>
+                        <span
+                          style={{
+                            fontFamily: "var(--mono)",
+                            fontSize: "12px",
+                            color: "var(--yellow)",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {s.score ?? 0}
+                        </span>
+                      </td>
+                      <td style={S.td}>
+                        {(s.entry_price || s.target_price || s.stop_loss) ? (
+                          <span style={{ fontSize: "11px", color: "var(--text2)" }}>
+                            進 {s.entry_price || "-"} ／
+                            目 {s.target_price || "-"} ／
+                            損 {s.stop_loss || "-"}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: "11px", color: "var(--text3)" }}>—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-
-          {totalPages > 1 && (
-            <div
-              style={{
-                marginTop: "18px",
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
-                gap: "8px",
-                flexWrap: "wrap",
-              }}
-            >
-              <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                style={{
-                  ...pageBtnStyle,
-                  opacity: currentPage === 1 ? 0.45 : 1,
-                  cursor: currentPage === 1 ? "not-allowed" : "pointer",
-                }}
-              >
-                上一頁
-              </button>
-
-              {pageNumbers.map((page, idx) => {
-                if (page < 0) {
-                  return (
-                    <span
-                      key={`ellipsis-${idx}`}
-                      style={{
-                        color: "#d9e7ff",
-                        padding: "0 4px",
-                        fontWeight: 800,
-                      }}
-                    >
-                      ...
-                    </span>
-                  );
-                }
-
-                const active = currentPage === page;
-                return (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    style={{
-                      ...pageBtnStyle,
-                      background: active
-                        ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
-                        : "#184889",
-                      boxShadow: active
-                        ? "0 8px 22px rgba(80, 150, 255, 0.22)"
-                        : "none",
-                    }}
-                  >
-                    {page}
-                  </button>
-                );
-              })}
-
-              <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                style={{
-                  ...pageBtnStyle,
-                  opacity: currentPage === totalPages ? 0.45 : 1,
-                  cursor:
-                    currentPage === totalPages ? "not-allowed" : "pointer",
-                }}
-              >
-                下一頁
-              </button>
-            </div>
-          )}
-        </section>
+        </main>
       </div>
-    </main>
+    </div>
   );
 }
-
-const activeActionBtn: React.CSSProperties = {
-  border: "none",
-  borderRadius: "14px",
-  padding: "12px 16px",
-  fontSize: "15px",
-  fontWeight: 800,
-  cursor: "pointer",
-  color: "#fff",
-  background: "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)",
-};
-
-const normalActionBtn: React.CSSProperties = {
-  border: "none",
-  borderRadius: "14px",
-  padding: "12px 16px",
-  fontSize: "15px",
-  fontWeight: 800,
-  cursor: "pointer",
-  color: "#fff",
-  background: "#184889",
-};
-
-const pageBtnStyle: React.CSSProperties = {
-  border: "none",
-  borderRadius: "12px",
-  padding: "10px 14px",
-  minWidth: "44px",
-  fontSize: "14px",
-  fontWeight: 800,
-  color: "#fff",
-  background: "#184889",
-};
-
-const thStyle: React.CSSProperties = {
-  padding: "16px 14px",
-  textAlign: "center",
-  color: "#ffffff",
-  fontSize: "16px",
-  fontWeight: 800,
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "18px 14px",
-  textAlign: "center",
-  color: "#ffffff",
-  fontSize: "15px",
-  fontWeight: 700,
-};
-        
