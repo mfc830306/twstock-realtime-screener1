@@ -35,6 +35,13 @@ const BACKEND_URL =
 
 const PAGE_SIZE = 20;
 
+const marketTabs = [
+  { key: "all", label: "全部" },
+  { key: "tse", label: "上市" },
+  { key: "otc", label: "上櫃" },
+  { key: "etf", label: "ETF" },
+] as const;
+
 const priceRanges = [
   { key: "all", label: "全部" },
   { key: "0-10", label: "0~10" },
@@ -47,9 +54,42 @@ const priceRanges = [
   { key: "1000+", label: "1000+" },
 ];
 
+type MarketTabKey = (typeof marketTabs)[number]["key"];
+
 function safeNumber(value: unknown, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function isETFStock(stock: Stock) {
+  const symbol = String(stock.symbol || "").trim();
+  const name = String(stock.name || "").trim();
+
+  if (/^00\d+/.test(symbol)) return true;
+  if (name.includes("ETF")) return true;
+  if (name.includes("槓桿") || name.includes("反向")) return true;
+
+  return false;
+}
+
+function matchMarket(stock: Stock, selectedMarket: MarketTabKey) {
+  if (selectedMarket === "all") return true;
+
+  const market = String(stock.market || "").trim();
+
+  if (selectedMarket === "etf") {
+    return isETFStock(stock);
+  }
+
+  if (selectedMarket === "tse") {
+    return market === "上市" && !isETFStock(stock);
+  }
+
+  if (selectedMarket === "otc") {
+    return market === "上櫃" && !isETFStock(stock);
+  }
+
+  return true;
 }
 
 function matchPriceCategory(price: number, category: string) {
@@ -94,6 +134,7 @@ export default function Home() {
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedMarket, setSelectedMarket] = useState<MarketTabKey>("all");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [sortType, setSortType] = useState<"score" | "up" | "down" | "volume">(
     "score"
@@ -142,17 +183,29 @@ export default function Home() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory, sortType]);
+  }, [searchTerm, selectedMarket, selectedCategory, sortType]);
+
+  const marketCounts = useMemo(() => {
+    return {
+      all: stocks.length,
+      tse: stocks.filter((s) => matchMarket(s, "tse")).length,
+      otc: stocks.filter((s) => matchMarket(s, "otc")).length,
+      etf: stocks.filter((s) => matchMarket(s, "etf")).length,
+    };
+  }, [stocks]);
 
   const categoryCounts = useMemo(() => {
+    const baseList = stocks.filter((s) => matchMarket(s, selectedMarket));
     const result: Record<string, number> = {};
+
     for (const range of priceRanges) {
-      result[range.key] = stocks.filter((s) =>
+      result[range.key] = baseList.filter((s) =>
         matchPriceCategory(s.price, range.key)
       ).length;
     }
+
     return result;
-  }, [stocks]);
+  }, [stocks, selectedMarket]);
 
   const filteredStocks = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
@@ -163,9 +216,10 @@ export default function Home() {
         stock.symbol.toLowerCase().includes(keyword) ||
         stock.name.toLowerCase().includes(keyword);
 
+      const hitMarket = matchMarket(stock, selectedMarket);
       const hitCategory = matchPriceCategory(stock.price, selectedCategory);
 
-      return hitKeyword && hitCategory;
+      return hitKeyword && hitMarket && hitCategory;
     });
 
     const sorted = [...list].sort((a, b) => {
@@ -182,7 +236,7 @@ export default function Home() {
     });
 
     return sorted;
-  }, [stocks, searchTerm, selectedCategory, sortType]);
+  }, [stocks, searchTerm, selectedMarket, selectedCategory, sortType]);
 
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / PAGE_SIZE));
 
@@ -193,9 +247,10 @@ export default function Home() {
 
   const recommendedStocks = useMemo(() => {
     return [...stocks]
+      .filter((s) => matchMarket(s, selectedMarket))
       .sort((a, b) => safeNumber(b.score) - safeNumber(a.score))
       .slice(0, 10);
-  }, [stocks]);
+  }, [stocks, selectedMarket]);
 
   function goToPage(page: number) {
     const next = Math.min(Math.max(page, 1), totalPages);
@@ -265,6 +320,28 @@ export default function Home() {
               <h2 className="mb-3 text-lg font-bold">篩選與分類</h2>
 
               <div className="mb-4">
+                <label className="mb-2 block text-sm text-slate-300">市場分類</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {marketTabs.map((tab) => {
+                    const active = selectedMarket === tab.key;
+                    return (
+                      <button
+                        key={tab.key}
+                        onClick={() => setSelectedMarket(tab.key)}
+                        className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                          active
+                            ? "border-blue-500 bg-blue-600 text-white"
+                            : "border-slate-700 bg-slate-950 text-slate-200 hover:border-slate-500"
+                        }`}
+                      >
+                        {tab.label} ({marketCounts[tab.key] || 0})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mb-4">
                 <label className="mb-2 block text-sm text-slate-300">搜尋股票</label>
                 <input
                   type="text"
@@ -317,7 +394,17 @@ export default function Home() {
             </section>
 
             <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
-              <h2 className="mb-3 text-lg font-bold">推薦 10 檔</h2>
+              <h2 className="mb-3 text-lg font-bold">
+                推薦 10 檔
+                {selectedMarket === "tse"
+                  ? "（上市）"
+                  : selectedMarket === "otc"
+                  ? "（上櫃）"
+                  : selectedMarket === "etf"
+                  ? "（ETF）"
+                  : ""}
+              </h2>
+
               <div className="space-y-3">
                 {recommendedStocks.map((stock, idx) => {
                   const change = safeNumber(stock.change);
@@ -334,9 +421,12 @@ export default function Home() {
                             {stock.symbol} {stock.name}
                           </div>
                           <div className="text-xs text-slate-400">
-                            {stock.market || "-"}
+                            {isETFStock(stock)
+                              ? "ETF"
+                              : stock.market || "-"}
                           </div>
                         </div>
+
                         <div className="text-right">
                           <div className="font-bold">{stock.price}</div>
                           <div className={`text-sm font-semibold ${getChangeClass(change)}`}>
@@ -363,7 +453,16 @@ export default function Home() {
           <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
             <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-xl font-bold">股票列表</h2>
+                <h2 className="text-xl font-bold">
+                  股票列表
+                  {selectedMarket === "tse"
+                    ? "（上市）"
+                    : selectedMarket === "otc"
+                    ? "（上櫃）"
+                    : selectedMarket === "etf"
+                    ? "（ETF）"
+                    : ""}
+                </h2>
                 <div className="mt-1 text-sm text-slate-400">
                   共 {filteredStocks.length.toLocaleString("zh-TW")} 檔
                 </div>
@@ -463,7 +562,7 @@ export default function Home() {
                               {stock.symbol} {stock.name}
                             </div>
                             <div className="text-xs text-slate-400">
-                              {stock.market || "-"}
+                              {isETFStock(stock) ? "ETF" : stock.market || "-"}
                             </div>
                           </td>
 
