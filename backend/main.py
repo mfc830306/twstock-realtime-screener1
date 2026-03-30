@@ -127,14 +127,23 @@ def resolve_cert_path() -> Optional[str]:
 
 def get_market_status_text() -> str:
     now = now_taipei()
+
+    # 週末直接休市
     if now.weekday() >= 5:
         return "休市"
+
     minutes = now.hour * 60 + now.minute
-    if minutes < 9 * 60:
-        return "開盤前"
+
+    # 開盤
     if 9 * 60 <= minutes <= 13 * 60 + 30:
         return "開盤"
-    return "收盤"
+
+    # 收盤（13:30之後）
+    if minutes > 13 * 60 + 30:
+        return "收盤"
+
+    # 其餘（凌晨到開盤前）
+    return "休市"
 
 
 def is_etf_symbol(symbol: str, name: str) -> bool:
