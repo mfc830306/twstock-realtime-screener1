@@ -17,6 +17,7 @@ type Stock = {
   entry_price?: string;
   target_price?: string;
   stop_loss?: string;
+  is_etf?: boolean;
 };
 
 type BackendCategory = {
@@ -42,7 +43,7 @@ type ApiResponse = {
 };
 
 const BACKEND_URL =
-  "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000";
+  "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000&include_etf=false";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -101,8 +102,10 @@ function buildCategoryCounts(
   stocks: Stock[],
   backendCategories?: BackendCategory[]
 ): Record<CategoryKey, number> {
+  const nonEtfStocks = stocks.filter((stock) => !stock.is_etf);
+
   const emptyCounts: Record<CategoryKey, number> = {
-    all: stocks.length,
+    all: nonEtfStocks.length,
     "0-50": 0,
     "50-100": 0,
     "100-200": 0,
@@ -111,7 +114,7 @@ function buildCategoryCounts(
   };
 
   if (!backendCategories || backendCategories.length === 0) {
-    for (const stock of stocks) {
+    for (const stock of nonEtfStocks) {
       emptyCounts[getPriceCategory(stock.price)] += 1;
     }
     return emptyCounts;
@@ -123,7 +126,7 @@ function buildCategoryCounts(
   }
 
   return {
-    all: stocks.length,
+    all: nonEtfStocks.length,
     "0-50":
       (backendMap.get("0-10") || 0) +
       (backendMap.get("10-20") || 0) +
@@ -146,6 +149,7 @@ function normalizeStock(s: Stock): Stock {
     volume: Number(s.volume ?? 0),
     score: Number(s.score ?? 0),
     recommendation_score: Number(s.recommendation_score ?? 0),
+    is_etf: Boolean(s.is_etf ?? false),
   };
 }
 
@@ -201,8 +205,13 @@ export default function Home() {
         throw new Error(data.message || "取得資料失敗");
       }
 
-      const safeStocks = (data.stocks || []).map(normalizeStock);
-      const safeRecommendations = (data.recommendations || []).map(normalizeStock);
+      const safeStocks = (data.stocks || [])
+        .map(normalizeStock)
+        .filter((stock) => !stock.is_etf);
+
+      const safeRecommendations = (data.recommendations || [])
+        .map(normalizeStock)
+        .filter((stock) => !stock.is_etf);
 
       setStocks(safeStocks);
       setRecommendations(safeRecommendations);
@@ -301,6 +310,7 @@ export default function Home() {
     if (recommendations.length > 0) return recommendations.slice(0, 10);
 
     return [...stocks]
+      .filter((stock) => !stock.is_etf)
       .sort(
         (a, b) =>
           (b.recommendation_score || b.score || 0) -
@@ -671,7 +681,7 @@ export default function Home() {
                       }}
                     >
                       {stock.reason ||
-                        "股價維持開高走高格局，收盤於當日高檔附近，買盤承接力道偏強，漲幅擴大且動能明確，屬盤面強勢表態個股，成交量明顯放大。"}
+                        "股價目前維持相對強勢結構，量價表現具備延續性，短線可持續觀察是否出現進一步的突破與資金集中效應。"}
                     </div>
 
                     <div
@@ -924,4 +934,3 @@ const tdStyle: React.CSSProperties = {
   fontSize: "15px",
   fontWeight: 700,
 };
-        
