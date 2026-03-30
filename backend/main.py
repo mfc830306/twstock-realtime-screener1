@@ -15,17 +15,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# Globals
-# =========================
 _sdk = None
 _login_info = None
 _marketdata_ready = False
 
 
-# =========================
-# Utils
-# =========================
 def safe_float(v: Any, default: float = 0.0) -> float:
     try:
         if v is None:
@@ -129,9 +123,6 @@ def get_env_debug_info() -> Dict[str, Any]:
     }
 
 
-# =========================
-# Fubon SDK
-# =========================
 def ensure_fubon_sdk():
     global _sdk, _login_info, _marketdata_ready
 
@@ -170,7 +161,7 @@ def get_stock_rest_client():
 
     marketdata = getattr(sdk, "marketdata", None)
     if marketdata is None:
-        raise Exception("sdk.marketdata 不存在，表示 init_realtime 後仍未建立行情物件")
+        raise Exception("sdk.marketdata 不存在")
 
     rest_client = getattr(marketdata, "rest_client", None)
     if rest_client is None:
@@ -183,9 +174,6 @@ def get_stock_rest_client():
     return stock_client
 
 
-# =========================
-# Parse Helpers
-# =========================
 def extract_rows(resp: Any) -> List[Dict[str, Any]]:
     if isinstance(resp, list):
         return resp
@@ -220,7 +208,7 @@ def to_market_label(exchange: str, market: str) -> str:
 
     if ex == "TWSE" or mk == "TSE":
         return "上市"
-    if ex == "TPEx".upper() or ex == "TPEX" or mk == "OTC":
+    if ex == "TPEX" or mk == "OTC":
         return "上櫃"
     if mk == "ESB":
         return "興櫃"
@@ -246,7 +234,6 @@ def normalize_snapshot_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     name = safe_str(row.get("name") or row.get("stockName") or row.get("stock_name") or symbol)
-
     exchange = safe_str(row.get("exchange"))
     market = safe_str(row.get("market"))
     market_label = to_market_label(exchange, market)
@@ -263,15 +250,10 @@ def normalize_snapshot_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     change = safe_float(row.get("change") or row.get("priceChange") or row.get("changePrice"))
     previous_close = safe_float(row.get("previousClose") or row.get("referencePrice"))
-
     change_percent = safe_float(row.get("changePercent"))
+
     if change_percent == 0 and previous_close > 0 and change != 0:
         change_percent = (change / previous_close) * 100
-    elif change_percent == 0 and previous_close <= 0 and price > 0 and change != 0:
-        prev = price - change
-        if prev > 0:
-            previous_close = prev
-            change_percent = (change / prev) * 100
 
     total = row.get("total") if isinstance(row.get("total"), dict) else {}
     volume = safe_int(
@@ -297,14 +279,12 @@ def normalize_snapshot_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "open": round(safe_float(row.get("openPrice")), 2),
         "high": round(safe_float(row.get("highPrice")), 2),
         "low": round(safe_float(row.get("lowPrice")), 2),
-        "update_time": safe_str(row.get("lastUpdated") or row.get("closeTime") or total.get("time")),
+        "update_time": safe_str(row.get("lastUpdated")),
     }
 
 
 def fetch_snapshot_market(market: str) -> List[Dict[str, Any]]:
     stock_client = get_stock_rest_client()
-
-    # 官方支援 snapshot.quotes(market)，type 可選 ALLBUT099 / COMMONSTOCK
     resp = stock_client.snapshot.quotes(market=market, type="ALLBUT099")
     rows = extract_rows(resp)
 
@@ -317,23 +297,21 @@ def fetch_snapshot_market(market: str) -> List[Dict[str, Any]]:
     dedup = {}
     for item in result:
         dedup[item["symbol"]] = item
-
     return list(dedup.values())
 
 
 def get_all_stocks() -> List[Dict[str, Any]]:
     all_stocks: List[Dict[str, Any]] = []
-    errors: List[str] = []
 
     try:
         all_stocks.extend(fetch_snapshot_market("TSE"))
-    except Exception as e:
-        errors.append(f"TSE 失敗: {e}")
+    except Exception:
+        pass
 
     try:
         all_stocks.extend(fetch_snapshot_market("OTC"))
-    except Exception as e:
-        errors.append(f"OTC 失敗: {e}")
+    except Exception:
+        pass
 
     dedup = {}
     for item in all_stocks:
@@ -341,16 +319,9 @@ def get_all_stocks() -> List[Dict[str, Any]]:
 
     stocks = list(dedup.values())
     stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
-
-    if not stocks and errors:
-        raise Exception("；".join(errors))
-
     return stocks
 
 
-# =========================
-# Startup
-# =========================
 @app.on_event("startup")
 def startup_event():
     try:
@@ -360,9 +331,6 @@ def startup_event():
         print(f"⚠️ Fubon SDK startup init failed: {e}")
 
 
-# =========================
-# Routes
-# =========================
 @app.get("/")
 def root():
     return {"message": "TW Stock Realtime Screener is running"}
@@ -387,11 +355,7 @@ def debug_login():
             "message": "Fubon SDK login success",
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "trace": traceback.format_exc(),
-        }
+        return {"success": False, "error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/debug-sdk")
@@ -410,16 +374,11 @@ def debug_sdk():
             "rest_client_type": str(type(rest_client)) if rest_client is not None else None,
             "has_stock_client": stock_client is not None,
             "stock_client_type": str(type(stock_client)) if stock_client is not None else None,
-            "stock_client_dir": dir(stock_client) if stock_client is not None else [],
             "has_intraday": hasattr(stock_client, "intraday") if stock_client is not None else False,
             "has_snapshot": hasattr(stock_client, "snapshot") if stock_client is not None else False,
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "trace": traceback.format_exc(),
-        }
+        return {"success": False, "error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/debug-snapshot")
@@ -427,7 +386,6 @@ def debug_snapshot(symbol: str = "2330"):
     try:
         stock_client = get_stock_rest_client()
         resp = stock_client.intraday.quote(symbol=symbol)
-
         return {
             "success": True,
             "symbol": symbol,
@@ -435,12 +393,7 @@ def debug_snapshot(symbol: str = "2330"):
             "raw": resp,
         }
     except Exception as e:
-        return {
-            "success": False,
-            "symbol": symbol,
-            "error": str(e),
-            "trace": traceback.format_exc(),
-        }
+        return {"success": False, "symbol": symbol, "error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/debug-market-snapshot")
@@ -449,7 +402,6 @@ def debug_market_snapshot(market: str = "TSE"):
         stock_client = get_stock_rest_client()
         resp = stock_client.snapshot.quotes(market=market, type="ALLBUT099")
         rows = extract_rows(resp)
-
         return {
             "success": True,
             "market": market,
@@ -458,19 +410,13 @@ def debug_market_snapshot(market: str = "TSE"):
             "preview": rows[:5],
         }
     except Exception as e:
-        return {
-            "success": False,
-            "market": market,
-            "error": str(e),
-            "trace": traceback.format_exc(),
-        }
+        return {"success": False, "market": market, "error": str(e), "trace": traceback.format_exc()}
 
 
 @app.get("/stocks")
 def get_stocks():
     try:
         stocks = get_all_stocks()
-
         return {
             "success": True,
             "market_status": "富邦即時行情" if stocks else "無資料",
