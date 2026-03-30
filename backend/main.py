@@ -16,7 +16,7 @@ app.add_middleware(
 )
 
 # =========================
-# Global
+# Globals
 # =========================
 _sdk = None
 _login_info = None
@@ -52,6 +52,12 @@ def safe_int(v: Any, default: int = 0) -> int:
         return default
 
 
+def safe_str(v: Any, default: str = "") -> str:
+    if v is None:
+        return default
+    return str(v).strip()
+
+
 def resolve_cert_path() -> Optional[str]:
     cert_path = os.getenv("FUBON_CERT_PATH", "").strip()
     if not cert_path:
@@ -75,35 +81,38 @@ def resolve_cert_path() -> Optional[str]:
         seen.add(rp)
         if os.path.exists(rp) and os.path.isfile(rp):
             return rp
-
     return None
 
 
 def get_env_debug_info() -> Dict[str, Any]:
     original_cert = os.getenv("FUBON_CERT_PATH", "").strip()
 
-    candidates = []
-    if original_cert:
-        raw = [
-            original_cert,
-            os.path.abspath(original_cert),
-            os.path.abspath(os.path.join(os.getcwd(), original_cert)),
-            os.path.join("/opt/render/project/src", os.path.basename(original_cert)),
-            os.path.join("/opt/render/project/src/certs", os.path.basename(original_cert)),
-            os.path.join("/opt/render/project/src/backend", os.path.basename(original_cert)),
-            os.path.join("/opt/render/project/src/backend/certs", os.path.basename(original_cert)),
-        ]
-        seen = set()
-        for p in raw:
-            rp = os.path.abspath(p)
-            if rp in seen:
-                continue
-            seen.add(rp)
-            candidates.append({
+    raw = [
+        original_cert,
+        os.path.abspath(original_cert) if original_cert else "",
+        os.path.abspath(os.path.join(os.getcwd(), original_cert)) if original_cert else "",
+        os.path.join("/opt/render/project/src", os.path.basename(original_cert)) if original_cert else "",
+        os.path.join("/opt/render/project/src/certs", os.path.basename(original_cert)) if original_cert else "",
+        os.path.join("/opt/render/project/src/backend", os.path.basename(original_cert)) if original_cert else "",
+        os.path.join("/opt/render/project/src/backend/certs", os.path.basename(original_cert)) if original_cert else "",
+    ]
+
+    checked_paths = []
+    seen = set()
+    for p in raw:
+        if not p:
+            continue
+        rp = os.path.abspath(p)
+        if rp in seen:
+            continue
+        seen.add(rp)
+        checked_paths.append(
+            {
                 "path": rp,
                 "exists": os.path.exists(rp),
                 "is_file": os.path.isfile(rp),
-            })
+            }
+        )
 
     return {
         "success": True,
@@ -116,7 +125,7 @@ def get_env_debug_info() -> Dict[str, Any]:
         "cwd": os.getcwd(),
         "using_pwd_key": "FUBON_PASSWORD" if os.getenv("FUBON_PASSWORD") else ("FUBON_PWD" if os.getenv("FUBON_PWD") else None),
         "using_cert_pwd_key": "FUBON_CERT_PASSWORD" if os.getenv("FUBON_CERT_PASSWORD") else ("FUBON_CERT_PWD" if os.getenv("FUBON_CERT_PWD") else None),
-        "checked_paths": candidates,
+        "checked_paths": checked_paths,
     }
 
 
@@ -174,81 +183,169 @@ def get_stock_rest_client():
     return stock_client
 
 
-def normalize_stock_item(symbol: str, name: str, quote: Dict[str, Any], market_label: str) -> Dict[str, Any]:
+# =========================
+# Parse Helpers
+# =========================
+def extract_rows(resp: Any) -> List[Dict[str, Any]]:
+    if isinstance(resp, list):
+        return resp
+
+    if isinstance(resp, dict):
+        for key in ["data", "items", "rows", "quotes", "result"]:
+            val = resp.get(key)
+            if isinstance(val, list):
+                return val
+            if isinstance(val, dict):
+                for subkey in ["data", "items", "rows", "quotes"]:
+                    subval = val.get(subkey)
+                    if isinstance(subval, list):
+                        return subval
+
+    if hasattr(resp, "data"):
+        data = getattr(resp, "data")
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ["data", "items", "rows", "quotes"]:
+                val = data.get(key)
+                if isinstance(val, list):
+                    return val
+
+    return []
+
+
+def to_market_label(exchange: str, market: str) -> str:
+    ex = safe_str(exchange).upper()
+    mk = safe_str(market).upper()
+
+    if ex == "TWSE" or mk == "TSE":
+        return "上市"
+    if ex == "TPEx".upper() or ex == "TPEX" or mk == "OTC":
+        return "上櫃"
+    if mk == "ESB":
+        return "興櫃"
+    if mk == "TIB":
+        return "創新板"
+    if mk == "PSB":
+        return "戰略新板"
+    return mk or ex or ""
+
+
+def normalize_snapshot_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return None
+
+    symbol = safe_str(
+        row.get("symbol")
+        or row.get("stockNo")
+        or row.get("stock_no")
+        or row.get("code")
+        or row.get("ticker")
+    )
+    if not symbol:
+        return None
+
+    name = safe_str(row.get("name") or row.get("stockName") or row.get("stock_name") or symbol)
+
+    exchange = safe_str(row.get("exchange"))
+    market = safe_str(row.get("market"))
+    market_label = to_market_label(exchange, market)
+
     price = safe_float(
-        quote.get("lastPrice")
-        or quote.get("closePrice")
-        or quote.get("tradePrice")
-        or quote.get("price")
-        or quote.get("currentPrice")
+        row.get("lastPrice")
+        or row.get("closePrice")
+        or row.get("tradePrice")
+        or row.get("price")
+        or row.get("currentPrice")
     )
-    change = safe_float(
-        quote.get("change")
-        or quote.get("priceChange")
-        or quote.get("changePrice")
-    )
-    change_percent = safe_float(quote.get("changePercent"))
+    if price <= 0:
+        return None
 
-    prev_close = safe_float(quote.get("previousClose"))
-    if prev_close <= 0 and price > 0 and change != 0:
-        prev_close = price - change
+    change = safe_float(row.get("change") or row.get("priceChange") or row.get("changePrice"))
+    previous_close = safe_float(row.get("previousClose") or row.get("referencePrice"))
 
-    if change_percent == 0 and prev_close > 0 and change != 0:
-        change_percent = (change / prev_close) * 100
+    change_percent = safe_float(row.get("changePercent"))
+    if change_percent == 0 and previous_close > 0 and change != 0:
+        change_percent = (change / previous_close) * 100
+    elif change_percent == 0 and previous_close <= 0 and price > 0 and change != 0:
+        prev = price - change
+        if prev > 0:
+            previous_close = prev
+            change_percent = (change / prev) * 100
 
+    total = row.get("total") if isinstance(row.get("total"), dict) else {}
     volume = safe_int(
-        quote.get("tradeVolume")
-        or quote.get("volume")
-        or quote.get("totalVolume")
-        or quote.get("accumulatedVolume")
+        row.get("tradeVolume")
+        or row.get("volume")
+        or row.get("totalVolume")
+        or row.get("accumulatedVolume")
+        or total.get("tradeVolume")
     )
+
+    score = round(abs(change_percent) * 10 + min(volume / 100000, 50), 2)
 
     return {
         "market": market_label,
         "symbol": symbol,
-        "name": name or symbol,
+        "name": name,
         "price": round(price, 2),
         "change": round(change, 2),
         "change_percent": round(change_percent, 2),
         "volume": volume,
-        "score": round(abs(change_percent) * 10 + min(volume / 100000, 50), 2),
-        "prev_close": round(prev_close, 2) if prev_close > 0 else 0,
-        "open": round(safe_float(quote.get("openPrice")), 2),
-        "high": round(safe_float(quote.get("highPrice")), 2),
-        "low": round(safe_float(quote.get("lowPrice")), 2),
-        "update_time": str(
-            quote.get("lastUpdated")
-            or quote.get("updateTime")
-            or quote.get("dateTime")
-            or ""
-        ),
+        "score": score,
+        "prev_close": round(previous_close, 2) if previous_close > 0 else 0,
+        "open": round(safe_float(row.get("openPrice")), 2),
+        "high": round(safe_float(row.get("highPrice")), 2),
+        "low": round(safe_float(row.get("lowPrice")), 2),
+        "update_time": safe_str(row.get("lastUpdated") or row.get("closeTime") or total.get("time")),
     }
 
 
-def get_demo_quotes() -> List[Dict[str, Any]]:
+def fetch_snapshot_market(market: str) -> List[Dict[str, Any]]:
     stock_client = get_stock_rest_client()
 
-    demo_symbols = [
-        ("2330", "台積電", "上市"),
-        ("2317", "鴻海", "上市"),
-        ("2454", "聯發科", "上市"),
-        ("2303", "聯電", "上市"),
-        ("2603", "長榮", "上市"),
-        ("8069", "元太", "上櫃"),
-    ]
+    # 官方支援 snapshot.quotes(market)，type 可選 ALLBUT099 / COMMONSTOCK
+    resp = stock_client.snapshot.quotes(market=market, type="ALLBUT099")
+    rows = extract_rows(resp)
 
-    results = []
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        item = normalize_snapshot_row(row)
+        if item:
+            result.append(item)
 
-    for symbol, name, market_label in demo_symbols:
-        try:
-            q = stock_client.intraday.quote(symbol=symbol)
-            if isinstance(q, dict) and "data" in q and isinstance(q["data"], dict):
-                q = q["data"]
-            results.append(normalize_stock_item(symbol, name, q, market_label))
-        except Exception:
-            continue
+    dedup = {}
+    for item in result:
+        dedup[item["symbol"]] = item
 
-    return results
+    return list(dedup.values())
+
+
+def get_all_stocks() -> List[Dict[str, Any]]:
+    all_stocks: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    try:
+        all_stocks.extend(fetch_snapshot_market("TSE"))
+    except Exception as e:
+        errors.append(f"TSE 失敗: {e}")
+
+    try:
+        all_stocks.extend(fetch_snapshot_market("OTC"))
+    except Exception as e:
+        errors.append(f"OTC 失敗: {e}")
+
+    dedup = {}
+    for item in all_stocks:
+        dedup[item["symbol"]] = item
+
+    stocks = list(dedup.values())
+    stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
+
+    if not stocks and errors:
+        raise Exception("；".join(errors))
+
+    return stocks
 
 
 # =========================
@@ -346,13 +443,37 @@ def debug_snapshot(symbol: str = "2330"):
         }
 
 
+@app.get("/debug-market-snapshot")
+def debug_market_snapshot(market: str = "TSE"):
+    try:
+        stock_client = get_stock_rest_client()
+        resp = stock_client.snapshot.quotes(market=market, type="ALLBUT099")
+        rows = extract_rows(resp)
+
+        return {
+            "success": True,
+            "market": market,
+            "raw_type": str(type(resp)),
+            "count": len(rows),
+            "preview": rows[:5],
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "market": market,
+            "error": str(e),
+            "trace": traceback.format_exc(),
+        }
+
+
 @app.get("/stocks")
 def get_stocks():
     try:
-        stocks = get_demo_quotes()
+        stocks = get_all_stocks()
+
         return {
             "success": True,
-            "market_status": "富邦即時行情",
+            "market_status": "富邦即時行情" if stocks else "無資料",
             "data_date": "",
             "last_update": "",
             "total": len(stocks),
