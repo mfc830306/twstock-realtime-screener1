@@ -11,11 +11,18 @@ type Stock = {
   change_percent: number;
   volume?: number;
   score?: number;
+  recommendation_score?: number;
   signal?: string;
   reason?: string;
   entry_price?: string;
   target_price?: string;
   stop_loss?: string;
+};
+
+type BackendCategory = {
+  key: string;
+  label: string;
+  count: number;
 };
 
 type ApiResponse = {
@@ -25,6 +32,8 @@ type ApiResponse = {
   last_update?: string;
   total?: number;
   stocks: Stock[];
+  recommendations?: Stock[];
+  categories?: BackendCategory[];
   message?: string;
   source_summary?: {
     twse_data_date?: string;
@@ -85,8 +94,62 @@ function getMarketLightColor(status?: string) {
   return "#f59e0b";
 }
 
+function buildCategoryCounts(
+  stocks: Stock[],
+  backendCategories?: BackendCategory[]
+): Record<CategoryKey, number> {
+  const emptyCounts: Record<CategoryKey, number> = {
+    all: stocks.length,
+    "0-50": 0,
+    "50-100": 0,
+    "100-200": 0,
+    "200-500": 0,
+    "500+": 0,
+  };
+
+  if (!backendCategories || backendCategories.length === 0) {
+    for (const stock of stocks) {
+      emptyCounts[getPriceCategory(stock.price)] += 1;
+    }
+    return emptyCounts;
+  }
+
+  const backendMap = new Map<string, number>();
+  for (const item of backendCategories) {
+    backendMap.set(item.key, Number(item.count || 0));
+  }
+
+  return {
+    all: stocks.length,
+    "0-50":
+      (backendMap.get("0-10") || 0) +
+      (backendMap.get("10-20") || 0) +
+      (backendMap.get("20-50") || 0),
+    "50-100": backendMap.get("50-100") || 0,
+    "100-200": backendMap.get("100-200") || 0,
+    "200-500": backendMap.get("200-500") || 0,
+    "500+":
+      (backendMap.get("500-1000") || 0) +
+      (backendMap.get("1000+") || 0),
+  };
+}
+
+function normalizeStock(s: Stock): Stock {
+  return {
+    ...s,
+    price: Number(s.price ?? 0),
+    change: Number(s.change ?? 0),
+    change_percent: Number(s.change_percent ?? 0),
+    volume: Number(s.volume ?? 0),
+    score: Number(s.score ?? 0),
+    recommendation_score: Number(s.recommendation_score ?? 0),
+  };
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
+  const [recommendations, setRecommendations] = useState<Stock[]>([]);
+  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>([]);
   const [marketStatus, setMarketStatus] = useState("-");
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
@@ -109,16 +172,12 @@ export default function Home() {
         throw new Error(data.message || "取得資料失敗");
       }
 
-      const safeStocks = (data.stocks || []).map((s) => ({
-        ...s,
-        price: Number(s.price ?? 0),
-        change: Number(s.change ?? 0),
-        change_percent: Number(s.change_percent ?? 0),
-        volume: Number(s.volume ?? 0),
-        score: Number(s.score ?? 0),
-      }));
+      const safeStocks = (data.stocks || []).map(normalizeStock);
+      const safeRecommendations = (data.recommendations || []).map(normalizeStock);
 
       setStocks(safeStocks);
+      setRecommendations(safeRecommendations);
+      setBackendCategories(data.categories || []);
       setMarketStatus(data.market_status || "-");
       setDataDate(
         data.data_date ||
@@ -151,21 +210,8 @@ export default function Home() {
   }, []);
 
   const categoryCounts = useMemo(() => {
-    const counts: Record<CategoryKey, number> = {
-      all: stocks.length,
-      "0-50": 0,
-      "50-100": 0,
-      "100-200": 0,
-      "200-500": 0,
-      "500+": 0,
-    };
-
-    for (const stock of stocks) {
-      counts[getPriceCategory(stock.price)] += 1;
-    }
-
-    return counts;
-  }, [stocks]);
+    return buildCategoryCounts(stocks, backendCategories);
+  }, [stocks, backendCategories]);
 
   const filteredStocks = useMemo(() => {
     let result = [...stocks];
@@ -190,17 +236,27 @@ export default function Home() {
     } else if (rankType === "down") {
       result.sort((a, b) => a.change_percent - b.change_percent);
     } else {
-      result.sort((a, b) => (b.score || 0) - (a.score || 0));
+      result.sort(
+        (a, b) =>
+          (b.recommendation_score || b.score || 0) -
+          (a.recommendation_score || a.score || 0)
+      );
     }
 
     return result;
   }, [stocks, selectedCategory, searchTerm, rankType]);
 
   const recommendedStocks = useMemo(() => {
+    if (recommendations.length > 0) return recommendations.slice(0, 10);
+
     return [...stocks]
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .sort(
+        (a, b) =>
+          (b.recommendation_score || b.score || 0) -
+          (a.recommendation_score || a.score || 0)
+      )
       .slice(0, 10);
-  }, [stocks]);
+  }, [stocks, recommendations]);
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
