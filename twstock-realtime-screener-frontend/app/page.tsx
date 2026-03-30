@@ -527,7 +527,7 @@ export default function Home() {
             >
               {recommendedStocks.map((stock) => {
                 const isUp = stock.change >= 0;
-                const changeColor = isUp ? "#ff8d8d" : "#7fc3ff";
+                const changeColor = isUp ? "#ff4d4f" : "#00c853";
 
                 return (
                   <div
@@ -690,7 +690,7 @@ export default function Home() {
               <tbody>
                 {filteredStocks.map((stock) => {
                   const isUp = stock.change >= 0;
-                  const color = isUp ? "#ff8d8d" : "#7fc3ff";
+                  const color = isUp ? "#ff4d4f" : "#00c853";
 
                   return (
                     <tr
