@@ -125,14 +125,6 @@ def resolve_cert_path() -> Optional[str]:
     return None
 
 
-def is_market_open() -> bool:
-    now = now_taipei()
-    if now.weekday() >= 5:
-        return False
-    minutes = now.hour * 60 + now.minute
-    return 9 * 60 <= minutes <= 13 * 60 + 30
-
-
 def get_market_status_text() -> str:
     now = now_taipei()
     if now.weekday() >= 5:
@@ -200,7 +192,9 @@ def ensure_fubon_sdk():
 
     is_success = getattr(_login_info, "is_success", False)
     if not is_success:
-        raise Exception(f"Fubon SDK login failed: {getattr(_login_info, 'message', 'unknown error')}")
+        raise Exception(
+            f"Fubon SDK login failed: {getattr(_login_info, 'message', 'unknown error')}"
+        )
 
     if not _marketdata_ready:
         _sdk.init_realtime()
@@ -271,63 +265,187 @@ def build_signal_and_reason(
     intraday_range = max(high_price - low_price, 0.0)
     amplitude_pct = (intraday_range / previous_close * 100) if previous_close > 0 else 0.0
 
-    closed_near_high = price > 0 and high_price > 0 and (high_price - price) / price <= 0.01
-    closed_near_low = price > 0 and low_price > 0 and (price - low_price) / price <= 0.01
-    opened_strong = open_price > 0 and previous_close > 0 and open_price >= previous_close
+    close_position = 0.5
+    if high_price > low_price:
+        close_position = (price - low_price) / (high_price - low_price)
+        close_position = max(0.0, min(close_position, 1.0))
+
     heavy_volume = volume >= 3000
     very_heavy_volume = volume >= 10000
+    extreme_volume = volume >= 30000
 
-    if change_percent >= 6 and very_heavy_volume:
+    close_near_high = close_position >= 0.8
+    close_mid_high = close_position >= 0.65
+    close_near_low = close_position <= 0.25
+    close_mid_low = close_position <= 0.35
+
+    gap_up = open_price > previous_close > 0
+    gap_down = open_price > 0 and previous_close > 0 and open_price < previous_close
+
+    # 1. 強勢主升
+    if change_percent >= 6 and very_heavy_volume and close_near_high:
         return {
-            "signal": "強勢偏多",
-            "reason": "股價強勢上攻且漲幅擴大，成交量明顯放大，顯示市場資金集中，短線動能與追價意願均偏強，屬盤面主流強勢股。",
+            "signal": "強勢主升",
+            "reason": (
+                "個股今日呈現主升段加速型態，漲幅明顯擴大且成交量同步放大，"
+                "收盤價貼近當日高點，代表盤中追價買盤積極，資金集中效果明確。"
+                "從量價結構來看，多方不僅成功推升價格重心，亦有效吸收短線獲利了結賣壓，"
+                "顯示趨勢延續性佳，屬於盤面具領漲特徵的強勢股。"
+            ),
         }
 
-    if change_percent >= 3 and heavy_volume and closed_near_high:
+    # 2. 放量突破
+    if change_percent >= 4 and heavy_volume and close_near_high:
         return {
-            "signal": "偏多",
-            "reason": "股價維持多方推升結構，量能同步放大，且收盤接近當日高檔，代表買盤承接積極，短線續強機率相對較高。",
+            "signal": "放量突破",
+            "reason": (
+                "股價今日出現明確突破走勢，價格推升同時伴隨量能擴增，"
+                "顯示市場資金進場態度積極，且突破後收盤仍能穩守高檔。"
+                "這代表上方賣壓已獲一定程度消化，多方掌控盤勢能力提升，"
+                "若後續成交量維持健康水準，短線仍具續攻與挑戰波段高點的條件。"
+            ),
         }
 
-    if 0.8 <= change_percent < 3 and opened_strong:
+    # 3. 多方控盤
+    if change_percent >= 2 and gap_up and close_mid_high:
         return {
-            "signal": "中性偏多",
-            "reason": "股價呈現穩定墊高走勢，開盤後維持相對強勢，顯示多方控盤力道尚可，適合觀察是否持續放量突破。",
+            "signal": "多方控盤",
+            "reason": (
+                "個股今日開盤即展現偏強企圖，盤中價格重心持續墊高，"
+                "收盤仍維持在相對高位，顯示多方對節奏掌控度佳。"
+                "此類型走勢通常意味市場對後續表現預期偏正向，"
+                "短線若能再配合量能放大，將有機會進一步強化上攻動能。"
+            ),
         }
 
-    if -0.8 < change_percent < 0.8 and amplitude_pct <= 3:
+    # 4. 穩健走強
+    if change_percent > 1 and amplitude_pct <= 4 and close_mid_high:
         return {
-            "signal": "中性整理",
-            "reason": "股價位於區間整理階段，日內波動受控，市場追價與殺低意願皆不明顯，短線需等待方向進一步表態。",
+            "signal": "穩健走強",
+            "reason": (
+                "股價呈現穩步走高格局，雖非急漲型態，但日內波動控制得宜，"
+                "價格重心持續上移，代表買盤承接結構穩定。"
+                "這類型個股通常具備較佳的趨勢延續基礎，"
+                "若後續量價配合持續改善，仍具中短線續強空間。"
+            ),
         }
 
-    if change_percent <= -3 and heavy_volume and closed_near_low:
+    # 5. 高檔換手
+    if change_percent >= 0 and amplitude_pct > 4 and close_mid_high and heavy_volume:
         return {
-            "signal": "偏空",
-            "reason": "股價明顯轉弱，賣壓持續釋放且收盤貼近低檔，反映市場偏向保守，短線宜留意支撐是否失守。",
+            "signal": "高檔換手",
+            "reason": (
+                "個股盤中震盪幅度偏大，但成交量活絡且收盤仍守在相對高檔，"
+                "反映高檔換手過程中，多方承接力道仍具一定優勢。"
+                "此現象通常代表市場對該股關注度提升，"
+                "若後續能完成震盪整理並再度放量上攻，走勢仍有再轉強的可能。"
+            ),
         }
 
-    if change_percent <= -6 and very_heavy_volume:
+    # 6. 整理待發
+    if -1 <= change_percent <= 1 and amplitude_pct <= 3:
         return {
-            "signal": "弱勢偏空",
-            "reason": "股價出現明顯修正，且伴隨大量換手，顯示市場避險或調節力道升高，短線風險相對偏高。",
+            "signal": "整理待發",
+            "reason": (
+                "股價目前處於區間整理階段，日內波動有限，量價表現偏向均衡，"
+                "顯示市場觀望氣氛較濃，尚未出現明確方向性表態。"
+                "此類型個股重點在於後續是否能透過量能增溫與價格突破，"
+                "進一步確認下一波趨勢發展。"
+            ),
         }
 
+    # 7. 籌碼換手
+    if -1 <= change_percent <= 1 and amplitude_pct > 4 and heavy_volume:
+        return {
+            "signal": "籌碼換手",
+            "reason": (
+                "個股今日呈現高波動但漲跌幅收斂的型態，且成交量放大，"
+                "顯示市場多空分歧加劇，籌碼進入明顯換手階段。"
+                "這類走勢常出現在波段轉折或方向醞釀期，"
+                "後續需觀察股價是向上突破整理區間，或轉弱跌破關鍵支撐。"
+            ),
+        }
+
+    # 8. 拉回整理
+    if change_percent <= -2 and change_percent > -5 and close_mid_low:
+        return {
+            "signal": "拉回整理",
+            "reason": (
+                "股價今日出現明顯拉回，且收盤落在日內相對低檔區，"
+                "反映短線上方賣壓升溫，買盤承接意願相對保守。"
+                "現階段走勢已由強攻轉入整理，"
+                "後續若無法快速收復重要價位，股價可能延續震盪修正節奏。"
+            ),
+        }
+
+    # 9. 放量修正
+    if change_percent <= -3 and heavy_volume:
+        return {
+            "signal": "放量修正",
+            "reason": (
+                "個股今日呈現放量下跌走勢，顯示市場調節賣壓明顯升溫，"
+                "價格重心同步下移，短線籌碼穩定度轉弱。"
+                "此類型通常代表短期風險偏高，"
+                "在未出現量縮止穩或有效支撐訊號前，宜保守看待。"
+            ),
+        }
+
+    # 10. 弱勢破位
+    if change_percent <= -6 and very_heavy_volume and close_near_low:
+        return {
+            "signal": "弱勢破位",
+            "reason": (
+                "股價今日出現明顯破位型下跌，跌幅擴大且伴隨大量成交，"
+                "代表市場恐慌性調節或停損賣壓同步湧現。"
+                "收盤貼近低檔顯示空方掌控力強，"
+                "短線結構已明顯轉弱，在未出現止跌訊號前，應以風險控管為優先。"
+            ),
+        }
+
+    # 11. 爆量震盪
+    if extreme_volume and amplitude_pct >= 5:
+        return {
+            "signal": "爆量震盪",
+            "reason": (
+                "個股今日成交量明顯放大，且盤中振幅擴大，"
+                "顯示市場高度聚焦，但多空對價格認知差異亦明顯提升。"
+                "這通常代表波段方向即將重新選擇，"
+                "後續應密切觀察是否由量增價揚確認轉強，或由失守支撐轉為偏弱整理。"
+            ),
+        }
+
+    # 12. 小幅偏多
     if change_percent > 0:
         return {
-            "signal": "中性偏多",
-            "reason": "股價小幅收高，整體結構仍偏穩，多方略具優勢，但尚需後續量能與價格延續性進一步確認。",
+            "signal": "小幅偏多",
+            "reason": (
+                "股價今日小幅收高，整體價格結構仍維持偏正向發展，"
+                "顯示短線買盤仍具一定支撐力。"
+                "雖然目前尚未達到強勢表態程度，"
+                "但若後續可搭配量能放大與高檔續收，仍有機會進一步提升技術面評價。"
+            ),
         }
 
+    # 13. 小幅偏空
     if change_percent < 0:
         return {
-            "signal": "中性偏空",
-            "reason": "股價小幅收低，短線買盤力道略顯不足，需持續觀察是否有量縮止穩或支撐轉強訊號。",
+            "signal": "小幅偏空",
+            "reason": (
+                "股價今日小幅收低，反映短線追價意願不足，"
+                "盤面資金態度略趨保守。"
+                "若後續無法在支撐區看到明確承接，"
+                "則需留意整理時間拉長，甚至再度測試前波低點的可能。"
+            ),
         }
 
+    # 14. 中性觀望
     return {
-        "signal": "中性",
-        "reason": "股價變動有限，市場觀望氣氛較濃，短線以等待明確方向與量價配合為主。",
+        "signal": "中性觀望",
+        "reason": (
+            "個股目前缺乏明確方向訊號，量價結構尚未形成具辨識度的趨勢優勢，"
+            "短線仍以觀察後續資金流向、量能變化與關鍵價位表現為主。"
+            "在未見有效突破或轉弱之前，評價暫維持中性。"
+        ),
     }
 
 
@@ -433,10 +551,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     recommendation_score = round(
         max(
             0.0,
-            abs(change_percent) * 6
-            + liquidity_bonus
-            + 2
-            - stability_penalty * 0.3,
+            abs(change_percent) * 6 + liquidity_bonus + 2 - stability_penalty * 0.3,
         ),
         2,
     )
@@ -615,7 +730,8 @@ def filter_stocks(
     if q.strip():
         qq = q.strip().lower()
         result = [
-            s for s in result
+            s
+            for s in result
             if qq in safe_str(s.get("symbol")).lower() or qq in safe_str(s.get("name")).lower()
         ]
 
@@ -750,7 +866,7 @@ def get_stocks(
         filtered = sort_stocks(filtered, sort_by=sort_by, sort_dir=sort_dir)
 
         total_filtered = len(filtered)
-        paged = filtered[offset: offset + limit]
+        paged = filtered[offset : offset + limit]
 
         recs = build_recommendations(all_stocks, top_n=10)
         cats = build_categories(all_stocks)
