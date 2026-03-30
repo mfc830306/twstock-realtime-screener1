@@ -195,12 +195,30 @@ def get_fubon_sdk():
     from fubon_neo.sdk import FubonSDK
 
     sdk = FubonSDK()
+
     accounts = sdk.login(
         fubon_id,
         fubon_pwd,
         fubon_cert_path,
         fubon_cert_pwd,
     )
+
+    # 先確認 login 真的成功，再 init_realtime
+    if not accounts:
+        raise Exception("Fubon SDK login 回傳空值，登入失敗")
+
+    login_msg = None
+    if hasattr(accounts, "message"):
+        login_msg = getattr(accounts, "message")
+
+    login_data = getattr(accounts, "data", None)
+
+    # 有些版本 login 失敗不一定 raise exception，所以這裡手動擋
+    if login_data is None:
+        raise Exception(f"Fubon SDK login 失敗: {login_msg or accounts}")
+
+    if isinstance(login_data, list) and len(login_data) == 0:
+        raise Exception(f"Fubon SDK login 失敗，data 為空: {login_msg or accounts}")
 
     sdk.init_realtime()
 
@@ -515,6 +533,7 @@ def debug_login():
             "success": True,
             "sdk_type": str(type(sdk)),
             "login_info_type": str(type(_fubon_login_info)),
+            "login_info": str(_fubon_login_info),
             "message": "Fubon SDK login success"
         }
     except Exception as e:
