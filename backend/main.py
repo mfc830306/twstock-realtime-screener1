@@ -13,7 +13,7 @@ app = FastAPI(title="TW Stock Realtime Screener")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # 先全部開放，之後可改成你的前端網域
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,12 +33,14 @@ def to_float(v: Any, default: float = 0.0) -> float:
     try:
         if v is None:
             return default
+        if isinstance(v, bool):
+            return default
         if isinstance(v, (int, float)):
-            if math.isnan(v):
+            if isinstance(v, float) and math.isnan(v):
                 return default
             return float(v)
         s = str(v).strip().replace(",", "")
-        if s == "" or s == "-":
+        if s in ("", "-"):
             return default
         return float(s)
     except Exception:
@@ -49,6 +51,8 @@ def to_int(v: Any, default: int = 0) -> int:
     try:
         if v is None:
             return default
+        if isinstance(v, bool):
+            return default
         if isinstance(v, int):
             return v
         if isinstance(v, float):
@@ -56,7 +60,7 @@ def to_int(v: Any, default: int = 0) -> int:
                 return default
             return int(v)
         s = str(v).strip().replace(",", "")
-        if s == "" or s == "-":
+        if s in ("", "-"):
             return default
         return int(float(s))
     except Exception:
@@ -71,9 +75,6 @@ def safe_get(d: Dict[str, Any], *keys: str, default=None):
 
 
 def calc_score(price: float, change_percent: float, volume: int) -> float:
-    """
-    簡單推薦分數，可依你需求再調整
-    """
     vol_score = min(volume / 100000, 100)
     move_score = abs(change_percent) * 8
     price_score = 0
@@ -166,11 +167,11 @@ def market_label(market: str) -> str:
 def get_fubon_sdk():
     """
     初始化並快取富邦 SDK
-    需要環境變數：
+    支援以下環境變數名稱：
     FUBON_ID
-    FUBON_PWD
+    FUBON_PWD 或 FUBON_PASSWORD
     FUBON_CERT_PATH
-    FUBON_CERT_PWD
+    FUBON_CERT_PWD 或 FUBON_CERT_PASSWORD
     """
     global _fubon_sdk, _fubon_login_info
 
@@ -183,7 +184,13 @@ def get_fubon_sdk():
     fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", os.getenv("FUBON_CERT_PASSWORD", "")).strip()
 
     if not all([fubon_id, fubon_pwd, fubon_cert_path, fubon_cert_pwd]):
-        raise Exception("FUBON 環境變數未設定完整")
+        raise Exception(
+            f"FUBON 環境變數未設定完整: "
+            f"ID={bool(fubon_id)}, "
+            f"PWD={bool(fubon_pwd)}, "
+            f"CERT_PATH={bool(fubon_cert_path)}, "
+            f"CERT_PWD={bool(fubon_cert_pwd)}"
+        )
 
     from fubon_neo.sdk import FubonSDK
 
@@ -195,7 +202,6 @@ def get_fubon_sdk():
         fubon_cert_pwd,
     )
 
-    # 官方文件要求：登入後建立行情連線
     sdk.init_realtime()
 
     _fubon_sdk = sdk
@@ -204,9 +210,6 @@ def get_fubon_sdk():
 
 
 def extract_rows_from_response(resp: Any) -> List[Dict[str, Any]]:
-    """
-    兼容 SDK 不同回傳格式
-    """
     if resp is None:
         return []
 
@@ -253,9 +256,6 @@ def get_stock_rest_client():
 
 
 def get_sdk_market_snapshot(market: str) -> List[Dict[str, Any]]:
-    """
-    用富邦 SDK 讀整個市場 snapshot
-    """
     market = normalize_market(market)
     stock_client = get_stock_rest_client()
 
@@ -277,32 +277,22 @@ def get_sdk_market_snapshot(market: str) -> List[Dict[str, Any]]:
 
 
 def map_snapshot_row(row: Dict[str, Any], market: str) -> Optional[Dict[str, Any]]:
-    """
-    把富邦 snapshot 的欄位整理成前端用格式
-    """
     symbol = str(safe_get(row, "symbol", "code", default="")).strip()
     name = str(safe_get(row, "name", default="")).strip()
 
     if not symbol:
         return None
 
-    price = to_float(
-        safe_get(row, "closePrice", "lastPrice", "price", "close", default=0)
-    )
+    price = to_float(safe_get(row, "closePrice", "lastPrice", "price", "close", default=0))
     open_price = to_float(safe_get(row, "openPrice", "open", default=0))
     high_price = to_float(safe_get(row, "highPrice", "high", default=0))
     low_price = to_float(safe_get(row, "lowPrice", "low", default=0))
     change = to_float(safe_get(row, "change", default=0))
     change_percent = to_float(safe_get(row, "changePercent", "change_percent", default=0))
-    volume = to_int(
-        safe_get(row, "tradeVolume", "volume", "totalVolume", default=0)
-    )
-    prev_close = to_float(
-        safe_get(row, "previousClose", "prevClose", "referencePrice", default=0)
-    )
+    volume = to_int(safe_get(row, "tradeVolume", "volume", "totalVolume", default=0))
+    prev_close = to_float(safe_get(row, "previousClose", "prevClose", "referencePrice", default=0))
     last_updated = safe_get(row, "lastUpdated", "last_update", default="")
 
-    # 若 changePercent 沒有，自己算
     if change_percent == 0 and price > 0 and change != 0:
         base = price - change
         if base != 0:
@@ -345,7 +335,6 @@ def get_market_stocks_from_fubon(market: str) -> List[Dict[str, Any]]:
             if mapped is None:
                 continue
 
-            # 過濾明顯異常資料
             if mapped["price"] <= 0:
                 continue
 
@@ -371,13 +360,18 @@ def health():
 
 @app.get("/debug_env")
 def debug_env():
+    fubon_pwd = os.getenv("FUBON_PWD", os.getenv("FUBON_PASSWORD", ""))
+    fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", os.getenv("FUBON_CERT_PASSWORD", ""))
+
     return {
         "success": True,
         "has_FUBON_ID": bool(os.getenv("FUBON_ID")),
-        "has_FUBON_PWD": bool(os.getenv("FUBON_PWD")),
+        "has_FUBON_PWD": bool(fubon_pwd),
         "has_FUBON_CERT_PATH": bool(os.getenv("FUBON_CERT_PATH")),
-        "has_FUBON_CERT_PWD": bool(os.getenv("FUBON_CERT_PWD")),
+        "has_FUBON_CERT_PWD": bool(fubon_cert_pwd),
         "FUBON_CERT_PATH": os.getenv("FUBON_CERT_PATH", ""),
+        "using_pwd_key": "FUBON_PWD" if os.getenv("FUBON_PWD") else ("FUBON_PASSWORD" if os.getenv("FUBON_PASSWORD") else ""),
+        "using_cert_pwd_key": "FUBON_CERT_PWD" if os.getenv("FUBON_CERT_PWD") else ("FUBON_CERT_PASSWORD" if os.getenv("FUBON_CERT_PASSWORD") else ""),
     }
 
 
@@ -433,16 +427,11 @@ def debug_snapshot(market: str = "TSE"):
 
 @app.get("/stocks")
 def get_stocks():
-    """
-    抓上市 + 上櫃
-    """
     try:
         tse_stocks = get_market_stocks_from_fubon("TSE")
         otc_stocks = get_market_stocks_from_fubon("OTC")
 
         stocks = tse_stocks + otc_stocks
-
-        # 排序：分數高的在前面，再看成交量
         stocks.sort(key=lambda x: (x.get("score", 0), x.get("volume", 0)), reverse=True)
 
         return {
@@ -466,9 +455,6 @@ def get_stocks():
 
 @app.get("/stocks/{market}")
 def get_stocks_by_market(market: str):
-    """
-    market: TSE / OTC
-    """
     try:
         market = normalize_market(market)
         if market not in ["TSE", "OTC"]:
