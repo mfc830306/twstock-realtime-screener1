@@ -178,9 +178,9 @@ def get_fubon_sdk():
         return _fubon_sdk
 
     fubon_id = os.getenv("FUBON_ID", "").strip()
-    fubon_pwd = os.getenv("FUBON_PWD", "").strip()
+    fubon_pwd = os.getenv("FUBON_PWD", os.getenv("FUBON_PASSWORD", "")).strip()
     fubon_cert_path = os.getenv("FUBON_CERT_PATH", "").strip()
-    fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", "").strip()
+    fubon_cert_pwd = os.getenv("FUBON_CERT_PWD", os.getenv("FUBON_CERT_PASSWORD", "")).strip()
 
     if not all([fubon_id, fubon_pwd, fubon_cert_path, fubon_cert_pwd]):
         raise Exception("FUBON 環境變數未設定完整")
