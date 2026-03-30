@@ -20,6 +20,10 @@ def root():
     return {"message": "TW Stock Realtime Screener B is running"}
 
 
+def get_taiwan_now() -> datetime:
+    return datetime.utcnow() + timedelta(hours=8)
+
+
 def safe_float(value, default=0.0):
     try:
         if value in [None, "", "-", "--"]:
@@ -40,17 +44,16 @@ def safe_int(value, default=0):
 
 def get_previous_weekday(date_obj: datetime) -> datetime:
     d = date_obj - timedelta(days=1)
-    while d.weekday() >= 5:  # 5=Sat, 6=Sun
+    while d.weekday() >= 5:
         d -= timedelta(days=1)
     return d
 
 
 def get_market_info():
-    now = datetime.now()
+    now = get_taiwan_now()
     weekday = now.weekday()  # Mon=0 ... Sun=6
     current_hhmm = now.hour * 100 + now.minute
 
-    # 非交易日：週六、週日
     if weekday >= 5:
         last_trading_day = get_previous_weekday(now)
         return {
@@ -59,7 +62,6 @@ def get_market_info():
             "last_update": now.strftime("%Y/%m/%d %H:%M:%S"),
         }
 
-    # 平日
     if 900 <= current_hhmm <= 1330:
         return {
             "market_status": "開盤中",
@@ -220,7 +222,7 @@ def fetch_tpex_stocks() -> List[Dict[str, Any]]:
                     if not symbol or not name or price <= 0:
                         continue
 
-                    prev_close = price - change
+                        prev_close = price - change
                     change_percent = round((change / prev_close * 100), 2) if prev_close > 0 else 0.0
 
                     extra = build_signal_and_reason(price, change, change_percent, volume)
