@@ -1,10 +1,12 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import os
 from datetime import datetime
 from statistics import median
 from typing import Any, Dict, List
 
 import requests
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fubon_neo.sdk import FubonSDK
 
 app = FastAPI(title="TW Stock Realtime Screener")
 
@@ -54,11 +56,6 @@ def safe_int(value: Any, default: int = 0) -> int:
 
 
 def is_valid_common_stock_symbol(symbol: str) -> bool:
-    """
-    只保留一般股票常見 4 位數代號
-    例：2330、2317、3715
-    排除 ETF、權證、牛熊證、其他雜項商品
-    """
     return symbol.isdigit() and len(symbol) == 4
 
 
@@ -99,7 +96,6 @@ def generate_professional_reason(stock: Dict[str, Any], median_volume: float) ->
 
     reasons: List[str] = []
 
-    # 1. 價格結構
     if price > open_price > 0:
         if high > 0 and abs(high - price) / max(price, 0.01) < 0.01:
             reasons.append("股價維持開高走高格局，收斂於當日高檔附近，顯示買盤承接力道偏強")
@@ -113,7 +109,6 @@ def generate_professional_reason(stock: Dict[str, Any], median_volume: float) ->
     else:
         reasons.append("股價圍繞平盤附近整理，市場觀望氣氛相對明顯")
 
-    # 2. 漲跌幅
     if change_percent >= 6:
         reasons.append("漲幅明確擴大，屬盤面強勢表態個股")
     elif change_percent >= 3:
@@ -127,7 +122,6 @@ def generate_professional_reason(stock: Dict[str, Any], median_volume: float) ->
     else:
         reasons.append("漲跌幅仍在可控範圍內，等待後續方向表態")
 
-    # 3. 量能
     if volume_ratio >= 2.5:
         reasons.append("成交量明顯放大，量能足以支持價格波動，市場關注度高")
     elif volume_ratio >= 1.5:
@@ -137,7 +131,6 @@ def generate_professional_reason(stock: Dict[str, Any], median_volume: float) ->
     else:
         reasons.append("成交量偏低，短線續航力仍需進一步觀察")
 
-    # 4. 振幅
     if amplitude >= 8:
         reasons.append("日內振幅偏大，代表多空交戰激烈，操作上宜搭配停損控管")
     elif amplitude >= 4:
@@ -159,14 +152,9 @@ def calc_score(stock: Dict[str, Any], median_volume: float) -> float:
     volume_ratio = volume / median_volume if median_volume > 0 else 1.0
 
     score = 50.0
-
-    # 漲跌幅
     score += min(max(change_percent * 4, -20), 20)
-
-    # 振幅
     score += min(amplitude * 1.4, 12)
 
-    # 量能
     if volume_ratio >= 3:
         score += 15
     elif volume_ratio >= 2:
@@ -176,13 +164,11 @@ def calc_score(stock: Dict[str, Any], median_volume: float) -> float:
     elif volume_ratio < 0.6:
         score -= 5
 
-    # 價格位置
     if price > open_price > 0:
         score += 5
     elif open_price > 0 and price < open_price:
         score -= 5
 
-    # 接近高點
     if high > 0 and abs(high - price) / max(price, 0.01) < 0.015:
         score += 6
 
@@ -378,10 +364,7 @@ def get_stocks():
             reverse=True,
         )
 
-        # 取資料日期：優先從股票資料抓，抓不到就用今天
         data_date = datetime.now().strftime("%Y%m%d")
-        if all_stocks:
-            data_date = datetime.now().strftime("%Y%m%d")
 
         return {
             "success": True,
@@ -403,9 +386,8 @@ def get_stocks():
             "stocks": [],
             "top_recommendations": [],
             "message": str(e),
+        }
 
-            import os
-from fubon_neo.sdk import FubonSDK
 
 @app.get("/test-fubon")
 def test_fubon():
@@ -462,6 +444,5 @@ def test_fubon():
     finally:
         try:
             sdk.logout()
-        except:
+        except Exception:
             pass
-        }
