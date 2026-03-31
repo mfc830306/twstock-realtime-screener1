@@ -128,21 +128,17 @@ def resolve_cert_path() -> Optional[str]:
 def get_market_status_text() -> str:
     now = now_taipei()
 
-    # 週末直接休市
     if now.weekday() >= 5:
         return "休市"
 
     minutes = now.hour * 60 + now.minute
 
-    # 開盤
     if 9 * 60 <= minutes <= 13 * 60 + 30:
         return "開盤"
 
-    # 收盤（13:30之後）
     if minutes > 13 * 60 + 30:
         return "收盤"
 
-    # 其餘（凌晨到開盤前）
     return "休市"
 
 
@@ -172,6 +168,21 @@ def price_category(price: float) -> str:
     if price < 1000:
         return "500-1000"
     return "1000+"
+
+
+def format_price_value(v: float) -> str:
+    if v <= 0:
+        return ""
+    rounded = round(v, 2)
+    if abs(rounded - int(rounded)) < 0.001:
+        return str(int(rounded))
+    return f"{rounded:.2f}"
+
+
+def format_price_range(low: float, high: float) -> str:
+    low = max(low, 0.01)
+    high = max(high, low)
+    return f"{format_price_value(low)} ~ {format_price_value(high)}"
 
 
 # =========================
@@ -279,10 +290,11 @@ def build_signal_and_reason(
         close_position = (price - low_price) / (high_price - low_price)
         close_position = max(0.0, min(close_position, 1.0))
 
-    close_near_high = close_position >= 0.82
+    close_near_high = close_position >= 0.85
     close_high = close_position >= 0.68
-    close_near_low = close_position <= 0.22
+    close_mid = 0.35 < close_position < 0.68
     close_low = close_position <= 0.35
+    close_near_low = close_position <= 0.18
 
     gap_up = open_price > previous_close > 0
     gap_down = open_price > 0 and previous_close > 0 and open_price < previous_close
@@ -296,10 +308,12 @@ def build_signal_and_reason(
         return {
             "signal": "強勢主升",
             "reason": (
-                "個股今日呈現主升段加速型態，股價漲幅明顯擴大，且成交量同步放大，"
-                "收盤貼近當日高點，顯示盤中追價買盤積極、資金集中效果明確。"
-                "從量價結構觀察，多方不僅有效推升價格重心，亦成功吸收短線獲利了結賣壓，"
-                "代表市場對後續表現具高度正向預期，短線趨勢延續性佳，屬盤面具領漲特徵的強勢股。"
+                "該股今日屬於明確的強勢主升型態，漲幅擴大同時伴隨大量成交，且收盤貼近當日高點，"
+                "代表盤中追價買盤積極，多方對價格的掌控力相當強。"
+                "從量價結構來看，這不是單純的反彈，而較像資金集中後的趨勢推升，"
+                "表示市場對後續表現具備延續性預期。"
+                "若後續能守住今日強勢區間且量能未明顯失控，短線仍可偏多看待，"
+                "但因股價已進入急漲段，操作上不宜過度追價，較適合等拉回再找承接點。"
             ),
         }
 
@@ -308,10 +322,10 @@ def build_signal_and_reason(
         return {
             "signal": "放量突破",
             "reason": (
-                "股價今日出現明確突破走勢，價格向上推升同時伴隨量能擴增，"
-                "顯示市場資金對該股的參與度快速提升。"
-                "收盤穩守高檔區，代表突破後並未出現明顯獲利回吐，"
-                "上方賣壓消化情況良好，多方控盤結構明顯改善，若後續量能維持健康，仍具續攻與挑戰前高的條件。"
+                "股價今日出現帶量上攻，且收盤穩守高檔，顯示突破並非虛漲，而是有實質買盤推動的價格重估。"
+                "這類型態通常代表前波整理壓力已有被消化的跡象，市場資金開始明確表態站在多方一側。"
+                "若後續能持續守在突破區上方，代表支撐開始轉強，短線有機會延續攻勢；"
+                "但若隔日迅速跌回突破區下方，則需提防假突破風險。"
             ),
         }
 
@@ -320,10 +334,10 @@ def build_signal_and_reason(
         return {
             "signal": "多方控盤",
             "reason": (
-                "個股今日開盤即展現偏強企圖，盤中價格重心持續上移，"
-                "且收盤維持於相對高檔，顯示多方對節奏掌控度佳。"
-                "此類型走勢通常代表市場對後續營運或題材預期偏正向，"
-                "短線買盤追價意願仍在，若後續量價結構持續配合，股價有機會延續偏多慣性。"
+                "個股今日以偏強方式開出後，盤中價格重心持續墊高，且收盤仍位於日內相對高檔，"
+                "反映多方在盤中節奏掌握上明顯占優。"
+                "這代表市場對該股短線預期偏正向，買盤不僅有追價意願，也願意在震盪過程中持續承接。"
+                "若後續量能維持在健康水位，且未跌破今日主要支撐區，技術面仍偏多解讀。"
             ),
         }
 
@@ -332,10 +346,10 @@ def build_signal_and_reason(
         return {
             "signal": "趨勢續強",
             "reason": (
-                "股價延續既有上升趨勢，盤中雖有震盪，但價格重心維持上移，"
-                "搭配量能穩定放大，顯示市場承接力道仍屬積極。"
-                "從技術面觀察，此類型通常代表趨勢股進入延續推升階段，"
-                "若後續未出現爆量長黑或高檔失守訊號，短線仍偏有利多方。"
+                "股價延續原有偏多結構，盤中雖有波動，但整體重心仍維持上移，且量能未明顯失真，"
+                "顯示市場對該股仍具備穩定承接力。"
+                "此類型通常不是剛起漲，而是趨勢股進入續強階段，操作上重點在於是否能守住短線支撐。"
+                "若後續未出現爆量長黑或高檔轉弱訊號，短線仍偏向多方優勢。"
             ),
         }
 
@@ -344,10 +358,10 @@ def build_signal_and_reason(
         return {
             "signal": "穩健走高",
             "reason": (
-                "個股今日呈現穩步墊高格局，雖非急漲型走勢，"
-                "但日內波動控制得宜，收盤仍能守在相對高位，反映買盤承接結構穩定。"
-                "此類型個股通常具備較佳的趨勢延續基礎，後續若量能進一步增溫，"
-                "有機會由溫和走強轉入更明確的上攻段。"
+                "個股今日屬於穩步墊高格局，雖非急攻型走勢，但收盤仍能守在相對高位，"
+                "顯示買盤承接結構穩定，盤勢偏向健康上行。"
+                "這類個股往往具備較佳的趨勢延續條件，若接下來量能逐步增溫，"
+                "有機會由溫和走強轉入更明確的攻擊段。"
             ),
         }
 
@@ -356,22 +370,22 @@ def build_signal_and_reason(
         return {
             "signal": "高檔換手",
             "reason": (
-                "個股盤中震盪幅度偏大，但成交量活絡且收盤仍守住相對高檔，"
-                "顯示高檔換手過程中，多方承接力道仍具優勢。"
-                "此類現象常見於強勢股整理過程，代表市場對該股關注度提升，"
-                "若後續能完成震盪整理並重新放量，仍有再度轉強的機會。"
+                "股價今日盤中震盪明顯，但成交量活絡且收盤仍守住高檔區，"
+                "顯示市場在相對高位進行換手，多方承接力尚未明顯失守。"
+                "這類型常出現在強勢股整理過程，反映短線獲利了結賣壓與新進買盤正在重新平衡。"
+                "若整理後能再次帶量上攻，後續仍有續強空間；反之若高檔失守，則需提防轉弱。"
             ),
         }
 
-    # 7. 整理待發
+    # 7. 區間盤整
     if -1 <= change_percent <= 1 and amplitude_pct <= 3:
         return {
-            "signal": "整理待發",
+            "signal": "區間盤整",
             "reason": (
-                "股價目前處於區間整理階段，日內波動有限，量價表現偏向均衡，"
-                "顯示市場觀望氣氛較濃，短線尚未出現明確方向性表態。"
-                "從籌碼與技術面角度來看，此類型個股重點不在當日強弱，"
-                "而在後續是否能透過量能增溫與價格突破，確認下一波趨勢的起動方向。"
+                "股價目前處於明顯整理格局，日內波動有限，量價表現相對均衡，"
+                "顯示市場短線觀望氣氛偏濃，尚未形成明確攻擊或破位訊號。"
+                "從分析角度來看，這類個股現階段重點不在追價，而在觀察後續是否能帶量突破區間上緣，"
+                "或跌破區間下緣來確認下一步方向。"
             ),
         }
 
@@ -380,10 +394,10 @@ def build_signal_and_reason(
         return {
             "signal": "籌碼換手",
             "reason": (
-                "個股今日呈現高波動但收盤漲跌幅收斂的型態，且成交量明顯放大，"
-                "反映市場多空分歧加劇，籌碼進入明顯換手階段。"
-                "這類走勢通常出現在波段轉折或方向醞釀期，"
-                "後續需觀察股價是向上突破整理區，還是轉弱跌破支撐，才能進一步確認趨勢方向。"
+                "個股今日盤中振幅偏大，但最終漲跌幅收斂，且成交量顯著放大，"
+                "反映多空雙方對價格認知分歧，市場正處於明顯籌碼換手階段。"
+                "這類走勢常見於波段方向即將重新選擇的前夕，後續需觀察股價究竟是向上突破整理壓力，"
+                "還是轉弱跌破支撐，才能確認下一段趨勢方向。"
             ),
         }
 
@@ -392,10 +406,11 @@ def build_signal_and_reason(
         return {
             "signal": "拉回整理",
             "reason": (
-                "股價今日出現明顯拉回，且收盤落在日內相對低檔區，"
-                "反映短線上方賣壓開始浮現，買盤承接意願偏保守。"
-                "不過量能尚未惡化至失控程度，較偏向漲多後的技術性整理，"
-                "後續若能於關鍵支撐附近止穩，仍有機會重新回到原有趨勢軌道。"
+                "股價今日出現明顯回檔，且收盤落在日內偏低區，顯示短線上方賣壓開始增加，"
+                "買盤承接態度轉趨保守。"
+                "不過目前量能尚未擴大到失控水位，因此較偏向漲多後的技術性整理，"
+                "未必代表趨勢完全翻空。"
+                "後續若能在關鍵支撐區附近止穩，仍有機會重新回到原本的上升節奏。"
             ),
         }
 
@@ -404,10 +419,10 @@ def build_signal_and_reason(
         return {
             "signal": "放量修正",
             "reason": (
-                "個股今日呈現放量下跌走勢，顯示市場調節賣壓顯著升溫，"
+                "個股今日呈現放量下跌格局，顯示市場調節賣壓明顯升溫，"
                 "價格重心同步下移，短線籌碼穩定度轉弱。"
-                "此類型通常代表部分資金開始獲利了結或避險退出，"
-                "在未出現量縮止穩或低檔承接轉強訊號前，短線宜採相對保守的評估。"
+                "這類型通常代表部分資金開始獲利了結，或市場對短線後勢轉趨保守。"
+                "在未看到量縮止穩、下影承接或重新站回關鍵價位之前，操作上宜先保持審慎。"
             ),
         }
 
@@ -416,10 +431,10 @@ def build_signal_and_reason(
         return {
             "signal": "弱勢破位",
             "reason": (
-                "股價今日出現明顯破位型下跌，跌幅擴大且伴隨大量成交，"
-                "代表市場恐慌性調節或停損賣壓同步湧現。"
-                "收盤貼近低檔顯示空方掌控力強，原有支撐結構已遭明顯破壞，"
-                "在未見有效止跌訊號之前，短線風險仍高，操作上應以風險控管為優先。"
+                "股價今日出現明顯破位下跌，跌幅擴大且伴隨大量成交，"
+                "代表市場恐慌性調節或停損賣壓同步湧現，原有支撐結構已遭到實質破壞。"
+                "收盤貼近低檔，說明空方掌控力仍強，短線尚未看到有效止跌訊號。"
+                "在技術面未出現重新站穩支撐或量縮止穩前，現階段不宜過早進場承接。"
             ),
         }
 
@@ -428,10 +443,11 @@ def build_signal_and_reason(
         return {
             "signal": "爆量震盪",
             "reason": (
-                "個股今日成交量明顯放大，且盤中振幅擴大，"
-                "顯示市場高度聚焦，但多空對價格認知差異亦顯著提升。"
-                "此類型常見於波段方向重新選擇前的重要轉折區，"
-                "後續應密切觀察是否由量增價揚確認轉強，或因失守支撐而轉入更明確的修正格局。"
+                "個股今日成交量顯著放大，且盤中振幅明顯擴大，"
+                "顯示市場高度聚焦，但多空對價格方向尚未取得一致共識。"
+                "這類型常出現在波段轉折或重大題材反應階段，短線雖有機會快速表態，"
+                "但同時也伴隨較高的追價風險。"
+                "後續需密切觀察是量增價揚確認轉強，還是失守支撐轉入更深修正。"
             ),
         }
 
@@ -440,10 +456,10 @@ def build_signal_and_reason(
         return {
             "signal": "弱中透穩",
             "reason": (
-                "股價今日雖小幅收低，但跌幅仍在可控範圍，且未見明顯恐慌性賣壓，"
-                "代表市場偏向觀望而非全面轉空。"
-                "此類型個股短線雖然動能不足，但若後續能在支撐區獲得承接，"
-                "仍有機會透過整理後重新累積向上反攻的條件。"
+                "股價今日雖小幅收低，但跌幅仍屬可控範圍，且未見明顯恐慌性賣壓，"
+                "代表市場偏向觀望，而非全面轉空。"
+                "這類型個股短線雖然動能不足，但若後續能在支撐區獲得穩定承接，"
+                "仍有機會透過整理重新累積反彈條件。"
             ),
         }
 
@@ -452,10 +468,10 @@ def build_signal_and_reason(
         return {
             "signal": "小幅偏多",
             "reason": (
-                "股價今日小幅收高，整體價格結構維持偏正向發展，"
-                "顯示短線買盤仍具一定支撐力。"
-                "雖然目前尚未達到強勢表態標準，但若後續可搭配量能放大與高檔續收，"
-                "則有機會進一步提升技術面評價，轉入更明確的偏多架構。"
+                "股價今日小幅收高，整體價格結構仍偏正向，"
+                "顯示短線買盤尚具一定支撐力。"
+                "雖然目前尚未形成強勢表態型態，但若後續能搭配量能放大、並持續守在相對高位，"
+                "則有機會由溫和走強逐步轉入更明確的偏多架構。"
             ),
         }
 
@@ -464,19 +480,18 @@ def build_signal_and_reason(
         return {
             "signal": "小幅偏空",
             "reason": (
-                "股價今日小幅收低，反映短線追價意願不足，盤面資金態度略趨保守。"
-                "現階段尚未形成明確破壞性轉弱，但若後續無法在支撐區看到穩定承接，"
+                "股價今日小幅收低，反映短線追價意願略顯不足，盤面資金態度偏向保守。"
+                "現階段雖尚未形成明顯破壞性轉弱，但若後續無法在支撐區見到穩定承接，"
                 "則需留意整理時間拉長，甚至再度測試前波低點的可能。"
             ),
         }
 
-    # 16. 中性觀望
     return {
         "signal": "中性觀望",
         "reason": (
             "個股目前缺乏明確方向訊號，量價結構尚未形成具辨識度的趨勢優勢，"
-            "短線仍以觀察後續資金流向、成交量變化與關鍵價位表現為主。"
-            "在未見有效突破或明顯轉弱之前，現階段評價暫維持中性。"
+            "短線仍應以觀察後續資金流向、成交量變化與關鍵價位表現為主。"
+            "在未見有效突破或明顯轉弱之前，現階段評價先維持中性。"
         ),
     }
 
@@ -486,6 +501,7 @@ def build_trade_plan(
     change_percent: float,
     high_price: float,
     low_price: float,
+    signal: str,
 ) -> Dict[str, str]:
     if price <= 0:
         return {
@@ -494,24 +510,103 @@ def build_trade_plan(
             "stop_loss": "",
         }
 
-    swing = max(high_price - low_price, price * 0.02)
-    entry_low = max(price - swing * 0.25, 0.01)
-    entry_high = price
+    intraday_range = max(high_price - low_price, 0.0)
+    base_buffer = max(price * 0.015, intraday_range * 0.35, 0.3)
+    wider_buffer = max(price * 0.025, intraday_range * 0.55, 0.5)
 
-    if change_percent >= 5:
-        target = price * 1.06
-        stop = price * 0.96
-    elif change_percent >= 0:
-        target = price * 1.04
-        stop = price * 0.97
-    else:
-        target = price * 1.03
-        stop = price * 0.95
+    bullish_signals = {
+        "強勢主升",
+        "放量突破",
+        "多方控盤",
+        "趨勢續強",
+        "穩健走高",
+        "高檔換手",
+        "小幅偏多",
+    }
+    bearish_signals = {
+        "放量修正",
+        "弱勢破位",
+        "小幅偏空",
+    }
+    neutral_signals = {
+        "區間盤整",
+        "籌碼換手",
+        "爆量震盪",
+        "中性觀望",
+    }
+
+    # 偏多規劃
+    if signal in bullish_signals:
+        if signal == "強勢主升":
+            entry_low = price - wider_buffer
+            entry_high = price - base_buffer * 0.25
+            target_low = price * 1.05
+            target_high = price * 1.08
+            stop = price - wider_buffer * 1.05
+        elif signal == "放量突破":
+            entry_low = price - base_buffer * 1.2
+            entry_high = price
+            target_low = price * 1.04
+            target_high = price * 1.07
+            stop = price - wider_buffer * 0.95
+        elif signal == "高檔換手":
+            entry_low = max(low_price, price - base_buffer * 1.15)
+            entry_high = price - base_buffer * 0.1
+            target_low = price * 1.03
+            target_high = price * 1.06
+            stop = max(low_price - base_buffer * 0.35, price * 0.96)
+        else:
+            entry_low = max(low_price, price - base_buffer)
+            entry_high = price
+            target_low = price * 1.03
+            target_high = price * 1.06
+            stop = max(price - wider_buffer, price * 0.965)
+
+        return {
+            "entry_price": format_price_range(entry_low, entry_high),
+            "target_price": format_price_range(target_low, target_high),
+            "stop_loss": format_price_value(stop),
+        }
+
+    # 偏空 / 弱勢規劃
+    if signal in bearish_signals:
+        rebound_high = price + base_buffer
+        rebound_low = max(price, price + base_buffer * 0.2)
+        target_low = max(price - wider_buffer * 1.3, 0.01)
+        target_high = max(price - base_buffer * 0.4, target_low)
+        stop = price + wider_buffer
+
+        return {
+            "entry_price": format_price_range(rebound_low, rebound_high),
+            "target_price": format_price_range(target_low, target_high),
+            "stop_loss": format_price_value(stop),
+        }
+
+    # 盤整 / 觀察型
+    if signal in neutral_signals:
+        upper_ref = high_price if high_price > 0 else price * 1.02
+        lower_ref = low_price if low_price > 0 else price * 0.98
+        breakout_low = upper_ref
+        breakout_high = upper_ref + base_buffer * 0.6
+        stop = max(lower_ref - base_buffer * 0.35, 0.01)
+
+        return {
+            "entry_price": f"突破 {format_price_range(breakout_low, breakout_high)} 後再評估",
+            "target_price": format_price_range(upper_ref + base_buffer, upper_ref + wider_buffer * 1.2),
+            "stop_loss": format_price_value(stop),
+        }
+
+    # 其餘保守處理
+    entry_low = max(low_price, price - base_buffer)
+    entry_high = price
+    target_low = price * 1.03
+    target_high = price * 1.05
+    stop = max(price - wider_buffer, 0.01)
 
     return {
-        "entry_price": f"{round(entry_low, 2)} ~ {round(entry_high, 2)}",
-        "target_price": f"{round(target, 2)}",
-        "stop_loss": f"{round(stop, 2)}",
+        "entry_price": format_price_range(entry_low, entry_high),
+        "target_price": format_price_range(target_low, target_high),
+        "stop_loss": format_price_value(stop),
     }
 
 
@@ -604,6 +699,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         change_percent=change_percent,
         high_price=high_price,
         low_price=low_price,
+        signal=signal_info["signal"],
     )
 
     return {
