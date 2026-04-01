@@ -29,6 +29,7 @@ _CACHE: Dict[str, Any] = {
     "fetched_at": None,
     "data_date": "",
     "last_update": "",
+    "message": "",
 }
 CACHE_SECONDS = 20
 
@@ -244,13 +245,22 @@ def is_valid_stock_symbol(symbol: str, is_etf: bool) -> bool:
         return False
 
     if is_etf:
-        # ETF 常見：0050、00632R、00631L
         if len(s) in (4, 5, 6) and s[:4].isdigit():
             return True
         return False
 
-    # 一般上市 / 上櫃 / 興櫃股票：通常 4 碼數字
     return len(s) == 4 and s.isdigit()
+
+
+def merge_stock_lists(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    dedup: Dict[str, Dict[str, Any]] = {}
+    for group in groups:
+        for item in group:
+            symbol = safe_str(item.get("symbol"))
+            if not symbol:
+                continue
+            dedup[symbol] = item
+    return list(dedup.values())
 
 
 # =========================
@@ -1412,7 +1422,6 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     )
     trade_value = safe_int(row.get("tradeValue"))
 
-    # 修正興櫃數量：過濾低流動性 / 異常資料
     if market_label == "興櫃" and not is_etf:
         if volume < 100:
             return None
@@ -1536,11 +1545,13 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 # =========================
 # Market Data
 # =========================
-def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]]:
-    stock_client = get_stock_rest_client()
-
-    # 用 ALL 才能把 ETF 一起抓進來
-    resp = stock_client.snapshot.quotes(market=market, type="ALL")
+def fetch_snapshot_rows_by_type(
+    stock_client,
+    market: str,
+    market_label: str,
+    quote_type: str,
+) -> List[Dict[str, Any]]:
+    resp = stock_client.snapshot.quotes(market=market, type=quote_type)
     rows = extract_rows(resp)
 
     result: List[Dict[str, Any]] = []
@@ -1548,41 +1559,65 @@ def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]
         item = normalize_snapshot_row(row, market_label=market_label)
         if item:
             result.append(item)
+    return result
 
-    dedup = {}
-    for item in result:
-        dedup[item["symbol"]] = item
 
-    return list(dedup.values())
+def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]]:
+    stock_client = get_stock_rest_client()
+
+    common_rows: List[Dict[str, Any]] = []
+    other_rows: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    try:
+        common_rows = fetch_snapshot_rows_by_type(
+            stock_client=stock_client,
+            market=market,
+            market_label=market_label,
+            quote_type="COMMONSTOCK",
+        )
+    except Exception as e:
+        errors.append(f"{market_label}-COMMONSTOCK: {e}")
+
+    try:
+        other_rows = fetch_snapshot_rows_by_type(
+            stock_client=stock_client,
+            market=market,
+            market_label=market_label,
+            quote_type="ALLBUT0999",
+        )
+    except Exception as e:
+        errors.append(f"{market_label}-ALLBUT0999: {e}")
+
+    result = merge_stock_lists(common_rows, other_rows)
+
+    if not result and errors:
+        raise Exception("；".join(errors))
+
+    return result
 
 
 def get_all_stocks_raw() -> Dict[str, Any]:
     all_stocks: List[Dict[str, Any]] = []
     errors: List[str] = []
 
-    try:
-        all_stocks.extend(fetch_snapshot_market("TSE", "上市"))
-    except Exception as e:
-        errors.append(f"TSE 失敗: {e}")
+    market_jobs = [
+        ("TSE", "上市"),
+        ("OTC", "上櫃"),
+        ("ESB", "興櫃"),
+    ]
 
-    try:
-        all_stocks.extend(fetch_snapshot_market("OTC", "上櫃"))
-    except Exception as e:
-        errors.append(f"OTC 失敗: {e}")
+    for market_code, market_label in market_jobs:
+        try:
+            rows = fetch_snapshot_market(market_code, market_label)
+            all_stocks.extend(rows)
+        except Exception as e:
+            errors.append(f"{market_label} 失敗: {e}")
 
-    try:
-        all_stocks.extend(fetch_snapshot_market("ESB", "興櫃"))
-    except Exception as e:
-        errors.append(f"ESB 失敗: {e}")
+    stocks = merge_stock_lists(all_stocks)
 
-    dedup = {}
-    for item in all_stocks:
-        dedup[item["symbol"]] = item
-
-    stocks = list(dedup.values())
-
-    if not stocks and errors:
-        raise Exception("；".join(errors))
+    if not stocks:
+        raise Exception("；".join(errors) if errors else "目前無法取得任何市場資料")
 
     latest_raw = 0
     for s in stocks:
@@ -1595,6 +1630,7 @@ def get_all_stocks_raw() -> Dict[str, Any]:
         "stocks": stocks,
         "data_date": data_date,
         "last_update": last_update,
+        "message": "；".join(errors) if errors else "",
     }
 
 
@@ -1611,6 +1647,7 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
             "stocks": _CACHE["stocks"],
             "data_date": _CACHE["data_date"],
             "last_update": _CACHE["last_update"],
+            "message": _CACHE.get("message", ""),
         }
 
     result = get_all_stocks_raw()
@@ -1618,6 +1655,7 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
     _CACHE["fetched_at"] = now
     _CACHE["data_date"] = result["data_date"]
     _CACHE["last_update"] = result["last_update"]
+    _CACHE["message"] = result.get("message", "")
 
     return result
 
@@ -1841,7 +1879,7 @@ def get_stocks(
         filtered = sort_stocks(filtered, sort_by=sort_by, sort_dir=sort_dir)
 
         total_filtered = len(filtered)
-        paged = filtered[offset : offset + limit]
+        paged = filtered[offset: offset + limit]
 
         recs = build_recommendations(all_stocks, top_n=10)
         cats = build_categories(all_stocks)
@@ -1857,6 +1895,7 @@ def get_stocks(
             "market_status": get_market_status_text(),
             "data_date": result["data_date"],
             "last_update": result["last_update"],
+            "message": result.get("message", ""),
             "total": total_filtered,
             "offset": offset,
             "limit": limit,
