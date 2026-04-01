@@ -81,16 +81,10 @@ type ApiResponse = {
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 const BACKEND_URL = `${BACKEND_BASE}?limit=5000`;
 
-const MARKET_CATEGORIES = [
-  { key: "all", label: "全部" },
-  { key: "上市", label: "上市" },
-  { key: "上櫃", label: "上櫃" },
-  { key: "興櫃", label: "興櫃" },
-  { key: "ETF", label: "ETF" },
-] as const;
-
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
+  { key: "esb", label: "興櫃" },
+  { key: "etf", label: "ETF" },
   { key: "0-50", label: "0-50" },
   { key: "50-100", label: "50-100" },
   { key: "100-200", label: "100-200" },
@@ -98,7 +92,6 @@ const PRICE_CATEGORIES = [
   { key: "500+", label: "500+" },
 ] as const;
 
-type MarketKey = (typeof MARKET_CATEGORIES)[number]["key"];
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
@@ -149,6 +142,8 @@ function buildCategoryCounts(
 ): Record<CategoryKey, number> {
   const emptyCounts: Record<CategoryKey, number> = {
     all: stocks.length,
+    esb: stocks.filter((s) => s.market === "興櫃").length,
+    etf: stocks.filter((s) => s.market === "ETF").length,
     "0-50": 0,
     "50-100": 0,
     "100-200": 0,
@@ -158,6 +153,7 @@ function buildCategoryCounts(
 
   if (!backendCategories || backendCategories.length === 0) {
     for (const stock of stocks) {
+      if (stock.market === "興櫃" || stock.market === "ETF") continue;
       emptyCounts[getPriceCategory(stock.price)] += 1;
     }
     return emptyCounts;
@@ -170,6 +166,8 @@ function buildCategoryCounts(
 
   return {
     all: stocks.length,
+    esb: stocks.filter((s) => s.market === "興櫃").length,
+    etf: stocks.filter((s) => s.market === "ETF").length,
     "0-50":
       (backendMap.get("0-10") || 0) +
       (backendMap.get("10-20") || 0) +
@@ -180,16 +178,6 @@ function buildCategoryCounts(
     "500+":
       (backendMap.get("500-1000") || 0) +
       (backendMap.get("1000+") || 0),
-  };
-}
-
-function buildMarketCounts(stocks: Stock[]): Record<MarketKey, number> {
-  return {
-    all: stocks.length,
-    上市: stocks.filter((s) => s.market === "上市").length,
-    上櫃: stocks.filter((s) => s.market === "上櫃").length,
-    興櫃: stocks.filter((s) => s.market === "興櫃").length,
-    ETF: stocks.filter((s) => s.market === "ETF").length,
   };
 }
 
@@ -271,7 +259,6 @@ export default function Home() {
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedMarket, setSelectedMarket] = useState<MarketKey>("all");
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
@@ -364,25 +351,23 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [manualSelectedSymbol, searchTerm]);
 
-  const stocksByMarket = useMemo(() => {
-    if (selectedMarket === "all") return stocks;
-    return stocks.filter((stock) => stock.market === selectedMarket);
-  }, [stocks, selectedMarket]);
-
-  const marketCounts = useMemo(() => {
-    return buildMarketCounts(stocks);
-  }, [stocks]);
-
   const categoryCounts = useMemo(() => {
-    return buildCategoryCounts(stocksByMarket, backendCategories);
-  }, [stocksByMarket, backendCategories]);
+    return buildCategoryCounts(stocks, backendCategories);
+  }, [stocks, backendCategories]);
 
   const filteredStocks = useMemo(() => {
-    let result = [...stocksByMarket];
+    let result = [...stocks];
 
-    if (selectedCategory !== "all") {
+    if (selectedCategory === "esb") {
+      result = result.filter((stock) => stock.market === "興櫃");
+    } else if (selectedCategory === "etf") {
+      result = result.filter((stock) => stock.market === "ETF");
+    } else if (selectedCategory !== "all") {
       result = result.filter(
-        (stock) => getPriceCategory(stock.price) === selectedCategory
+        (stock) =>
+          stock.market !== "興櫃" &&
+          stock.market !== "ETF" &&
+          getPriceCategory(stock.price) === selectedCategory
       );
     }
 
@@ -408,11 +393,11 @@ export default function Home() {
     }
 
     return result;
-  }, [stocksByMarket, selectedCategory, searchTerm, rankType]);
+  }, [stocks, selectedCategory, searchTerm, rankType]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory, rankType, selectedMarket]);
+  }, [searchTerm, selectedCategory, rankType]);
 
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
 
@@ -433,22 +418,24 @@ export default function Home() {
   }, [currentPage, totalPages]);
 
   const recommendedStocks = useMemo(() => {
-    const source =
-      recommendations.length > 0 ? recommendations : [...stocks];
+    const source = recommendations.length > 0 ? recommendations : [...stocks];
 
-    const marketFiltered =
-      selectedMarket === "all"
-        ? source
-        : source.filter((stock) => stock.market === selectedMarket);
+    let result = [...source];
 
-    return [...marketFiltered]
+    if (selectedCategory === "esb") {
+      result = result.filter((stock) => stock.market === "興櫃");
+    } else if (selectedCategory === "etf") {
+      result = result.filter((stock) => stock.market === "ETF");
+    }
+
+    return result
       .sort(
         (a, b) =>
           (b.recommendation_score || b.score || 0) -
           (a.recommendation_score || a.score || 0)
       )
       .slice(0, 10);
-  }, [stocks, recommendations, selectedMarket]);
+  }, [stocks, recommendations, selectedCategory]);
 
   const autoFocusedStock = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
@@ -657,71 +644,10 @@ export default function Home() {
         >
           <div style={panelStyle}>
             <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>
-              股票分類
+              價格分類
             </h2>
 
-            <div style={{ marginBottom: "18px" }}>
-              <div
-                style={{
-                  fontSize: "14px",
-                  fontWeight: 800,
-                  color: "#9fc3f6",
-                  marginBottom: "10px",
-                }}
-              >
-                市場分類
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                  marginBottom: "14px",
-                }}
-              >
-                {MARKET_CATEGORIES.map((item) => {
-                  const active = selectedMarket === item.key;
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => setSelectedMarket(item.key)}
-                      style={{
-                        minWidth: isMobile ? "calc(50% - 5px)" : "104px",
-                        border: "none",
-                        borderRadius: "14px",
-                        padding: "12px 12px",
-                        fontSize: "15px",
-                        fontWeight: 800,
-                        cursor: "pointer",
-                        color: "#fff",
-                        background: active
-                          ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
-                          : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
-                        boxShadow: active
-                          ? "0 8px 22px rgba(80, 150, 255, 0.22)"
-                          : "none",
-                      }}
-                    >
-                      {item.label} ({marketCounts[item.key]})
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             <div style={{ marginBottom: "20px" }}>
-              <div
-                style={{
-                  fontSize: "14px",
-                  fontWeight: 800,
-                  color: "#9fc3f6",
-                  marginBottom: "10px",
-                }}
-              >
-                價格分類
-              </div>
-
               <div
                 style={{
                   display: "flex",
