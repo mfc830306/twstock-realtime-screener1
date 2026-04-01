@@ -919,7 +919,10 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         "C": 5,
         "D": 0,
     }
-    recommendation_score = round(base_recommendation_score + rating_bonus_map.get(strategy_info["operation_rating"], 0), 2)
+    recommendation_score = round(
+        base_recommendation_score + rating_bonus_map.get(strategy_info["operation_rating"], 0),
+        2,
+    )
 
     return {
         "market": market_label,
@@ -1118,7 +1121,11 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
 
     if key == "operation_rating":
         rating_order = {"A": 4, "B+": 3, "C": 2, "D": 1}
-        return sorted(stocks, key=lambda x: rating_order.get(x.get("operation_rating", ""), 0), reverse=reverse)
+        return sorted(
+            stocks,
+            key=lambda x: rating_order.get(x.get("operation_rating", ""), 0),
+            reverse=reverse,
+        )
 
     return sorted(stocks, key=lambda x: x.get(key, 0), reverse=reverse)
 
@@ -1257,7 +1264,6 @@ def get_stocks(
 
         recs = build_recommendations(all_stocks, top_n=10)
         cats = build_categories(all_stocks)
-
         focused = find_focused_stock(filtered, q)
 
         return {
