@@ -27,6 +27,7 @@ type Stock = {
   risk_note?: string;
   update_time?: string;
   analysis_source?: string;
+  is_etf?: boolean;
 };
 
 type FocusedStock = {
@@ -59,12 +60,6 @@ type BackendCategory = {
   count: number;
 };
 
-type BackendMarket = {
-  key: string;
-  label: string;
-  count: number;
-};
-
 type ApiResponse = {
   success: boolean;
   market_status?: string;
@@ -74,7 +69,6 @@ type ApiResponse = {
   stocks: Stock[];
   recommendations?: Stock[];
   categories?: BackendCategory[];
-  market_summary?: BackendMarket[];
   focused_stock?: FocusedStock | null;
   message?: string;
   source_summary?: {
@@ -95,15 +89,7 @@ const PRICE_CATEGORIES = [
   { key: "500+", label: "500+" },
 ] as const;
 
-const MARKET_OPTIONS = [
-  { key: "all", label: "全部市場" },
-  { key: "tse", label: "上市" },
-  { key: "otc", label: "上櫃" },
-  { key: "esb", label: "興櫃" },
-] as const;
-
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
-type MarketKey = (typeof MARKET_OPTIONS)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
 const ITEMS_PER_PAGE = 20;
@@ -187,37 +173,6 @@ function buildCategoryCounts(
   };
 }
 
-function buildMarketCounts(
-  stocks: Stock[],
-  backendMarkets?: BackendMarket[]
-): Record<MarketKey, number> {
-  const counts: Record<MarketKey, number> = {
-    all: stocks.length,
-    tse: 0,
-    otc: 0,
-    esb: 0,
-  };
-
-  if (backendMarkets && backendMarkets.length > 0) {
-    for (const item of backendMarkets) {
-      if (item.key === "上市") counts.tse = Number(item.count || 0);
-      if (item.key === "上櫃") counts.otc = Number(item.count || 0);
-      if (item.key === "興櫃") counts.esb = Number(item.count || 0);
-    }
-    counts.all = counts.tse + counts.otc + counts.esb;
-    return counts;
-  }
-
-  for (const stock of stocks) {
-    if (stock.market === "上市") counts.tse += 1;
-    else if (stock.market === "上櫃") counts.otc += 1;
-    else if (stock.market === "興櫃") counts.esb += 1;
-  }
-
-  counts.all = counts.tse + counts.otc + counts.esb;
-  return counts;
-}
-
 function normalizeStock(s: Stock): Stock {
   return {
     ...s,
@@ -292,14 +247,12 @@ export default function Home() {
   const [backendCategories, setBackendCategories] = useState<BackendCategory[]>(
     []
   );
-  const [backendMarkets, setBackendMarkets] = useState<BackendMarket[]>([]);
   const [marketStatus, setMarketStatus] = useState("-");
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryKey>("all");
-  const [selectedMarket, setSelectedMarket] = useState<MarketKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -326,7 +279,6 @@ export default function Home() {
       setStocks(safeStocks);
       setRecommendations(safeRecommendations);
       setBackendCategories(data.categories || []);
-      setBackendMarkets(data.market_summary || []);
       setMarketStatus(data.market_status || "-");
       setDataDate(
         data.data_date ||
@@ -348,12 +300,7 @@ export default function Home() {
     if (!q) return;
 
     try {
-      const params = new URLSearchParams();
-      params.set("limit", "1");
-      params.set("q", q);
-      if (selectedMarket !== "all") params.set("market", selectedMarket);
-
-      const url = `${BACKEND_BASE}?${params.toString()}`;
+      const url = `${BACKEND_BASE}?limit=1&q=${encodeURIComponent(q)}`;
       const res = await fetch(url, { cache: "no-store" });
       const data: ApiResponse = await res.json();
 
@@ -361,7 +308,7 @@ export default function Home() {
         setFocusedStock(data.focused_stock);
       }
     } catch {
-      // ignore
+      // 保持原本 focused 狀態
     }
   }
 
@@ -390,28 +337,14 @@ export default function Home() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [manualSelectedSymbol, searchTerm, selectedMarket]);
+  }, [manualSelectedSymbol, searchTerm]);
 
   const categoryCounts = useMemo(() => {
     return buildCategoryCounts(stocks, backendCategories);
   }, [stocks, backendCategories]);
 
-  const marketCounts = useMemo(() => {
-    return buildMarketCounts(stocks, backendMarkets);
-  }, [stocks, backendMarkets]);
-
   const filteredStocks = useMemo(() => {
     let result = [...stocks];
-
-    if (selectedMarket !== "all") {
-      const marketMap: Record<MarketKey, string> = {
-        all: "全部",
-        tse: "上市",
-        otc: "上櫃",
-        esb: "興櫃",
-      };
-      result = result.filter((stock) => stock.market === marketMap[selectedMarket]);
-    }
 
     if (selectedCategory !== "all") {
       result = result.filter(
@@ -441,11 +374,11 @@ export default function Home() {
     }
 
     return result;
-  }, [stocks, selectedMarket, selectedCategory, searchTerm, rankType]);
+  }, [stocks, selectedCategory, searchTerm, rankType]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory, selectedMarket, rankType]);
+  }, [searchTerm, selectedCategory, rankType]);
 
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
 
@@ -469,7 +402,6 @@ export default function Home() {
     if (recommendations.length > 0) return recommendations.slice(0, 10);
 
     return [...stocks]
-      .filter((stock) => stock.market !== "興櫃")
       .sort(
         (a, b) =>
           (b.recommendation_score || b.score || 0) -
@@ -693,43 +625,6 @@ export default function Home() {
                 display: "flex",
                 flexWrap: "wrap",
                 gap: "12px",
-                marginBottom: "18px",
-              }}
-            >
-              {MARKET_OPTIONS.map((item) => {
-                const active = selectedMarket === item.key;
-                return (
-                  <button
-                    key={item.key}
-                    onClick={() => setSelectedMarket(item.key)}
-                    style={{
-                      minWidth: isMobile ? "calc(50% - 6px)" : "118px",
-                      border: "none",
-                      borderRadius: "14px",
-                      padding: "12px 14px",
-                      fontSize: "14px",
-                      fontWeight: 800,
-                      cursor: "pointer",
-                      color: "#fff",
-                      background: active
-                        ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
-                        : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
-                      boxShadow: active
-                        ? "0 8px 22px rgba(80, 150, 255, 0.22)"
-                        : "none",
-                    }}
-                  >
-                    {item.label} ({marketCounts[item.key]})
-                  </button>
-                );
-              })}
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "12px",
                 marginBottom: "20px",
               }}
             >
@@ -768,7 +663,7 @@ export default function Home() {
                 setSearchTerm(e.target.value);
                 setManualSelectedSymbol("");
               }}
-              placeholder="搜尋股票代號 / 名稱"
+              placeholder="搜尋股票代號 / 名稱 / ETF"
               style={{
                 width: "100%",
                 height: "46px",
@@ -819,10 +714,12 @@ export default function Home() {
               <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
                 交易模式說明
               </div>
+              <div>• 已移除上方市場按鈕區</div>
+              <div>• 已加入 ETF</div>
+              <div>• 已修正興櫃數量異常問題</div>
               <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
               <div>• 點擊推薦股或列表股，也可直接切換分析</div>
               <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
-              <div>• 已加入：上市 / 上櫃 / 興櫃 切換</div>
             </div>
           </div>
 
@@ -927,8 +824,17 @@ export default function Home() {
                             </span>
                           )}
 
-                          <span style={{ fontWeight: 700, color: "#dce9ff" }}>
-                            市場 {stock.market || "-"}
+                          <span
+                            style={{
+                              background: "rgba(255,255,255,0.08)",
+                              borderRadius: "999px",
+                              padding: "5px 10px",
+                              fontSize: "14px",
+                              fontWeight: 800,
+                              color: "#dbe8ff",
+                            }}
+                          >
+                            {stock.market || "-"}
                           </span>
 
                           <span style={{ fontWeight: 700, color: "#dce9ff" }}>
@@ -966,7 +872,7 @@ export default function Home() {
                       }}
                     >
                       {stock.reason ||
-                        "股價維持開高走高格局，收盤於當日高檔附近，買盤承接力道偏強，漲幅擴大且動能明確，屬盤面強勢表態個股，成交量明顯放大。"}
+                        "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
                     </div>
 
                     <div
@@ -1515,7 +1421,8 @@ const analysisBlockTextStyle: React.CSSProperties = {
 };
 
 const tradePlanCardStyle: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
+  background:
+    "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
   border: "1px solid rgba(108,162,255,0.16)",
   borderRadius: "16px",
   padding: "14px 16px",
