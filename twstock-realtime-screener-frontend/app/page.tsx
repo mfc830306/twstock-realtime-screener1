@@ -71,6 +71,7 @@ type ApiResponse = {
   categories?: BackendCategory[];
   focused_stock?: FocusedStock | null;
   message?: string;
+  error?: string;
   source_summary?: {
     twse_data_date?: string;
     tpex_data_date?: string;
@@ -79,6 +80,14 @@ type ApiResponse = {
 
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 const BACKEND_URL = `${BACKEND_BASE}?limit=5000`;
+
+const MARKET_CATEGORIES = [
+  { key: "all", label: "全部" },
+  { key: "上市", label: "上市" },
+  { key: "上櫃", label: "上櫃" },
+  { key: "興櫃", label: "興櫃" },
+  { key: "ETF", label: "ETF" },
+] as const;
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -89,6 +98,7 @@ const PRICE_CATEGORIES = [
   { key: "500+", label: "500+" },
 ] as const;
 
+type MarketKey = (typeof MARKET_CATEGORIES)[number]["key"];
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
@@ -173,6 +183,16 @@ function buildCategoryCounts(
   };
 }
 
+function buildMarketCounts(stocks: Stock[]): Record<MarketKey, number> {
+  return {
+    all: stocks.length,
+    上市: stocks.filter((s) => s.market === "上市").length,
+    上櫃: stocks.filter((s) => s.market === "上櫃").length,
+    興櫃: stocks.filter((s) => s.market === "興櫃").length,
+    ETF: stocks.filter((s) => s.market === "ETF").length,
+  };
+}
+
 function normalizeStock(s: Stock): Stock {
   return {
     ...s,
@@ -251,6 +271,7 @@ export default function Home() {
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedMarket, setSelectedMarket] = useState<MarketKey>("all");
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
@@ -267,10 +288,14 @@ export default function Home() {
       setError("");
 
       const res = await fetch(BACKEND_URL, { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
       const data: ApiResponse = await res.json();
 
       if (!data.success) {
-        throw new Error(data.message || "取得資料失敗");
+        throw new Error(data.error || data.message || "取得資料失敗");
       }
 
       const safeStocks = (data.stocks || []).map(normalizeStock);
@@ -339,12 +364,21 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [manualSelectedSymbol, searchTerm]);
 
+  const stocksByMarket = useMemo(() => {
+    if (selectedMarket === "all") return stocks;
+    return stocks.filter((stock) => stock.market === selectedMarket);
+  }, [stocks, selectedMarket]);
+
+  const marketCounts = useMemo(() => {
+    return buildMarketCounts(stocks);
+  }, [stocks]);
+
   const categoryCounts = useMemo(() => {
-    return buildCategoryCounts(stocks, backendCategories);
-  }, [stocks, backendCategories]);
+    return buildCategoryCounts(stocksByMarket, backendCategories);
+  }, [stocksByMarket, backendCategories]);
 
   const filteredStocks = useMemo(() => {
-    let result = [...stocks];
+    let result = [...stocksByMarket];
 
     if (selectedCategory !== "all") {
       result = result.filter(
@@ -374,11 +408,11 @@ export default function Home() {
     }
 
     return result;
-  }, [stocks, selectedCategory, searchTerm, rankType]);
+  }, [stocksByMarket, selectedCategory, searchTerm, rankType]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedCategory, rankType]);
+  }, [searchTerm, selectedCategory, rankType, selectedMarket]);
 
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
 
@@ -399,16 +433,22 @@ export default function Home() {
   }, [currentPage, totalPages]);
 
   const recommendedStocks = useMemo(() => {
-    if (recommendations.length > 0) return recommendations.slice(0, 10);
+    const source =
+      recommendations.length > 0 ? recommendations : [...stocks];
 
-    return [...stocks]
+    const marketFiltered =
+      selectedMarket === "all"
+        ? source
+        : source.filter((stock) => stock.market === selectedMarket);
+
+    return [...marketFiltered]
       .sort(
         (a, b) =>
           (b.recommendation_score || b.score || 0) -
           (a.recommendation_score || a.score || 0)
       )
       .slice(0, 10);
-  }, [stocks, recommendations]);
+  }, [stocks, recommendations, selectedMarket]);
 
   const autoFocusedStock = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
@@ -609,7 +649,7 @@ export default function Home() {
             display: "grid",
             gridTemplateColumns: isMobile
               ? "1fr"
-              : "minmax(300px, 375px) minmax(0, 1fr)",
+              : "minmax(320px, 390px) minmax(0, 1fr)",
             gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
@@ -617,44 +657,106 @@ export default function Home() {
         >
           <div style={panelStyle}>
             <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>
-              價格分類
+              股票分類
             </h2>
 
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "12px",
-                marginBottom: "20px",
-              }}
-            >
-              {PRICE_CATEGORIES.map((item) => {
-                const active = selectedCategory === item.key;
-                return (
-                  <button
-                    key={item.key}
-                    onClick={() => setSelectedCategory(item.key)}
-                    style={{
-                      minWidth: isMobile ? "calc(50% - 6px)" : "118px",
-                      border: "none",
-                      borderRadius: "14px",
-                      padding: "14px 14px",
-                      fontSize: "15px",
-                      fontWeight: 800,
-                      cursor: "pointer",
-                      color: "#fff",
-                      background: active
-                        ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
-                        : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
-                      boxShadow: active
-                        ? "0 8px 22px rgba(80, 150, 255, 0.22)"
-                        : "none",
-                    }}
-                  >
-                    {item.label} ({categoryCounts[item.key]})
-                  </button>
-                );
-              })}
+            <div style={{ marginBottom: "18px" }}>
+              <div
+                style={{
+                  fontSize: "14px",
+                  fontWeight: 800,
+                  color: "#9fc3f6",
+                  marginBottom: "10px",
+                }}
+              >
+                市場分類
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                  marginBottom: "14px",
+                }}
+              >
+                {MARKET_CATEGORIES.map((item) => {
+                  const active = selectedMarket === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setSelectedMarket(item.key)}
+                      style={{
+                        minWidth: isMobile ? "calc(50% - 5px)" : "104px",
+                        border: "none",
+                        borderRadius: "14px",
+                        padding: "12px 12px",
+                        fontSize: "15px",
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        color: "#fff",
+                        background: active
+                          ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                          : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
+                        boxShadow: active
+                          ? "0 8px 22px rgba(80, 150, 255, 0.22)"
+                          : "none",
+                      }}
+                    >
+                      {item.label} ({marketCounts[item.key]})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: "20px" }}>
+              <div
+                style={{
+                  fontSize: "14px",
+                  fontWeight: 800,
+                  color: "#9fc3f6",
+                  marginBottom: "10px",
+                }}
+              >
+                價格分類
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "12px",
+                }}
+              >
+                {PRICE_CATEGORIES.map((item) => {
+                  const active = selectedCategory === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setSelectedCategory(item.key)}
+                      style={{
+                        minWidth: isMobile ? "calc(50% - 6px)" : "118px",
+                        border: "none",
+                        borderRadius: "14px",
+                        padding: "14px 14px",
+                        fontSize: "15px",
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        color: "#fff",
+                        background: active
+                          ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                          : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
+                        boxShadow: active
+                          ? "0 8px 22px rgba(80, 150, 255, 0.22)"
+                          : "none",
+                      }}
+                    >
+                      {item.label} ({categoryCounts[item.key]})
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <input
@@ -700,27 +802,6 @@ export default function Home() {
                 跌幅
               </button>
             </div>
-
-            <div
-              style={{
-                marginTop: "18px",
-                borderTop: "1px solid rgba(255,255,255,0.08)",
-                paddingTop: "16px",
-                color: "#d9e8ff",
-                lineHeight: 1.8,
-                fontSize: "14px",
-              }}
-            >
-              <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
-                交易模式說明
-              </div>
-              <div>• 已移除上方市場按鈕區</div>
-              <div>• 已加入 ETF</div>
-              <div>• 已修正興櫃數量異常問題</div>
-              <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
-              <div>• 點擊推薦股或列表股，也可直接切換分析</div>
-              <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
-            </div>
           </div>
 
           <div style={panelStyle}>
@@ -735,81 +816,106 @@ export default function Home() {
                 paddingRight: isMobile ? "0" : "6px",
               }}
             >
-              {recommendedStocks.map((stock) => {
-                const isUp = stock.change >= 0;
-                const changeColor = isUp ? "#ff4d4f" : "#00c853";
-                const isSelected = activeFocusedStock?.symbol === stock.symbol;
+              {recommendedStocks.length === 0 ? (
+                <div
+                  style={{
+                    color: "#cfe2ff",
+                    padding: "16px 4px",
+                    fontWeight: 700,
+                  }}
+                >
+                  目前沒有可顯示的推薦資料
+                </div>
+              ) : (
+                recommendedStocks.map((stock) => {
+                  const isUp = stock.change >= 0;
+                  const changeColor = isUp ? "#ff4d4f" : "#00c853";
+                  const isSelected = activeFocusedStock?.symbol === stock.symbol;
 
-                return (
-                  <div
-                    key={stock.symbol}
-                    onClick={() => {
-                      setManualSelectedSymbol(stock.symbol);
-                      setSearchTerm(stock.symbol);
-                    }}
-                    style={{
-                      background: isSelected
-                        ? "rgba(71, 126, 214, 0.48)"
-                        : "rgba(40, 87, 150, 0.45)",
-                      border: isSelected
-                        ? "1px solid rgba(120, 180, 255, 0.52)"
-                        : "1px solid rgba(86, 145, 228, 0.22)",
-                      borderRadius: "18px",
-                      padding: "16px 18px",
-                      marginBottom: "12px",
-                      cursor: "pointer",
-                      boxShadow: isSelected
-                        ? "0 0 0 1px rgba(120,180,255,0.25), 0 12px 24px rgba(0,0,0,0.18)"
-                        : "none",
-                      transition: "0.2s ease",
-                    }}
-                  >
+                  return (
                     <div
+                      key={stock.symbol}
+                      onClick={() => {
+                        setManualSelectedSymbol(stock.symbol);
+                        setSearchTerm(stock.symbol);
+                      }}
                       style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        gap: "12px",
-                        marginBottom: "10px",
-                        flexDirection: isMobile ? "column" : "row",
+                        background: isSelected
+                          ? "rgba(71, 126, 214, 0.48)"
+                          : "rgba(40, 87, 150, 0.45)",
+                        border: isSelected
+                          ? "1px solid rgba(120, 180, 255, 0.52)"
+                          : "1px solid rgba(86, 145, 228, 0.22)",
+                        borderRadius: "18px",
+                        padding: "16px 18px",
+                        marginBottom: "12px",
+                        cursor: "pointer",
+                        boxShadow: isSelected
+                          ? "0 0 0 1px rgba(120,180,255,0.25), 0 12px 24px rgba(0,0,0,0.18)"
+                          : "none",
+                        transition: "0.2s ease",
                       }}
                     >
-                      <div style={{ width: "100%" }}>
-                        <div
-                          style={{
-                            fontSize: isMobile ? "20px" : "22px",
-                            fontWeight: 900,
-                            marginBottom: "10px",
-                            color: "#7fb6ff",
-                          }}
-                        >
-                          {stock.symbol} {stock.name}
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: "14px",
-                            flexWrap: "wrap",
-                            alignItems: "center",
-                            marginBottom: "8px",
-                          }}
-                        >
-                          <span
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: "12px",
+                          marginBottom: "10px",
+                          flexDirection: isMobile ? "column" : "row",
+                        }}
+                      >
+                        <div style={{ width: "100%" }}>
+                          <div
                             style={{
-                              background: "rgba(255, 107, 107, 0.12)",
-                              border: "1px solid rgba(255, 107, 107, 0.28)",
-                              borderRadius: "999px",
-                              padding: "5px 10px",
-                              fontSize: "14px",
-                              fontWeight: 700,
-                              color: "#ff9c9c",
+                              fontSize: isMobile ? "20px" : "22px",
+                              fontWeight: 900,
+                              marginBottom: "10px",
+                              color: "#7fb6ff",
                             }}
                           >
-                            {stock.signal || "強勢多方"}
-                          </span>
+                            {stock.symbol} {stock.name}
+                          </div>
 
-                          {stock.operation_rating && (
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "14px",
+                              flexWrap: "wrap",
+                              alignItems: "center",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                background: "rgba(255, 107, 107, 0.12)",
+                                border: "1px solid rgba(255, 107, 107, 0.28)",
+                                borderRadius: "999px",
+                                padding: "5px 10px",
+                                fontSize: "14px",
+                                fontWeight: 700,
+                                color: "#ff9c9c",
+                              }}
+                            >
+                              {stock.signal || "強勢多方"}
+                            </span>
+
+                            {stock.operation_rating && (
+                              <span
+                                style={{
+                                  background: "rgba(255,255,255,0.08)",
+                                  borderRadius: "999px",
+                                  padding: "5px 10px",
+                                  fontSize: "14px",
+                                  fontWeight: 800,
+                                  color: getRatingColor(stock.operation_rating),
+                                }}
+                              >
+                                評級 {stock.operation_rating}
+                              </span>
+                            )}
+
                             <span
                               style={{
                                 background: "rgba(255,255,255,0.08)",
@@ -817,83 +923,70 @@ export default function Home() {
                                 padding: "5px 10px",
                                 fontSize: "14px",
                                 fontWeight: 800,
-                                color: getRatingColor(stock.operation_rating),
+                                color: "#dbe8ff",
                               }}
                             >
-                              評級 {stock.operation_rating}
+                              {stock.market || "-"}
                             </span>
-                          )}
 
-                          <span
-                            style={{
-                              background: "rgba(255,255,255,0.08)",
-                              borderRadius: "999px",
-                              padding: "5px 10px",
-                              fontSize: "14px",
-                              fontWeight: 800,
-                              color: "#dbe8ff",
-                            }}
-                          >
-                            {stock.market || "-"}
-                          </span>
+                            <span style={{ fontWeight: 700, color: "#dce9ff" }}>
+                              股價 {formatPrice(stock.price)}
+                            </span>
 
-                          <span style={{ fontWeight: 700, color: "#dce9ff" }}>
-                            股價 {formatPrice(stock.price)}
-                          </span>
+                            <span style={{ fontWeight: 900, color: changeColor }}>
+                              漲跌 {formatSigned(stock.change)}
+                            </span>
 
-                          <span style={{ fontWeight: 900, color: changeColor }}>
-                            漲跌 {formatSigned(stock.change)}
-                          </span>
+                            <span style={{ fontWeight: 900, color: changeColor }}>
+                              漲跌% {formatSigned(stock.change_percent)}%
+                            </span>
+                          </div>
+                        </div>
 
-                          <span style={{ fontWeight: 900, color: changeColor }}>
-                            漲跌% {formatSigned(stock.change_percent)}%
-                          </span>
+                        <div
+                          style={{
+                            color: "#ffd95f",
+                            fontSize: "18px",
+                            fontWeight: 900,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          分數 {stock.score ?? 0}
                         </div>
                       </div>
 
                       <div
                         style={{
-                          color: "#ffd95f",
-                          fontSize: "18px",
-                          fontWeight: 900,
-                          whiteSpace: "nowrap",
+                          color: "#dbe8ff",
+                          lineHeight: 1.8,
+                          fontSize: "15px",
+                          marginBottom: "10px",
                         }}
                       >
-                        分數 {stock.score ?? 0}
+                        {stock.reason ||
+                          "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "16px",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          color: "#9fc3f6",
+                          fontWeight: 800,
+                          fontSize: "15px",
+                        }}
+                      >
+                        <span>進場：{stock.entry_price || "-"}</span>
+                        <span>目標：{stock.target_price || "-"}</span>
+                        <span>停損：{stock.stop_loss || "-"}</span>
+                        <span>風報比：{stock.risk_reward || "-"}</span>
                       </div>
                     </div>
-
-                    <div
-                      style={{
-                        color: "#dbe8ff",
-                        lineHeight: 1.8,
-                        fontSize: "15px",
-                        marginBottom: "10px",
-                      }}
-                    >
-                      {stock.reason ||
-                        "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "16px",
-                        flexWrap: "wrap",
-                        alignItems: "center",
-                        color: "#9fc3f6",
-                        fontWeight: 800,
-                        fontSize: "15px",
-                      }}
-                    >
-                      <span>進場：{stock.entry_price || "-"}</span>
-                      <span>目標：{stock.target_price || "-"}</span>
-                      <span>停損：{stock.stop_loss || "-"}</span>
-                      <span>風報比：{stock.risk_reward || "-"}</span>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         </section>
@@ -1055,7 +1148,7 @@ export default function Home() {
             </div>
 
             <div style={analysisBlockStyle}>
-              <div style={analysisBlockTitleStyle}>操作策略</div>
+              <div style={analysisBlockTitleStyle}>操作戰略</div>
               <div style={analysisBlockTextStyle}>
                 {activeFocusedStock.strategy_action}
               </div>
