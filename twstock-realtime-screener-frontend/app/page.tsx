@@ -13,10 +13,43 @@ type Stock = {
   score?: number;
   recommendation_score?: number;
   signal?: string;
+  trend_type?: string;
   reason?: string;
+  technical_comment?: string;
+  operation_rating?: string;
+  operation_bias?: string;
+  operation_style?: string;
+  strategy_action?: string;
   entry_price?: string;
   target_price?: string;
   stop_loss?: string;
+  risk_reward?: string;
+  risk_note?: string;
+  update_time?: string;
+};
+
+type FocusedStock = {
+  symbol: string;
+  name: string;
+  market: string;
+  price: number;
+  change: number;
+  change_percent: number;
+  volume: number;
+  signal: string;
+  trend_type: string;
+  operation_rating: string;
+  operation_bias: string;
+  operation_style: string;
+  technical_comment: string;
+  analysis: string;
+  strategy_action: string;
+  entry_price: string;
+  target_price: string;
+  stop_loss: string;
+  risk_reward: string;
+  risk_note: string;
+  update_time: string;
 };
 
 type BackendCategory = {
@@ -34,6 +67,7 @@ type ApiResponse = {
   stocks: Stock[];
   recommendations?: Stock[];
   categories?: BackendCategory[];
+  focused_stock?: FocusedStock | null;
   message?: string;
   source_summary?: {
     twse_data_date?: string;
@@ -171,6 +205,40 @@ function getPageNumbers(currentPage: number, totalPages: number): number[] {
   return pages;
 }
 
+function stockToFocused(stock: Stock): FocusedStock {
+  return {
+    symbol: stock.symbol,
+    name: stock.name,
+    market: stock.market || "-",
+    price: Number(stock.price || 0),
+    change: Number(stock.change || 0),
+    change_percent: Number(stock.change_percent || 0),
+    volume: Number(stock.volume || 0),
+    signal: stock.signal || "-",
+    trend_type: stock.trend_type || "-",
+    operation_rating: stock.operation_rating || "-",
+    operation_bias: stock.operation_bias || "-",
+    operation_style: stock.operation_style || "-",
+    technical_comment: stock.technical_comment || stock.reason || "-",
+    analysis: stock.reason || "-",
+    strategy_action: stock.strategy_action || "-",
+    entry_price: stock.entry_price || "-",
+    target_price: stock.target_price || "-",
+    stop_loss: stock.stop_loss || "-",
+    risk_reward: stock.risk_reward || "-",
+    risk_note: stock.risk_note || "-",
+    update_time: stock.update_time || "-",
+  };
+}
+
+function getRatingColor(rating?: string) {
+  if (rating === "A") return "#ffd95f";
+  if (rating === "B+") return "#7ee787";
+  if (rating === "C") return "#7fb6ff";
+  if (rating === "D") return "#ff9c9c";
+  return "#dbe8ff";
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [recommendations, setRecommendations] = useState<Stock[]>([]);
@@ -188,6 +256,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
+  const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
 
   async function fetchStocks() {
     try {
@@ -215,6 +285,7 @@ export default function Home() {
           "-"
       );
       setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
+      setFocusedStock(data.focused_stock || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "載入失敗");
     } finally {
@@ -308,6 +379,40 @@ export default function Home() {
       )
       .slice(0, 10);
   }, [stocks, recommendations]);
+
+  const autoFocusedStock = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return null;
+
+    const exactSymbol = filteredStocks.find(
+      (stock) => stock.symbol.toLowerCase() === keyword
+    );
+    if (exactSymbol) return stockToFocused(exactSymbol);
+
+    const exactName = filteredStocks.find(
+      (stock) => stock.name.toLowerCase() === keyword
+    );
+    if (exactName) return stockToFocused(exactName);
+
+    if (filteredStocks.length === 1) {
+      return stockToFocused(filteredStocks[0]);
+    }
+
+    return null;
+  }, [filteredStocks, searchTerm]);
+
+  const manualFocusedStock = useMemo(() => {
+    if (!manualSelectedSymbol) return null;
+
+    const target =
+      stocks.find((stock) => stock.symbol === manualSelectedSymbol) ||
+      recommendations.find((stock) => stock.symbol === manualSelectedSymbol);
+
+    return target ? stockToFocused(target) : null;
+  }, [manualSelectedSymbol, stocks, recommendations]);
+
+  const activeFocusedStock =
+    autoFocusedStock || manualFocusedStock || focusedStock || null;
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
@@ -524,7 +629,10 @@ export default function Home() {
 
             <input
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setManualSelectedSymbol("");
+              }}
               placeholder="搜尋股票代號 / 名稱"
               style={{
                 width: "100%",
@@ -562,6 +670,24 @@ export default function Home() {
                 跌幅
               </button>
             </div>
+
+            <div
+              style={{
+                marginTop: "18px",
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+                paddingTop: "16px",
+                color: "#d9e8ff",
+                lineHeight: 1.8,
+                fontSize: "14px",
+              }}
+            >
+              <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
+                交易模式說明
+              </div>
+              <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
+              <div>• 點擊推薦股或列表股，也可直接切換分析</div>
+              <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
+            </div>
           </div>
 
           <div style={panelStyle}>
@@ -579,16 +705,30 @@ export default function Home() {
               {recommendedStocks.map((stock) => {
                 const isUp = stock.change >= 0;
                 const changeColor = isUp ? "#ff4d4f" : "#00c853";
+                const isSelected = activeFocusedStock?.symbol === stock.symbol;
 
                 return (
                   <div
                     key={stock.symbol}
+                    onClick={() => {
+                      setManualSelectedSymbol(stock.symbol);
+                      setSearchTerm(stock.symbol);
+                    }}
                     style={{
-                      background: "rgba(40, 87, 150, 0.45)",
-                      border: "1px solid rgba(86, 145, 228, 0.22)",
+                      background: isSelected
+                        ? "rgba(71, 126, 214, 0.48)"
+                        : "rgba(40, 87, 150, 0.45)",
+                      border: isSelected
+                        ? "1px solid rgba(120, 180, 255, 0.52)"
+                        : "1px solid rgba(86, 145, 228, 0.22)",
                       borderRadius: "18px",
                       padding: "16px 18px",
                       marginBottom: "12px",
+                      cursor: "pointer",
+                      boxShadow: isSelected
+                        ? "0 0 0 1px rgba(120,180,255,0.25), 0 12px 24px rgba(0,0,0,0.18)"
+                        : "none",
+                      transition: "0.2s ease",
                     }}
                   >
                     <div
@@ -635,6 +775,21 @@ export default function Home() {
                           >
                             {stock.signal || "強勢多方"}
                           </span>
+
+                          {stock.operation_rating && (
+                            <span
+                              style={{
+                                background: "rgba(255,255,255,0.08)",
+                                borderRadius: "999px",
+                                padding: "5px 10px",
+                                fontSize: "14px",
+                                fontWeight: 800,
+                                color: getRatingColor(stock.operation_rating),
+                              }}
+                            >
+                              評級 {stock.operation_rating}
+                            </span>
+                          )}
 
                           <span style={{ fontWeight: 700, color: "#dce9ff" }}>
                             股價 {formatPrice(stock.price)}
@@ -688,6 +843,7 @@ export default function Home() {
                       <span>進場：{stock.entry_price || "-"}</span>
                       <span>目標：{stock.target_price || "-"}</span>
                       <span>停損：{stock.stop_loss || "-"}</span>
+                      <span>風報比：{stock.risk_reward || "-"}</span>
                     </div>
                   </div>
                 );
@@ -695,6 +851,222 @@ export default function Home() {
             </div>
           </div>
         </section>
+
+        {activeFocusedStock && (
+          <section
+            style={{
+              marginBottom: "22px",
+              background: "linear-gradient(180deg, #102f63 0%, #0c2955 100%)",
+              border: "1px solid rgba(100,160,255,0.25)",
+              borderRadius: "22px",
+              padding: isMobile ? "18px" : "24px",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "flex-start" : "center",
+                gap: "12px",
+                flexDirection: isMobile ? "column" : "row",
+                marginBottom: "14px",
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    fontSize: "24px",
+                    fontWeight: 900,
+                    margin: 0,
+                    marginBottom: "8px",
+                  }}
+                >
+                  📊 個股專業分析
+                </h2>
+
+                <div
+                  style={{
+                    fontSize: isMobile ? "22px" : "26px",
+                    fontWeight: 900,
+                    color: "#7fb6ff",
+                  }}
+                >
+                  {activeFocusedStock.symbol} {activeFocusedStock.name}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
+                <span style={analysisTagStyle}>{activeFocusedStock.signal}</span>
+                <span style={analysisTagStyle}>
+                  {activeFocusedStock.trend_type}
+                </span>
+                <span
+                  style={{
+                    ...analysisTagStyle,
+                    color: getRatingColor(activeFocusedStock.operation_rating),
+                    borderColor: "rgba(255,255,255,0.16)",
+                  }}
+                >
+                  評級 {activeFocusedStock.operation_rating}
+                </span>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
+                gap: "12px",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>現價</div>
+                <div style={metricValueStyle}>{formatPrice(activeFocusedStock.price)}</div>
+              </div>
+
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>漲跌</div>
+                <div
+                  style={{
+                    ...metricValueStyle,
+                    color:
+                      activeFocusedStock.change >= 0 ? "#ff8b8b" : "#57e389",
+                  }}
+                >
+                  {formatSigned(activeFocusedStock.change)}
+                </div>
+              </div>
+
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>漲跌%</div>
+                <div
+                  style={{
+                    ...metricValueStyle,
+                    color:
+                      activeFocusedStock.change_percent >= 0
+                        ? "#ff8b8b"
+                        : "#57e389",
+                  }}
+                >
+                  {formatSigned(activeFocusedStock.change_percent)}%
+                </div>
+              </div>
+
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>成交量</div>
+                <div style={metricValueStyle}>
+                  {formatNumber(activeFocusedStock.volume)}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                gap: "14px",
+                marginBottom: "14px",
+              }}
+            >
+              <div style={analysisBlockStyle}>
+                <div style={analysisBlockTitleStyle}>操作方向</div>
+                <div style={analysisBlockTextStyle}>
+                  {activeFocusedStock.operation_bias} ｜{" "}
+                  {activeFocusedStock.operation_style}
+                </div>
+              </div>
+
+              <div style={analysisBlockStyle}>
+                <div style={analysisBlockTitleStyle}>更新時間</div>
+                <div style={analysisBlockTextStyle}>
+                  {activeFocusedStock.update_time || "-"}
+                </div>
+              </div>
+            </div>
+
+            <div style={analysisBlockStyle}>
+              <div style={analysisBlockTitleStyle}>技術分析</div>
+              <div style={analysisBlockTextStyle}>
+                {activeFocusedStock.technical_comment}
+              </div>
+            </div>
+
+            <div style={analysisBlockStyle}>
+              <div style={analysisBlockTitleStyle}>分析結論</div>
+              <div style={analysisBlockTextStyle}>
+                {activeFocusedStock.analysis}
+              </div>
+            </div>
+
+            <div style={analysisBlockStyle}>
+              <div style={analysisBlockTitleStyle}>操作策略</div>
+              <div style={analysisBlockTextStyle}>
+                {activeFocusedStock.strategy_action}
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
+                gap: "12px",
+                marginTop: "16px",
+              }}
+            >
+              <div style={tradePlanCardStyle}>
+                <div style={tradePlanLabelStyle}>建議進場</div>
+                <div style={tradePlanValueStyle}>
+                  {activeFocusedStock.entry_price || "-"}
+                </div>
+              </div>
+
+              <div style={tradePlanCardStyle}>
+                <div style={tradePlanLabelStyle}>目標價</div>
+                <div style={tradePlanValueStyle}>
+                  {activeFocusedStock.target_price || "-"}
+                </div>
+              </div>
+
+              <div style={tradePlanCardStyle}>
+                <div style={tradePlanLabelStyle}>停損價</div>
+                <div style={tradePlanValueStyle}>
+                  {activeFocusedStock.stop_loss || "-"}
+                </div>
+              </div>
+
+              <div style={tradePlanCardStyle}>
+                <div style={tradePlanLabelStyle}>風報比</div>
+                <div style={tradePlanValueStyle}>
+                  {activeFocusedStock.risk_reward || "-"}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginTop: "16px",
+                padding: "14px 16px",
+                borderRadius: "16px",
+                background: "rgba(255, 92, 92, 0.08)",
+                border: "1px solid rgba(255, 120, 120, 0.18)",
+                color: "#ffb4b4",
+                lineHeight: 1.8,
+                fontWeight: 700,
+              }}
+            >
+              ⚠️ 風險提醒：{activeFocusedStock.risk_note || "-"}
+            </div>
+          </section>
+        )}
 
         <section
           style={{
@@ -740,7 +1112,7 @@ export default function Home() {
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: "1080px",
+                minWidth: "1400px",
               }}
             >
               <thead>
@@ -755,7 +1127,10 @@ export default function Home() {
                   <th style={thStyle}>漲跌</th>
                   <th style={thStyle}>漲跌%</th>
                   <th style={thStyle}>成交量</th>
+                  <th style={thStyle}>訊號</th>
+                  <th style={thStyle}>評級</th>
                   <th style={thStyle}>分數</th>
+                  <th style={thStyle}>風報比</th>
                 </tr>
               </thead>
 
@@ -763,13 +1138,21 @@ export default function Home() {
                 {pagedStocks.map((stock) => {
                   const isUp = stock.change >= 0;
                   const color = isUp ? "#ff4d4f" : "#00c853";
+                  const isSelected = activeFocusedStock?.symbol === stock.symbol;
 
                   return (
                     <tr
                       key={stock.symbol}
+                      onClick={() => {
+                        setManualSelectedSymbol(stock.symbol);
+                        setSearchTerm(stock.symbol);
+                      }}
                       style={{
                         borderBottom: "1px solid rgba(255,255,255,0.08)",
-                        background: "rgba(8, 36, 76, 0.55)",
+                        background: isSelected
+                          ? "rgba(22, 71, 134, 0.88)"
+                          : "rgba(8, 36, 76, 0.55)",
+                        cursor: "pointer",
                       }}
                     >
                       <td style={tdStyle}>{stock.symbol}</td>
@@ -789,7 +1172,18 @@ export default function Home() {
                       </td>
 
                       <td style={tdStyle}>{formatNumber(stock.volume)}</td>
+                      <td style={tdStyle}>{stock.signal || "-"}</td>
+                      <td
+                        style={{
+                          ...tdStyle,
+                          color: getRatingColor(stock.operation_rating),
+                          fontWeight: 900,
+                        }}
+                      >
+                        {stock.operation_rating || "-"}
+                      </td>
                       <td style={tdStyle}>{stock.score ?? 0}</td>
+                      <td style={tdStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
                   );
                 })}
@@ -924,4 +1318,76 @@ const tdStyle: React.CSSProperties = {
   fontSize: "15px",
   fontWeight: 700,
 };
-        
+
+const analysisTagStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  padding: "6px 10px",
+  borderRadius: "999px",
+  fontWeight: 800,
+  color: "#dbe8ff",
+  fontSize: "14px",
+};
+
+const metricCardStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "16px",
+  padding: "14px 16px",
+};
+
+const metricLabelStyle: React.CSSProperties = {
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
+};
+
+const metricValueStyle: React.CSSProperties = {
+  color: "#ffffff",
+  fontSize: "22px",
+  fontWeight: 900,
+};
+
+const analysisBlockStyle: React.CSSProperties = {
+  marginTop: "12px",
+  padding: "14px 16px",
+  borderRadius: "16px",
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const analysisBlockTitleStyle: React.CSSProperties = {
+  color: "#7fb6ff",
+  fontSize: "15px",
+  fontWeight: 900,
+  marginBottom: "8px",
+};
+
+const analysisBlockTextStyle: React.CSSProperties = {
+  color: "#dbe8ff",
+  lineHeight: 1.85,
+  fontSize: "15px",
+  fontWeight: 700,
+};
+
+const tradePlanCardStyle: React.CSSProperties = {
+  background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
+  border: "1px solid rgba(108,162,255,0.16)",
+  borderRadius: "16px",
+  padding: "14px 16px",
+};
+
+const tradePlanLabelStyle: React.CSSProperties = {
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
+};
+
+const tradePlanValueStyle: React.CSSProperties = {
+  color: "#ffffff",
+  fontSize: "16px",
+  fontWeight: 900,
+  lineHeight: 1.6,
+};
