@@ -32,7 +32,6 @@ _CACHE: Dict[str, Any] = {
 }
 CACHE_SECONDS = 20
 
-# 歷史 K 線 / 技術分析快取
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 HISTORY_CACHE_HOURS = 6
 
@@ -229,6 +228,17 @@ def avg(values: List[float]) -> float:
 
 def clamp(v: float, low: float, high: float) -> float:
     return max(low, min(v, high))
+
+
+def format_number(num: float) -> str:
+    try:
+        if num is None or math.isnan(num):
+            return "-"
+    except Exception:
+        pass
+    if abs(num - int(num)) < 0.001:
+        return f"{int(num):,}"
+    return f"{num:,.2f}"
 
 
 # =========================
@@ -1098,24 +1108,13 @@ def build_historical_technical_comment(
 ) -> str:
     comments = [
         f"MA5 {format_price_value(ma5)} / MA10 {format_price_value(ma10)} / MA20 {format_price_value(ma20)}",
-        f"5日均量 {formatNumber(avg_vol5)} / 20日均量 {formatNumber(avg_vol20)}",
+        f"5日均量 {format_number(avg_vol5)} / 20日均量 {format_number(avg_vol20)}",
         f"RSI14 {rsi14:.2f}",
         f"MACD {macd_line:.3f} / Signal {signal_line:.3f} / Hist {macd_hist:.3f}",
         f"近20日高低區間 {format_price_value(low20)} ~ {format_price_value(high20)}",
         f"ATR14 {format_price_value(atr14)}",
     ]
     return "；".join(comments) + "。"
-
-
-def formatNumber(num: float) -> str:
-    try:
-        if num is None or math.isnan(num):
-            return "-"
-    except Exception:
-        pass
-    if abs(num - int(num)) < 0.001:
-        return f"{int(num):,}"
-    return f"{num:,.2f}"
 
 
 def build_historical_trade_plan(
@@ -1387,16 +1386,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         return base_stock
 
 
-def enrich_selected_stocks_with_history(stocks: List[Dict[str, Any]], max_count: int = 10) -> List[Dict[str, Any]]:
-    result: List[Dict[str, Any]] = []
-    for idx, stock in enumerate(stocks):
-        if idx < max_count:
-            result.append(build_historical_analysis_for_stock(stock))
-        else:
-            result.append(stock)
-    return result
-
-
 def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "symbol": stock.get("symbol", ""),
@@ -1593,7 +1582,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 # =========================
 def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]]:
     stock_client = get_stock_rest_client()
-    resp = stock_client.snapshot.quotes(market=market, type="ALLBUT0999")
+    resp = stock_client.snapshot.quotes(market=market, type="COMMONSTOCK")
     rows = extract_rows(resp)
 
     result: List[Dict[str, Any]] = []
@@ -1622,6 +1611,11 @@ def get_all_stocks_raw() -> Dict[str, Any]:
         all_stocks.extend(fetch_snapshot_market("OTC", "上櫃"))
     except Exception as e:
         errors.append(f"OTC 失敗: {e}")
+
+    try:
+        all_stocks.extend(fetch_snapshot_market("ESB", "興櫃"))
+    except Exception as e:
+        errors.append(f"ESB 失敗: {e}")
 
     dedup = {}
     for item in all_stocks:
@@ -1687,6 +1681,18 @@ def build_categories(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{"key": k, "label": k, "count": counts[k]} for k in order]
 
 
+def build_market_summary(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    order = ["上市", "上櫃", "興櫃"]
+    counts = {k: 0 for k in order}
+
+    for s in stocks:
+        market = safe_str(s.get("market"))
+        if market in counts:
+            counts[market] += 1
+
+    return [{"key": k, "label": k, "count": counts[k]} for k in order]
+
+
 def filter_stocks(
     stocks: List[Dict[str, Any]],
     market: str = "all",
@@ -1705,8 +1711,10 @@ def filter_stocks(
         market_map = {
             "tse": "上市",
             "otc": "上櫃",
+            "esb": "興櫃",
             "上市": "上市",
             "上櫃": "上櫃",
+            "興櫃": "興櫃",
         }
         target_market = market_map.get(market.lower(), market)
         result = [s for s in result if s.get("market") == target_market]
@@ -1759,7 +1767,7 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
     return sorted(stocks, key=lambda x: x.get(key, 0), reverse=reverse)
 
 
-def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
+def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10, exclude_esb: bool = False) -> List[Dict[str, Any]]:
     candidates = []
     for s in stocks:
         if s.get("is_etf", False):
@@ -1767,6 +1775,8 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
         if safe_float(s.get("price")) <= 0:
             continue
         if safe_int(s.get("volume")) <= 0:
+            continue
+        if exclude_esb and s.get("market") == "興櫃":
             continue
         candidates.append(s)
 
@@ -1778,8 +1788,12 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
         ),
         reverse=True,
     )
+
     top_items = candidates[:top_n]
-    return enrich_selected_stocks_with_history(top_items, max_count=top_n)
+    result = []
+    for stock in top_items:
+        result.append(build_historical_analysis_for_stock(stock))
+    return result
 
 
 def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[str, Any]]:
@@ -1893,19 +1907,17 @@ def get_stocks(
         total_filtered = len(filtered)
         paged = filtered[offset : offset + limit]
 
-        # 推薦 10 檔：做歷史 K 強化分析
-        recs = build_recommendations(all_stocks, top_n=10)
+        # 推薦預設仍排除興櫃，避免主推薦被興櫃噪音污染
+        recs = build_recommendations(all_stocks, top_n=10, exclude_esb=True)
 
-        # focused stock：若有明確單一個股，做真正 K 線分析
         focused = find_focused_stock(filtered, q)
         if focused:
             focused = build_historical_analysis_for_stock(focused)
-
-            # 同時把列表中對應那一檔覆蓋成完整分析，讓前端點擊後直接可用
             symbol = focused.get("symbol", "")
             paged = [focused if x.get("symbol") == symbol else x for x in paged]
 
         cats = build_categories(all_stocks)
+        market_summary = build_market_summary(all_stocks)
 
         return {
             "success": True,
@@ -1916,6 +1928,7 @@ def get_stocks(
             "offset": offset,
             "limit": limit,
             "categories": cats,
+            "market_summary": market_summary,
             "recommendations": [clean_stock_output(x) for x in recs],
             "focused_stock": build_focused_analysis(focused) if focused else None,
             "stocks": [clean_stock_output(x) for x in paged],
@@ -1928,5 +1941,6 @@ def get_stocks(
             "stocks": [],
             "recommendations": [],
             "categories": [],
+            "market_summary": [],
             "focused_stock": None,
         }
