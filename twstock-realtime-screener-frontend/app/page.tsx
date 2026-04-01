@@ -26,6 +26,7 @@ type Stock = {
   risk_reward?: string;
   risk_note?: string;
   update_time?: string;
+  analysis_source?: string;
 };
 
 type FocusedStock = {
@@ -75,8 +76,8 @@ type ApiResponse = {
   };
 };
 
-const BACKEND_URL =
-  "https://twstock-realtime-screener1.onrender.com/stocks?limit=5000";
+const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
+const BACKEND_URL = `${BACKEND_BASE}?limit=5000`;
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -293,6 +294,23 @@ export default function Home() {
     }
   }
 
+  async function fetchFocusedStock(keyword: string) {
+    const q = keyword.trim();
+    if (!q) return;
+
+    try {
+      const url = `${BACKEND_BASE}?limit=1&q=${encodeURIComponent(q)}`;
+      const res = await fetch(url, { cache: "no-store" });
+      const data: ApiResponse = await res.json();
+
+      if (data.success && data.focused_stock) {
+        setFocusedStock(data.focused_stock);
+      }
+    } catch {
+      // 保持原本 focused 狀態即可
+    }
+  }
+
   useEffect(() => {
     fetchStocks();
     const timer = setInterval(fetchStocks, 120000);
@@ -308,6 +326,17 @@ export default function Home() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    const keyword = manualSelectedSymbol || searchTerm.trim();
+    if (!keyword) return;
+
+    const timer = setTimeout(() => {
+      fetchFocusedStock(keyword);
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [manualSelectedSymbol, searchTerm]);
 
   const categoryCounts = useMemo(() => {
     return buildCategoryCounts(stocks, backendCategories);
@@ -412,7 +441,7 @@ export default function Home() {
   }, [manualSelectedSymbol, stocks, recommendations]);
 
   const activeFocusedStock =
-    autoFocusedStock || manualFocusedStock || focusedStock || null;
+    focusedStock || autoFocusedStock || manualFocusedStock || null;
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
