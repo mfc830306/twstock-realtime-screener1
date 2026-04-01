@@ -6,7 +6,9 @@ html {
   padding: 0;
   margin: 0;
   width: 100%;
+  min-width: 0;
   overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -14,6 +16,7 @@ body {
   margin: 0;
   width: 100%;
   min-width: 0;
+  min-height: 100vh;
   overflow-x: hidden;
   font-family:
     Arial,
@@ -23,6 +26,16 @@ body {
     sans-serif;
   background: #08264d;
   color: #ffffff;
+}
+
+#__next {
+  width: 100%;
+  min-width: 0;
+}
+
+main {
+  width: 100%;
+  min-width: 0;
 }
 
 a {
@@ -48,6 +61,14 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 
+input,
+textarea,
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 0;
+}
+
 img,
 svg,
 canvas,
@@ -58,6 +79,23 @@ video {
 
 table {
   border-spacing: 0;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  vertical-align: middle;
+}
+
+div,
+section,
+article,
+aside,
+header,
+footer,
+main,
+nav {
+  min-width: 0;
 }
 
 ::-webkit-scrollbar {
