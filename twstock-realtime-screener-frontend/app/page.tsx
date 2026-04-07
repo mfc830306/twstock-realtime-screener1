@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Stock = {
   market?: string;
@@ -79,7 +79,6 @@ type ApiResponse = {
 };
 
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
-const BACKEND_URL = `${BACKEND_BASE}?limit=5000`;
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -96,14 +95,6 @@ type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
 const ITEMS_PER_PAGE = 20;
-
-function getPriceCategory(price: number): CategoryKey {
-  if (price < 50) return "0-50";
-  if (price < 100) return "50-100";
-  if (price < 200) return "100-200";
-  if (price < 500) return "200-500";
-  return "500+";
-}
 
 function formatNumber(num?: number) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
@@ -134,51 +125,6 @@ function getMarketLightColor(status?: string) {
   if (status.includes("開盤")) return "#22c55e";
   if (status.includes("收盤")) return "#ef4444";
   return "#f59e0b";
-}
-
-function buildCategoryCounts(
-  stocks: Stock[],
-  backendCategories?: BackendCategory[]
-): Record<CategoryKey, number> {
-  const emptyCounts: Record<CategoryKey, number> = {
-    all: stocks.length,
-    esb: stocks.filter((s) => s.market === "興櫃").length,
-    etf: stocks.filter((s) => s.market === "ETF").length,
-    "0-50": 0,
-    "50-100": 0,
-    "100-200": 0,
-    "200-500": 0,
-    "500+": 0,
-  };
-
-  if (!backendCategories || backendCategories.length === 0) {
-    for (const stock of stocks) {
-      if (stock.market === "興櫃" || stock.market === "ETF") continue;
-      emptyCounts[getPriceCategory(stock.price)] += 1;
-    }
-    return emptyCounts;
-  }
-
-  const backendMap = new Map<string, number>();
-  for (const item of backendCategories) {
-    backendMap.set(item.key, Number(item.count || 0));
-  }
-
-  return {
-    all: stocks.length,
-    esb: stocks.filter((s) => s.market === "興櫃").length,
-    etf: stocks.filter((s) => s.market === "ETF").length,
-    "0-50":
-      (backendMap.get("0-10") || 0) +
-      (backendMap.get("10-20") || 0) +
-      (backendMap.get("20-50") || 0),
-    "50-100": backendMap.get("50-100") || 0,
-    "100-200": backendMap.get("100-200") || 0,
-    "200-500": backendMap.get("200-500") || 0,
-    "500+":
-      (backendMap.get("500-1000") || 0) +
-      (backendMap.get("1000+") || 0),
-  };
 }
 
 function normalizeStock(s: Stock): Stock {
@@ -249,6 +195,72 @@ function getRatingColor(rating?: string) {
   return "#dbe8ff";
 }
 
+function getCategoryQuery(category: CategoryKey): {
+  market?: string;
+  price_min?: number;
+  price_max?: number;
+} {
+  switch (category) {
+    case "esb":
+      return { market: "esb" };
+    case "etf":
+      return { market: "etf" };
+    case "0-50":
+      return { price_max: 50 };
+    case "50-100":
+      return { price_min: 50, price_max: 100 };
+    case "100-200":
+      return { price_min: 100, price_max: 200 };
+    case "200-500":
+      return { price_min: 200, price_max: 500 };
+    case "500+":
+      return { price_min: 500 };
+    default:
+      return {};
+  }
+}
+
+function getSortQuery(rankType: RankType): {
+  sort_by: string;
+  sort_dir: "asc" | "desc";
+} {
+  if (rankType === "up") {
+    return { sort_by: "change_percent", sort_dir: "desc" };
+  }
+  if (rankType === "down") {
+    return { sort_by: "change_percent", sort_dir: "asc" };
+  }
+  return { sort_by: "recommendation_score", sort_dir: "desc" };
+}
+
+function buildCategoryCountsFromBackend(
+  backendCategories: BackendCategory[],
+  allTotal: number,
+  esbTotal: number,
+  etfTotal: number
+): Record<CategoryKey, number> {
+  const backendMap = new Map<string, number>();
+  for (const item of backendCategories || []) {
+    backendMap.set(item.key, Number(item.count || 0));
+  }
+
+  return {
+    all: allTotal,
+    esb: esbTotal,
+    etf: etfTotal,
+    "0-50":
+      (backendMap.get("0-10") || 0) +
+      (backendMap.get("10-20") || 0) +
+      (backendMap.get("20-50") || 0),
+    "50-100": backendMap.get("50-100") || 0,
+    "100-200": backendMap.get("100-200") || 0,
+    "200-500": backendMap.get("200-500") || 0,
+    "500+":
+      (backendMap.get("500-1000") || 0) +
+      (backendMap.get("1000+") || 0),
+  };
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [recommendations, setRecommendations] = useState<Stock[]>([]);
@@ -259,6 +271,7 @@ export default function Home() {
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
@@ -268,67 +281,21 @@ export default function Home() {
   const [currentPage, setCurrentPage] = useState(1);
   const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
+  const [total, setTotal] = useState(0);
+  const [allTotal, setAllTotal] = useState(0);
+  const [esbTotal, setEsbTotal] = useState(0);
+  const [etfTotal, setEtfTotal] = useState(0);
 
-  async function fetchStocks() {
-    try {
-      setLoading(true);
-      setError("");
-
-      const res = await fetch(BACKEND_URL, { cache: "no-store" });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      const data: ApiResponse = await res.json();
-
-      if (!data.success) {
-        throw new Error(data.error || data.message || "取得資料失敗");
-      }
-
-      const safeStocks = (data.stocks || []).map(normalizeStock);
-      const safeRecommendations = (data.recommendations || []).map(normalizeStock);
-
-      setStocks(safeStocks);
-      setRecommendations(safeRecommendations);
-      setBackendCategories(data.categories || []);
-      setMarketStatus(data.market_status || "-");
-      setDataDate(
-        data.data_date ||
-          data.source_summary?.twse_data_date ||
-          data.source_summary?.tpex_data_date ||
-          "-"
-      );
-      setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
-      setFocusedStock(data.focused_stock || null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "載入失敗");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchFocusedStock(keyword: string) {
-    const q = keyword.trim();
-    if (!q) return;
-
-    try {
-      const url = `${BACKEND_BASE}?limit=1&q=${encodeURIComponent(q)}`;
-      const res = await fetch(url, { cache: "no-store" });
-      const data: ApiResponse = await res.json();
-
-      if (data.success && data.focused_stock) {
-        setFocusedStock(data.focused_stock);
-      }
-    } catch {
-      // 保持原本 focused 狀態
-    }
-  }
+  const initialLoadedRef = useRef(false);
 
   useEffect(() => {
-    fetchStocks();
-    const timer = setInterval(fetchStocks, 120000);
-    return () => clearInterval(timer);
-  }, []);
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+      setCurrentPage(1);
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -341,65 +308,191 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const keyword = manualSelectedSymbol || searchTerm.trim();
-    if (!keyword) return;
+    setCurrentPage(1);
+  }, [selectedCategory, rankType]);
 
-    const timer = setTimeout(() => {
-      fetchFocusedStock(keyword);
-    }, 350);
+  async function fetchCountsAndMeta() {
+    const [allRes, esbRes, etfRes] = await Promise.all([
+      fetch(`${BACKEND_BASE}?limit=1`, { cache: "no-store" }),
+      fetch(`${BACKEND_BASE}?limit=1&market=esb`, { cache: "no-store" }),
+      fetch(`${BACKEND_BASE}?limit=1&market=etf`, { cache: "no-store" }),
+    ]);
 
-    return () => clearTimeout(timer);
-  }, [manualSelectedSymbol, searchTerm]);
+    const [allData, esbData, etfData]: ApiResponse[] = await Promise.all([
+      allRes.json(),
+      esbRes.json(),
+      etfRes.json(),
+    ]);
 
-  const categoryCounts = useMemo(() => {
-    return buildCategoryCounts(stocks, backendCategories);
-  }, [stocks, backendCategories]);
-
-  const filteredStocks = useMemo(() => {
-    let result = [...stocks];
-
-    if (selectedCategory === "esb") {
-      result = result.filter((stock) => stock.market === "興櫃");
-    } else if (selectedCategory === "etf") {
-      result = result.filter((stock) => stock.market === "ETF");
-    } else if (selectedCategory !== "all") {
-      result = result.filter(
-        (stock) =>
-          stock.market !== "興櫃" &&
-          stock.market !== "ETF" &&
-          getPriceCategory(stock.price) === selectedCategory
-      );
+    if (!allData.success) {
+      throw new Error(allData.error || allData.message || "取得總資料失敗");
     }
 
-    if (searchTerm.trim()) {
-      const keyword = searchTerm.trim().toLowerCase();
-      result = result.filter(
-        (stock) =>
-          stock.symbol.toLowerCase().includes(keyword) ||
-          stock.name.toLowerCase().includes(keyword)
-      );
+    setBackendCategories(allData.categories || []);
+    setMarketStatus(allData.market_status || "-");
+    setDataDate(
+      allData.data_date ||
+        allData.source_summary?.twse_data_date ||
+        allData.source_summary?.tpex_data_date ||
+        "-"
+    );
+    setLastUpdate(allData.last_update || new Date().toLocaleString("zh-TW"));
+    setAllTotal(Number(allData.total || 0));
+    setEsbTotal(Number(esbData.total || 0));
+    setEtfTotal(Number(etfData.total || 0));
+  }
+
+  async function fetchRecommendations() {
+    const categoryQuery = getCategoryQuery(selectedCategory);
+    const params = new URLSearchParams({
+      limit: "10",
+      offset: "0",
+      sort_by: "recommendation_score",
+      sort_dir: "desc",
+    });
+
+    if (categoryQuery.market) params.set("market", categoryQuery.market);
+    if (categoryQuery.price_min !== undefined) {
+      params.set("price_min", String(categoryQuery.price_min));
+    }
+    if (categoryQuery.price_max !== undefined) {
+      params.set("price_max", String(categoryQuery.price_max));
     }
 
-    if (rankType === "up") {
-      result.sort((a, b) => b.change_percent - a.change_percent);
-    } else if (rankType === "down") {
-      result.sort((a, b) => a.change_percent - b.change_percent);
-    } else {
-      result.sort(
-        (a, b) =>
-          (b.recommendation_score || b.score || 0) -
-          (a.recommendation_score || a.score || 0)
-      );
+    const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
+      cache: "no-store",
+    });
+    const data: ApiResponse = await res.json();
+
+    if (!data.success) {
+      throw new Error(data.error || data.message || "取得推薦資料失敗");
     }
 
-    return result;
-  }, [stocks, selectedCategory, searchTerm, rankType]);
+    const safeRecommendations = (data.recommendations || []).map(normalizeStock);
+    setRecommendations(safeRecommendations);
+  }
+
+  async function fetchPagedStocks() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const categoryQuery = getCategoryQuery(selectedCategory);
+      const sortQuery = getSortQuery(rankType);
+
+      const params = new URLSearchParams({
+        limit: String(ITEMS_PER_PAGE),
+        offset: String((currentPage - 1) * ITEMS_PER_PAGE),
+        sort_by: sortQuery.sort_by,
+        sort_dir: sortQuery.sort_dir,
+      });
+
+      if (debouncedSearchTerm) params.set("q", debouncedSearchTerm);
+      if (categoryQuery.market) params.set("market", categoryQuery.market);
+      if (categoryQuery.price_min !== undefined) {
+        params.set("price_min", String(categoryQuery.price_min));
+      }
+      if (categoryQuery.price_max !== undefined) {
+        params.set("price_max", String(categoryQuery.price_max));
+      }
+
+      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const data: ApiResponse = await res.json();
+
+      if (!data.success) {
+        throw new Error(data.error || data.message || "取得資料失敗");
+      }
+
+      const safeStocks = (data.stocks || []).map(normalizeStock);
+
+      setStocks(safeStocks);
+      setTotal(Number(data.total || 0));
+
+      setMarketStatus(data.market_status || "-");
+      setDataDate(
+        data.data_date ||
+          data.source_summary?.twse_data_date ||
+          data.source_summary?.tpex_data_date ||
+          "-"
+      );
+      setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
+
+      if (data.focused_stock) {
+        setFocusedStock(data.focused_stock);
+      } else if (!manualSelectedSymbol && !debouncedSearchTerm) {
+        setFocusedStock(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "載入失敗");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function fetchAllData() {
+    try {
+      setLoading(true);
+      setError("");
+
+      await Promise.all([
+        fetchCountsAndMeta(),
+        fetchRecommendations(),
+        fetchPagedStocks(),
+      ]);
+
+      initialLoadedRef.current = true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "載入失敗");
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, selectedCategory, rankType]);
+    fetchAllData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
+  useEffect(() => {
+    if (!initialLoadedRef.current) return;
+
+    fetchPagedStocks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, selectedCategory, rankType, debouncedSearchTerm]);
+
+  useEffect(() => {
+    if (!initialLoadedRef.current) return;
+    fetchRecommendations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategory]);
+
+  useEffect(() => {
+    if (!initialLoadedRef.current) return;
+
+    const timer = setInterval(() => {
+      fetchPagedStocks();
+    }, 120000);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, selectedCategory, rankType, debouncedSearchTerm]);
+
+  const categoryCounts = useMemo(() => {
+    return buildCategoryCountsFromBackend(
+      backendCategories,
+      allTotal,
+      esbTotal,
+      etfTotal
+    );
+  }, [backendCategories, allTotal, esbTotal, etfTotal]);
+
+  const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -407,69 +500,27 @@ export default function Home() {
     }
   }, [currentPage, totalPages]);
 
-  const pagedStocks = useMemo(() => {
-    const start = (currentPage - 1) * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    return filteredStocks.slice(start, end);
-  }, [filteredStocks, currentPage]);
-
   const pageNumbers = useMemo(() => {
     return getPageNumbers(currentPage, totalPages);
   }, [currentPage, totalPages]);
 
-  const recommendedStocks = useMemo(() => {
-    const source = recommendations.length > 0 ? recommendations : [...stocks];
+  const activeFocusedStock = useMemo(() => {
+    if (manualSelectedSymbol) {
+      const manualTarget =
+        stocks.find((stock) => stock.symbol === manualSelectedSymbol) ||
+        recommendations.find((stock) => stock.symbol === manualSelectedSymbol);
 
-    let result = [...source];
-
-    if (selectedCategory === "esb") {
-      result = result.filter((stock) => stock.market === "興櫃");
-    } else if (selectedCategory === "etf") {
-      result = result.filter((stock) => stock.market === "ETF");
+      if (manualTarget) return stockToFocused(manualTarget);
     }
 
-    return result
-      .sort(
-        (a, b) =>
-          (b.recommendation_score || b.score || 0) -
-          (a.recommendation_score || a.score || 0)
-      )
-      .slice(0, 10);
-  }, [stocks, recommendations, selectedCategory]);
+    if (focusedStock) return focusedStock;
 
-  const autoFocusedStock = useMemo(() => {
-    const keyword = searchTerm.trim().toLowerCase();
-    if (!keyword) return null;
-
-    const exactSymbol = filteredStocks.find(
-      (stock) => stock.symbol.toLowerCase() === keyword
-    );
-    if (exactSymbol) return stockToFocused(exactSymbol);
-
-    const exactName = filteredStocks.find(
-      (stock) => stock.name.toLowerCase() === keyword
-    );
-    if (exactName) return stockToFocused(exactName);
-
-    if (filteredStocks.length === 1) {
-      return stockToFocused(filteredStocks[0]);
+    if (debouncedSearchTerm && stocks.length === 1) {
+      return stockToFocused(stocks[0]);
     }
 
     return null;
-  }, [filteredStocks, searchTerm]);
-
-  const manualFocusedStock = useMemo(() => {
-    if (!manualSelectedSymbol) return null;
-
-    const target =
-      stocks.find((stock) => stock.symbol === manualSelectedSymbol) ||
-      recommendations.find((stock) => stock.symbol === manualSelectedSymbol);
-
-    return target ? stockToFocused(target) : null;
-  }, [manualSelectedSymbol, stocks, recommendations]);
-
-  const activeFocusedStock =
-    focusedStock || autoFocusedStock || manualFocusedStock || null;
+  }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
@@ -588,7 +639,7 @@ export default function Home() {
             </div>
 
             <button
-              onClick={fetchStocks}
+              onClick={fetchAllData}
               disabled={loading}
               style={{
                 border: "none",
@@ -660,7 +711,10 @@ export default function Home() {
                   return (
                     <button
                       key={item.key}
-                      onClick={() => setSelectedCategory(item.key)}
+                      onClick={() => {
+                        setSelectedCategory(item.key);
+                        setManualSelectedSymbol("");
+                      }}
                       style={{
                         minWidth: isMobile ? "calc(50% - 6px)" : "118px",
                         border: "none",
@@ -678,7 +732,7 @@ export default function Home() {
                           : "none",
                       }}
                     >
-                      {item.label} ({categoryCounts[item.key]})
+                      {item.label} ({categoryCounts[item.key] || 0})
                     </button>
                   );
                 })}
@@ -742,7 +796,7 @@ export default function Home() {
                 paddingRight: isMobile ? "0" : "6px",
               }}
             >
-              {recommendedStocks.length === 0 ? (
+              {recommendations.length === 0 ? (
                 <div
                   style={{
                     color: "#cfe2ff",
@@ -753,7 +807,7 @@ export default function Home() {
                   目前沒有可顯示的推薦資料
                 </div>
               ) : (
-                recommendedStocks.map((stock) => {
+                recommendations.map((stock) => {
                   const isUp = stock.change >= 0;
                   const changeColor = isUp ? "#ff4d4f" : "#00c853";
                   const isSelected = activeFocusedStock?.symbol === stock.symbol;
@@ -764,6 +818,7 @@ export default function Home() {
                       onClick={() => {
                         setManualSelectedSymbol(stock.symbol);
                         setSearchTerm(stock.symbol);
+                        setFocusedStock(stockToFocused(stock));
                       }}
                       style={{
                         background: isSelected
@@ -1154,7 +1209,7 @@ export default function Home() {
             }}
           >
             <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>
-              股票列表 ({filteredStocks.length})
+              股票列表 ({total})
             </h2>
 
             <div
@@ -1202,7 +1257,7 @@ export default function Home() {
               </thead>
 
               <tbody>
-                {pagedStocks.map((stock) => {
+                {stocks.map((stock) => {
                   const isUp = stock.change >= 0;
                   const color = isUp ? "#ff4d4f" : "#00c853";
                   const isSelected = activeFocusedStock?.symbol === stock.symbol;
@@ -1213,6 +1268,7 @@ export default function Home() {
                       onClick={() => {
                         setManualSelectedSymbol(stock.symbol);
                         setSearchTerm(stock.symbol);
+                        setFocusedStock(stockToFocused(stock));
                       }}
                       style={{
                         borderBottom: "1px solid rgba(255,255,255,0.08)",
