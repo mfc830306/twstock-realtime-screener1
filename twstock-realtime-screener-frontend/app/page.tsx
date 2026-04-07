@@ -344,7 +344,7 @@ export default function Home() {
 
   async function fetchRecommendations() {
     const params = new URLSearchParams({
-      limit: "10",
+      limit: "200",
       offset: "0",
       sort_by: "recommendation_score",
       sort_dir: "desc",
@@ -359,10 +359,14 @@ export default function Home() {
       throw new Error(data.error || data.message || "取得推薦資料失敗");
     }
 
-    const safeRecommendations = (data.recommendations || [])
-      .map(normalizeStock)
-      .filter(
-        (stock) => stock.market === "上市" || stock.market === "上櫃"
+    const source = (data.stocks || []).map(normalizeStock);
+
+    const safeRecommendations = source
+      .filter((stock) => stock.market === "上市" || stock.market === "上櫃")
+      .sort(
+        (a, b) =>
+          (b.recommendation_score || b.score || 0) -
+          (a.recommendation_score || a.score || 0)
       )
       .slice(0, 10);
 
