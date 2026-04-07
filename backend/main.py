@@ -263,6 +263,11 @@ def merge_stock_lists(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(dedup.values())
 
 
+def is_main_board_stock(s: Dict[str, Any]) -> bool:
+    market = safe_str(s.get("market"))
+    return market in ("上市", "上櫃")
+
+
 # =========================
 # Fubon SDK
 # =========================
@@ -1685,7 +1690,17 @@ def filter_stocks(
 ) -> List[Dict[str, Any]]:
     result = stocks
 
-    if market != "all":
+    market_lower = safe_str(market).lower()
+    has_price_filter = price_min > 0 or price_max > 0
+    has_category_filter = category != "all"
+
+    # 1. all 預設只看上市 + 上櫃
+    # 2. esb 只看興櫃
+    # 3. etf 只看 ETF
+    # 4. 價格分類不允許混入 興櫃 / ETF
+    if market_lower in ("all", ""):
+        result = [s for s in result if is_main_board_stock(s)]
+    else:
         market_map = {
             "tse": "上市",
             "otc": "上櫃",
@@ -1694,10 +1709,14 @@ def filter_stocks(
             "上市": "上市",
             "上櫃": "上櫃",
             "興櫃": "興櫃",
+            "etf": "ETF",
             "ETF": "ETF",
         }
-        target_market = market_map.get(market.lower(), market)
+        target_market = market_map.get(market_lower, market)
         result = [s for s in result if s.get("market") == target_market]
+
+    if (has_price_filter or has_category_filter) and market_lower not in ("esb", "etf"):
+        result = [s for s in result if is_main_board_stock(s)]
 
     if category != "all":
         result = [s for s in result if s.get("category") == category]
@@ -1750,6 +1769,8 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
     candidates = []
     for s in stocks:
+        if not is_main_board_stock(s):
+            continue
         if safe_float(s.get("price")) <= 0:
             continue
         if safe_int(s.get("volume")) <= 0:
@@ -1881,8 +1902,11 @@ def get_stocks(
         total_filtered = len(filtered)
         paged = filtered[offset: offset + limit]
 
-        recs = build_recommendations(all_stocks, top_n=10)
-        cats = build_categories(all_stocks)
+        recs = []
+        if offset == 0 and market == "all" and not q.strip():
+            recs = build_recommendations(all_stocks, top_n=10)
+
+        cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
         focused = find_focused_stock(filtered, q)
         if focused:
