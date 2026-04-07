@@ -1,6 +1,7 @@
 import os
 import math
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,7 +32,7 @@ _CACHE: Dict[str, Any] = {
     "last_update": "",
     "message": "",
 }
-CACHE_SECONDS = 20
+CACHE_SECONDS = 60  # 從 20 秒改為 60 秒，減少不必要的重抓
 
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 HISTORY_CACHE_HOURS = 6
@@ -132,18 +133,13 @@ def resolve_cert_path() -> Optional[str]:
 
 def get_market_status_text() -> str:
     now = now_taipei()
-
     if now.weekday() >= 5:
         return "休市"
-
     minutes = now.hour * 60 + now.minute
-
     if 9 * 60 <= minutes <= 13 * 60 + 30:
         return "開盤"
-
     if minutes > 13 * 60 + 30:
         return "收盤"
-
     return "休市"
 
 
@@ -231,7 +227,6 @@ def format_number(num: float) -> str:
 def is_etf_symbol(symbol: str, name: str) -> bool:
     s = safe_str(symbol)
     n = safe_str(name).upper()
-
     if s.startswith("00"):
         return True
     if "ETF" in n:
@@ -243,12 +238,10 @@ def is_valid_stock_symbol(symbol: str, is_etf: bool) -> bool:
     s = safe_str(symbol).upper()
     if not s:
         return False
-
     if is_etf:
         if len(s) in (4, 5, 6) and s[:4].isdigit():
             return True
         return False
-
     return len(s) == 4 and s.isdigit()
 
 
@@ -308,19 +301,15 @@ def ensure_fubon_sdk():
 
 def get_stock_rest_client():
     sdk = ensure_fubon_sdk()
-
     marketdata = getattr(sdk, "marketdata", None)
     if marketdata is None:
         raise Exception("sdk.marketdata 不存在")
-
     rest_client = getattr(marketdata, "rest_client", None)
     if rest_client is None:
         raise Exception("sdk.marketdata.rest_client 不存在")
-
     stock_client = getattr(rest_client, "stock", None)
     if stock_client is None:
         raise Exception("sdk.marketdata.rest_client.stock 不存在")
-
     return stock_client
 
 
@@ -330,7 +319,6 @@ def get_stock_rest_client():
 def extract_rows(resp: Any) -> List[Dict[str, Any]]:
     if isinstance(resp, list):
         return resp
-
     if isinstance(resp, dict):
         for key in ["data", "items", "rows", "quotes", "result"]:
             val = resp.get(key)
@@ -341,7 +329,6 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
                     subval = val.get(subkey)
                     if isinstance(subval, list):
                         return subval
-
     if hasattr(resp, "data"):
         data = getattr(resp, "data")
         if isinstance(data, list):
@@ -351,7 +338,6 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
                 val = data.get(key)
                 if isinstance(val, list):
                     return val
-
     return []
 
 
@@ -386,15 +372,11 @@ def build_signal_and_reason(
                 "代表盤中追價買盤積極，多方對價格的掌控力相當強。"
             ),
         }
-
     if change_percent >= 4 and heavy_volume and close_near_high:
         return {
             "signal": "放量突破",
-            "reason": (
-                "價格今日出現帶量上攻，且穩守高檔區，顯示突破並非虛漲，而是有實質買盤推動。"
-            ),
+            "reason": "價格今日出現帶量上攻，且穩守高檔區，顯示突破並非虛漲，而是有實質買盤推動。",
         }
-
     if change_percent >= 2 and gap_up and close_high:
         return {
             "signal": "多方控盤",
@@ -403,108 +385,69 @@ def build_signal_and_reason(
                 "反映多方在盤中節奏掌握上明顯占優。"
             ),
         }
-
     if change_percent >= 1.5 and heavy_volume and close_high and amplitude_pct <= 5:
         return {
             "signal": "趨勢續強",
-            "reason": (
-                "價格延續原有偏多結構，盤中雖有波動，但整體重心仍維持上移，且量能未明顯失真。"
-            ),
+            "reason": "價格延續原有偏多結構，盤中雖有波動，但整體重心仍維持上移，且量能未明顯失真。",
         }
-
     if change_percent > 1 and amplitude_pct <= 4 and close_high:
         return {
             "signal": "穩健走高",
-            "reason": (
-                "標的今日屬於穩步墊高格局，雖非急攻型走勢，但價格仍能守在相對高位，顯示買盤承接結構穩定。"
-            ),
+            "reason": "標的今日屬於穩步墊高格局，雖非急攻型走勢，但價格仍能守在相對高位，顯示買盤承接結構穩定。",
         }
-
     if change_percent >= 0 and amplitude_pct > 4 and heavy_volume and close_high:
         return {
             "signal": "高檔換手",
-            "reason": (
-                "價格今日盤中震盪明顯，但成交量活絡且仍守住高檔區，顯示市場在相對高位進行換手。"
-            ),
+            "reason": "價格今日盤中震盪明顯，但成交量活絡且仍守住高檔區，顯示市場在相對高位進行換手。",
         }
-
     if -1 <= change_percent <= 1 and amplitude_pct <= 3:
         return {
             "signal": "區間盤整",
-            "reason": (
-                "價格目前處於明顯整理格局，日內波動有限，量價表現相對均衡，尚未形成明確攻擊或破位訊號。"
-            ),
+            "reason": "價格目前處於明顯整理格局，日內波動有限，量價表現相對均衡，尚未形成明確攻擊或破位訊號。",
         }
-
     if -1 <= change_percent <= 1 and amplitude_pct > 4 and heavy_volume:
         return {
             "signal": "籌碼換手",
-            "reason": (
-                "標的今日盤中振幅偏大，但最終漲跌幅收斂，且成交量顯著放大，反映多空雙方對價格認知分歧。"
-            ),
+            "reason": "標的今日盤中振幅偏大，但最終漲跌幅收斂，且成交量顯著放大，反映多空雙方對價格認知分歧。",
         }
-
     if change_percent <= -2 and change_percent > -5 and close_low and not very_heavy_volume:
         return {
             "signal": "拉回整理",
-            "reason": (
-                "價格今日出現明顯回檔，且落在日內偏低區，顯示短線上方賣壓開始增加，但量能尚未失控。"
-            ),
+            "reason": "價格今日出現明顯回檔，且落在日內偏低區，顯示短線上方賣壓開始增加，但量能尚未失控。",
         }
-
     if change_percent <= -3 and heavy_volume:
         return {
             "signal": "放量修正",
-            "reason": (
-                "標的今日呈現放量下跌格局，顯示市場調節賣壓明顯升溫，短線籌碼穩定度轉弱。"
-            ),
+            "reason": "標的今日呈現放量下跌格局，顯示市場調節賣壓明顯升溫，短線籌碼穩定度轉弱。",
         }
-
     if change_percent <= -6 and very_heavy_volume and close_near_low:
         return {
             "signal": "弱勢破位",
-            "reason": (
-                "價格今日出現明顯破位下跌，跌幅擴大且伴隨大量成交，原有支撐結構已遭到實質破壞。"
-            ),
+            "reason": "價格今日出現明顯破位下跌，跌幅擴大且伴隨大量成交，原有支撐結構已遭到實質破壞。",
         }
-
     if extreme_volume and amplitude_pct >= 5:
         return {
             "signal": "爆量震盪",
-            "reason": (
-                "標的今日成交量顯著放大，且盤中振幅明顯擴大，顯示市場高度聚焦，但多空對方向尚未取得一致共識。"
-            ),
+            "reason": "標的今日成交量顯著放大，且盤中振幅明顯擴大，顯示市場高度聚焦，但多空對方向尚未取得一致共識。",
         }
-
     if change_percent < 0 and not heavy_volume and not close_near_low and amplitude_pct <= 4:
         return {
             "signal": "弱中透穩",
-            "reason": (
-                "價格今日雖小幅收低，但跌幅仍屬可控範圍，且未見明顯恐慌性賣壓，市場偏向觀望。"
-            ),
+            "reason": "價格今日雖小幅收低，但跌幅仍屬可控範圍，且未見明顯恐慌性賣壓，市場偏向觀望。",
         }
-
     if change_percent > 0:
         return {
             "signal": "小幅偏多",
-            "reason": (
-                "價格今日小幅收高，整體價格結構仍偏正向，顯示短線買盤尚具一定支撐力。"
-            ),
+            "reason": "價格今日小幅收高，整體價格結構仍偏正向，顯示短線買盤尚具一定支撐力。",
         }
-
     if change_percent < 0:
         return {
             "signal": "小幅偏空",
-            "reason": (
-                "價格今日小幅收低，反映短線追價意願略顯不足，盤面資金態度偏向保守。"
-            ),
+            "reason": "價格今日小幅收低，反映短線追價意願略顯不足，盤面資金態度偏向保守。",
         }
-
     return {
         "signal": "中性觀望",
-        "reason": (
-            "目前缺乏明確方向訊號，量價結構尚未形成具辨識度的趨勢優勢，短線仍應以觀察為主。"
-        ),
+        "reason": "目前缺乏明確方向訊號，量價結構尚未形成具辨識度的趨勢優勢，短線仍應以觀察為主。",
     }
 
 
@@ -558,7 +501,6 @@ def enrich_reason_with_context(
 
     if not extra:
         return base_reason + "。"
-
     return base_reason + "；" + "；".join(extra) + "。"
 
 
@@ -569,44 +511,18 @@ def build_trade_plan(
     signal: str,
 ) -> Dict[str, str]:
     if price <= 0:
-        return {
-            "entry_price": "",
-            "target_price": "",
-            "stop_loss": "",
-        }
+        return {"entry_price": "", "target_price": "", "stop_loss": ""}
 
     intraday_range = max(high_price - low_price, 0.0)
     base_buffer = max(price * 0.015, intraday_range * 0.35, 0.3)
     wider_buffer = max(price * 0.025, intraday_range * 0.55, 0.5)
 
     bullish_signals = {
-        "強勢主升",
-        "放量突破",
-        "多方控盤",
-        "趨勢續強",
-        "穩健走高",
-        "高檔換手",
-        "小幅偏多",
-        "多頭趨勢",
-        "主升段延續",
-        "整理後待突破",
-        "轉強反彈",
+        "強勢主升", "放量突破", "多方控盤", "趨勢續強", "穩健走高",
+        "高檔換手", "小幅偏多", "多頭趨勢", "主升段延續", "整理後待突破", "轉強反彈",
     }
-    bearish_signals = {
-        "放量修正",
-        "弱勢破位",
-        "小幅偏空",
-        "拉回整理",
-        "空頭趨勢",
-    }
-    neutral_signals = {
-        "區間盤整",
-        "籌碼換手",
-        "爆量震盪",
-        "中性觀望",
-        "弱中透穩",
-        "區間整理",
-    }
+    bearish_signals = {"放量修正", "弱勢破位", "小幅偏空", "拉回整理", "空頭趨勢"}
+    neutral_signals = {"區間盤整", "籌碼換手", "爆量震盪", "中性觀望", "弱中透穩", "區間整理"}
 
     if signal in bullish_signals:
         if signal in {"強勢主升", "主升段延續"}:
@@ -627,7 +543,6 @@ def build_trade_plan(
             target_low = price * 1.03
             target_high = price * 1.06
             stop = max(price - wider_buffer, price * 0.965)
-
         return {
             "entry_price": format_price_range(entry_low, entry_high),
             "target_price": format_price_range(target_low, target_high),
@@ -640,7 +555,6 @@ def build_trade_plan(
         target_low = max(price - wider_buffer * 1.3, 0.01)
         target_high = max(price - base_buffer * 0.4, target_low)
         stop = price + wider_buffer
-
         return {
             "entry_price": format_price_range(rebound_low, rebound_high),
             "target_price": format_price_range(target_low, target_high),
@@ -653,7 +567,6 @@ def build_trade_plan(
         breakout_low = upper_ref
         breakout_high = upper_ref + base_buffer * 0.6
         stop = max(lower_ref - base_buffer * 0.35, 0.01)
-
         return {
             "entry_price": f"突破 {format_price_range(breakout_low, breakout_high)} 後再評估",
             "target_price": format_price_range(upper_ref + base_buffer, upper_ref + wider_buffer * 1.2),
@@ -711,7 +624,6 @@ def build_strategy_and_risk(
         strategy_action = "目前訊號辨識度不足，先等結構更清楚再介入。"
 
     technical_points = []
-
     if pos >= 0.85:
         technical_points.append("價格維持於日內高檔區，顯示多方仍掌握主導權")
     elif pos <= 0.2:
@@ -741,27 +653,26 @@ def build_strategy_and_risk(
 
     technical_comment = "；".join(technical_points) + "。"
 
-    if signal in {"強勢主升", "主升段延續"}:
-        trend_type = "強勢趨勢延續"
-        risk_note = "短線已進入加速段，若後續量能失衡或跌破強勢支撐區，追價部位需快速收斂風險。"
-    elif signal in {"放量突破", "整理後待突破"}:
-        trend_type = "突破後續攻"
-        risk_note = "重點觀察突破區能否轉為有效支撐，若隔日迅速跌回原整理區，需提防假突破。"
-    elif signal in {"多方控盤", "多頭趨勢"}:
-        trend_type = "多方主導盤勢"
-        risk_note = "若後續失守開盤價與日內主要支撐，多方節奏可能轉弱，不宜過度樂觀。"
-    elif signal in {"趨勢續強", "穩健走高", "轉強反彈"}:
-        trend_type = "偏多續航"
-        risk_note = "雖仍偏多，但若量價開始背離，需留意由續強轉入震盪整理。"
-    elif signal == "高檔換手":
-        trend_type = "高位整理換手"
-        risk_note = "高檔區若無法完成整理並再度放量上攻，需提防轉入短線修正。"
+    trend_map = {
+        "強勢主升": ("強勢趨勢延續", "短線已進入加速段，若後續量能失衡或跌破強勢支撐區，追價部位需快速收斂風險。"),
+        "主升段延續": ("強勢趨勢延續", "短線已進入加速段，若後續量能失衡或跌破強勢支撐區，追價部位需快速收斂風險。"),
+        "放量突破": ("突破後續攻", "重點觀察突破區能否轉為有效支撐，若隔日迅速跌回原整理區，需提防假突破。"),
+        "整理後待突破": ("突破後續攻", "重點觀察突破區能否轉為有效支撐，若隔日迅速跌回原整理區，需提防假突破。"),
+        "多方控盤": ("多方主導盤勢", "若後續失守開盤價與日內主要支撐，多方節奏可能轉弱，不宜過度樂觀。"),
+        "多頭趨勢": ("多方主導盤勢", "若後續失守開盤價與日內主要支撐，多方節奏可能轉弱，不宜過度樂觀。"),
+        "趨勢續強": ("偏多續航", "雖仍偏多，但若量價開始背離，需留意由續強轉入震盪整理。"),
+        "穩健走高": ("偏多續航", "雖仍偏多，但若量價開始背離，需留意由續強轉入震盪整理。"),
+        "轉強反彈": ("偏多續航", "雖仍偏多，但若量價開始背離，需留意由續強轉入震盪整理。"),
+        "高檔換手": ("高位整理換手", "高檔區若無法完成整理並再度放量上攻，需提防轉入短線修正。"),
+        "拉回整理": ("整理修正", "若關鍵支撐無法止穩，整理可能延長，操作上不宜過早視為轉強。"),
+        "弱中透穩": ("整理修正", "若關鍵支撐無法止穩，整理可能延長，操作上不宜過早視為轉強。"),
+    }
+
+    if signal in trend_map:
+        trend_type, risk_note = trend_map[signal]
     elif signal in {"區間盤整", "籌碼換手", "爆量震盪", "區間整理"}:
         trend_type = "等待方向確認"
         risk_note = "現階段方向尚未完全明朗，應避免在區間中段頻繁追單，耐心等待表態。"
-    elif signal in {"拉回整理", "弱中透穩"}:
-        trend_type = "整理修正"
-        risk_note = "若關鍵支撐無法止穩，整理可能延長，操作上不宜過早視為轉強。"
     elif signal in {"放量修正", "弱勢破位", "小幅偏空", "空頭趨勢"}:
         trend_type = "弱勢結構"
         risk_note = "在未見量縮止穩、下影承接或重新站回關鍵價位前，應以保守控風險為優先。"
@@ -784,18 +695,13 @@ def calc_risk_reward(entry_price: str, target_price: str, stop_loss: str) -> str
     entry_mid = parse_range_mid(entry_price, 0.0)
     target_mid = parse_range_mid(target_price, 0.0)
     stop = safe_float(stop_loss, 0.0)
-
     if entry_mid <= 0 or target_mid <= 0 or stop <= 0:
         return ""
-
     reward = abs(target_mid - entry_mid)
     risk = abs(entry_mid - stop)
-
     if risk <= 0:
         return ""
-
-    ratio = reward / risk
-    return f"1:{ratio:.2f}"
+    return f"1:{reward / risk:.2f}"
 
 
 # =========================
@@ -805,22 +711,16 @@ def get_history_cache(symbol: str) -> Optional[Dict[str, Any]]:
     item = _HISTORY_CACHE.get(symbol)
     if not item:
         return None
-
     fetched_at = item.get("fetched_at")
     if not isinstance(fetched_at, datetime):
         return None
-
     if (now_taipei() - fetched_at).total_seconds() > HISTORY_CACHE_HOURS * 3600:
         return None
-
     return item.get("data")
 
 
 def set_history_cache(symbol: str, data: Dict[str, Any]) -> None:
-    _HISTORY_CACHE[symbol] = {
-        "fetched_at": now_taipei(),
-        "data": data,
-    }
+    _HISTORY_CACHE[symbol] = {"fetched_at": now_taipei(), "data": data}
 
 
 def ema(values: List[float], period: int) -> List[float]:
@@ -836,63 +736,46 @@ def ema(values: List[float], period: int) -> List[float]:
 def calc_rsi(closes: List[float], period: int = 14) -> float:
     if len(closes) <= period:
         return 50.0
-
-    gains = []
-    losses = []
+    gains, losses = [], []
     for i in range(1, len(closes)):
         diff = closes[i] - closes[i - 1]
         gains.append(max(diff, 0))
         losses.append(abs(min(diff, 0)))
-
     avg_gain = avg(gains[:period])
     avg_loss = avg(losses[:period])
-
     for i in range(period, len(gains)):
         avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
         avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
-
     if avg_loss == 0:
         return 100.0
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return 100 - (100 / (1 + avg_gain / avg_loss))
 
 
 def calc_macd(closes: List[float]) -> Tuple[float, float, float]:
     if len(closes) < 35:
         return 0.0, 0.0, 0.0
-
     ema12 = ema(closes, 12)
     ema26 = ema(closes, 26)
     macd_line_series = [a - b for a, b in zip(ema12, ema26)]
     signal_series = ema(macd_line_series, 9)
-
     macd_line = macd_line_series[-1]
     signal_line = signal_series[-1]
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
+    return macd_line, signal_line, macd_line - signal_line
 
 
 def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
     if len(candles) < 2:
         return 0.0
-
     trs: List[float] = []
     prev_close = safe_float(candles[0].get("close"))
     for c in candles[1:]:
         high = safe_float(c.get("high"))
         low = safe_float(c.get("low"))
         close = safe_float(c.get("close"))
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close),
-        )
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(max(tr, 0.0))
         prev_close = close
-
-    if not trs:
-        return 0.0
-    return avg(trs[-period:])
+    return avg(trs[-period:]) if trs else 0.0
 
 
 def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
@@ -901,37 +784,26 @@ def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
         return cached
 
     stock_client = get_stock_rest_client()
-
     to_date = now_taipei().strftime("%Y-%m-%d")
     from_date = (now_taipei() - timedelta(days=140)).strftime("%Y-%m-%d")
 
     resp = stock_client.historical.candles(
-        **{
-            "symbol": symbol,
-            "from": from_date,
-            "to": to_date,
-            "timeframe": "D",
-            "sort": "asc",
-        }
+        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
     )
-
     rows = extract_rows(resp)
     candles: List[Dict[str, Any]] = []
-
     for row in rows:
         if not isinstance(row, dict):
             continue
-        candles.append(
-            {
-                "date": safe_str(row.get("date")),
-                "open": safe_float(row.get("open")),
-                "high": safe_float(row.get("high")),
-                "low": safe_float(row.get("low")),
-                "close": safe_float(row.get("close")),
-                "volume": safe_int(row.get("volume")),
-                "change": safe_float(row.get("change")),
-            }
-        )
+        candles.append({
+            "date": safe_str(row.get("date")),
+            "open": safe_float(row.get("open")),
+            "high": safe_float(row.get("high")),
+            "low": safe_float(row.get("low")),
+            "close": safe_float(row.get("close")),
+            "volume": safe_int(row.get("volume")),
+            "change": safe_float(row.get("change")),
+        })
 
     candles = [x for x in candles if x["close"] > 0]
     if len(candles) > 120:
@@ -943,89 +815,40 @@ def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
 
 
 def classify_daily_pattern(
-    close_now: float,
-    ma5: float,
-    ma10: float,
-    ma20: float,
-    high20: float,
-    low20: float,
-    vol_ratio5: float,
-    rsi14: float,
-    macd_hist: float,
+    close_now: float, ma5: float, ma10: float, ma20: float,
+    high20: float, low20: float, vol_ratio5: float,
+    rsi14: float, macd_hist: float,
 ) -> Dict[str, str]:
     near_high20 = high20 > 0 and close_now >= high20 * 0.985
     near_low20 = low20 > 0 and close_now <= low20 * 1.02
 
     if close_now > ma5 > ma10 > ma20:
         if near_high20 and vol_ratio5 >= 1.15 and macd_hist > 0:
-            return {
-                "signal": "主升段延續",
-                "trend_type": "多頭趨勢強化",
-                "pattern": "沿均線上攻並逼近波段高點",
-            }
-        return {
-            "signal": "多頭趨勢",
-            "trend_type": "多頭排列",
-            "pattern": "均線多頭排列，屬趨勢延續型",
-        }
+            return {"signal": "主升段延續", "trend_type": "多頭趨勢強化", "pattern": "沿均線上攻並逼近波段高點"}
+        return {"signal": "多頭趨勢", "trend_type": "多頭排列", "pattern": "均線多頭排列，屬趨勢延續型"}
 
     if close_now > ma20 and ma5 >= ma10 and vol_ratio5 >= 1.05 and macd_hist > 0:
-        return {
-            "signal": "轉強反彈",
-            "trend_type": "由整理轉強",
-            "pattern": "重新站回中期均線，上攻結構改善",
-        }
+        return {"signal": "轉強反彈", "trend_type": "由整理轉強", "pattern": "重新站回中期均線，上攻結構改善"}
 
     if abs(close_now - ma20) / max(ma20, 1) <= 0.03 and 0.85 <= vol_ratio5 <= 1.2:
-        return {
-            "signal": "區間整理",
-            "trend_type": "橫向整理",
-            "pattern": "價格貼近中期均線，暫無明確方向",
-        }
+        return {"signal": "區間整理", "trend_type": "橫向整理", "pattern": "價格貼近中期均線，暫無明確方向"}
 
     if near_high20 and vol_ratio5 >= 1.2:
-        return {
-            "signal": "整理後待突破",
-            "trend_type": "挑戰壓力區",
-            "pattern": "價格接近波段高點，等待放量確認突破",
-        }
+        return {"signal": "整理後待突破", "trend_type": "挑戰壓力區", "pattern": "價格接近波段高點，等待放量確認突破"}
 
     if close_now < ma5 < ma10 < ma20:
-        return {
-            "signal": "空頭趨勢",
-            "trend_type": "空頭排列",
-            "pattern": "均線反壓明確，屬弱勢下行格局",
-        }
+        return {"signal": "空頭趨勢", "trend_type": "空頭排列", "pattern": "均線反壓明確，屬弱勢下行格局"}
 
     if near_low20 and rsi14 < 35:
-        return {
-            "signal": "拉回整理",
-            "trend_type": "低檔修正",
-            "pattern": "接近波段低點，需觀察是否出現止跌承接",
-        }
+        return {"signal": "拉回整理", "trend_type": "低檔修正", "pattern": "接近波段低點，需觀察是否出現止跌承接"}
 
-    return {
-        "signal": "中性觀望",
-        "trend_type": "結構待確認",
-        "pattern": "方向仍在整理，尚未出現明確突破訊號",
-    }
+    return {"signal": "中性觀望", "trend_type": "結構待確認", "pattern": "方向仍在整理，尚未出現明確突破訊號"}
 
 
 def build_historical_reason(
-    name: str,
-    close_now: float,
-    ma5: float,
-    ma10: float,
-    ma20: float,
-    high20: float,
-    low20: float,
-    vol_now: int,
-    avg_vol5: float,
-    rsi14: float,
-    macd_line: float,
-    signal_line: float,
-    macd_hist: float,
-    pattern_text: str,
+    name: str, close_now: float, ma5: float, ma10: float, ma20: float,
+    high20: float, low20: float, vol_now: int, avg_vol5: float,
+    rsi14: float, macd_line: float, signal_line: float, macd_hist: float, pattern_text: str,
 ) -> str:
     parts: List[str] = []
 
@@ -1085,43 +908,27 @@ def build_historical_reason(
         parts.append("MACD 正在收斂，代表趨勢可能進入轉折觀察期")
 
     parts.append(f"整體型態屬於「{pattern_text}」")
-
     return f"{name} 目前的日K結構顯示，" + "；".join(parts) + "。"
 
 
 def build_historical_technical_comment(
-    ma5: float,
-    ma10: float,
-    ma20: float,
-    avg_vol5: float,
-    avg_vol20: float,
-    rsi14: float,
-    macd_line: float,
-    signal_line: float,
-    macd_hist: float,
-    high20: float,
-    low20: float,
-    atr14: float,
+    ma5: float, ma10: float, ma20: float, avg_vol5: float, avg_vol20: float,
+    rsi14: float, macd_line: float, signal_line: float, macd_hist: float,
+    high20: float, low20: float, atr14: float,
 ) -> str:
-    comments = [
+    return "；".join([
         f"MA5 {format_price_value(ma5)} / MA10 {format_price_value(ma10)} / MA20 {format_price_value(ma20)}",
         f"5日均量 {format_number(avg_vol5)} / 20日均量 {format_number(avg_vol20)}",
         f"RSI14 {rsi14:.2f}",
         f"MACD {macd_line:.3f} / Signal {signal_line:.3f} / Hist {macd_hist:.3f}",
         f"近20日高低區間 {format_price_value(low20)} ~ {format_price_value(high20)}",
         f"ATR14 {format_price_value(atr14)}",
-    ]
-    return "；".join(comments) + "。"
+    ]) + "。"
 
 
 def build_historical_trade_plan(
-    price: float,
-    ma5: float,
-    ma20: float,
-    high20: float,
-    low20: float,
-    atr14: float,
-    signal: str,
+    price: float, ma5: float, ma20: float,
+    high20: float, low20: float, atr14: float, signal: str,
 ) -> Dict[str, str]:
     buffer_small = max(atr14 * 0.6, price * 0.012, 0.3)
     buffer_large = max(atr14 * 1.0, price * 0.022, 0.6)
@@ -1142,11 +949,9 @@ def build_historical_trade_plan(
         breakout_low = max(high20, price)
         breakout_high = breakout_low + buffer_small
         stop = max(ma20 - buffer_small, low20 - buffer_small * 0.3, 0.01)
-        target_low = breakout_high + buffer_small
-        target_high = breakout_high + buffer_large * 1.8
         return {
             "entry_price": f"突破 {format_price_range(breakout_low, breakout_high)} 後再評估",
-            "target_price": format_price_range(target_low, target_high),
+            "target_price": format_price_range(breakout_high + buffer_small, breakout_high + buffer_large * 1.8),
             "stop_loss": format_price_value(stop),
         }
 
@@ -1165,11 +970,9 @@ def build_historical_trade_plan(
     breakout_low = max(high20, price)
     breakout_high = breakout_low + buffer_small
     stop = max(low20 - buffer_small * 0.25, 0.01)
-    target_low = breakout_high + buffer_small
-    target_high = breakout_high + buffer_large
     return {
         "entry_price": f"突破 {format_price_range(breakout_low, breakout_high)} 後再評估",
-        "target_price": format_price_range(target_low, target_high),
+        "target_price": format_price_range(breakout_high + buffer_small, breakout_high + buffer_large),
         "stop_loss": format_price_value(stop),
     }
 
@@ -1183,7 +986,6 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "以靠近5日線或短線支撐區分批承接為主，若量能維持在5日均量之上，可續抱觀察波段延伸。",
             "risk_note": "若價格跌破5日線後無法迅速收復，或量能明顯萎縮，代表主升段節奏可能轉弱。",
         }
-
     if signal in {"轉強反彈", "整理後待突破"}:
         return {
             "operation_rating": "B+",
@@ -1192,7 +994,6 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "優先等待突破近20日高點或回測5日/10日線不破再介入，避免在壓力區正下方追價。",
             "risk_note": "若突破後量能未跟上，或重新跌回20日均線下方，需提防假突破與整理延長。",
         }
-
     if signal == "區間整理":
         return {
             "operation_rating": "C",
@@ -1201,7 +1002,6 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "目前較適合觀察區間上緣與下緣的表態結果，未突破前不建議在區間中段積極追單。",
             "risk_note": "整理盤最怕假突破與假跌破，若沒有量能確認，操作勝率通常不高。",
         }
-
     return {
         "operation_rating": "D",
         "operation_bias": "保守偏空",
@@ -1231,7 +1031,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             return base_stock
 
         close_now = safe_float(base_stock.get("price")) or closes[-1]
-
         ma5 = avg(closes[-5:])
         ma10 = avg(closes[-10:])
         ma20 = avg(closes[-20:])
@@ -1248,102 +1047,54 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         atr14 = calc_atr(candles, 14)
 
         pattern_info = classify_daily_pattern(
-            close_now=close_now,
-            ma5=ma5,
-            ma10=ma10,
-            ma20=ma20,
-            high20=high20,
-            low20=low20,
-            vol_ratio5=vol_ratio5,
-            rsi14=rsi14,
-            macd_hist=macd_hist,
+            close_now=close_now, ma5=ma5, ma10=ma10, ma20=ma20,
+            high20=high20, low20=low20, vol_ratio5=vol_ratio5,
+            rsi14=rsi14, macd_hist=macd_hist,
         )
 
         reason = build_historical_reason(
             name=safe_str(base_stock.get("name")),
-            close_now=close_now,
-            ma5=ma5,
-            ma10=ma10,
-            ma20=ma20,
-            high20=high20,
-            low20=low20,
-            vol_now=vol_now,
-            avg_vol5=avg_vol5,
-            rsi14=rsi14,
-            macd_line=macd_line,
-            signal_line=signal_line,
-            macd_hist=macd_hist,
-            pattern_text=pattern_info["pattern"],
+            close_now=close_now, ma5=ma5, ma10=ma10, ma20=ma20,
+            high20=high20, low20=low20, vol_now=vol_now, avg_vol5=avg_vol5,
+            rsi14=rsi14, macd_line=macd_line, signal_line=signal_line,
+            macd_hist=macd_hist, pattern_text=pattern_info["pattern"],
         )
-
         technical_comment = build_historical_technical_comment(
-            ma5=ma5,
-            ma10=ma10,
-            ma20=ma20,
-            avg_vol5=avg_vol5,
-            avg_vol20=avg_vol20,
-            rsi14=rsi14,
-            macd_line=macd_line,
-            signal_line=signal_line,
-            macd_hist=macd_hist,
-            high20=high20,
-            low20=low20,
-            atr14=atr14,
+            ma5=ma5, ma10=ma10, ma20=ma20, avg_vol5=avg_vol5, avg_vol20=avg_vol20,
+            rsi14=rsi14, macd_line=macd_line, signal_line=signal_line,
+            macd_hist=macd_hist, high20=high20, low20=low20, atr14=atr14,
         )
-
         plan = build_historical_trade_plan(
-            price=close_now,
-            ma5=ma5,
-            ma20=ma20,
-            high20=high20,
-            low20=low20,
-            atr14=atr14,
-            signal=pattern_info["signal"],
+            price=close_now, ma5=ma5, ma20=ma20, high20=high20,
+            low20=low20, atr14=atr14, signal=pattern_info["signal"],
         )
-
         strategy = build_historical_strategy(pattern_info["signal"])
+        risk_reward = calc_risk_reward(plan["entry_price"], plan["target_price"], plan["stop_loss"])
 
-        risk_reward = calc_risk_reward(
-            entry_price=plan["entry_price"],
-            target_price=plan["target_price"],
-            stop_loss=plan["stop_loss"],
-        )
-
-        bonus = 0.0
-        if pattern_info["signal"] == "主升段延續":
-            bonus += 24
-        elif pattern_info["signal"] == "多頭趨勢":
-            bonus += 18
-        elif pattern_info["signal"] in {"轉強反彈", "整理後待突破"}:
-            bonus += 12
-        elif pattern_info["signal"] == "區間整理":
-            bonus += 5
-
+        bonus_map = {"主升段延續": 24, "多頭趨勢": 18, "轉強反彈": 12, "整理後待突破": 12, "區間整理": 5}
+        bonus = bonus_map.get(pattern_info["signal"], 0.0)
         recommendation_score = round(
-            safe_float(base_stock.get("recommendation_score"), 0.0) + bonus + max((rsi14 - 50) * 0.18, -6),
-            2,
+            safe_float(base_stock.get("recommendation_score"), 0.0) + bonus + max((rsi14 - 50) * 0.18, -6), 2
         )
 
         merged = dict(base_stock)
-        merged.update(
-            {
-                "signal": pattern_info["signal"],
-                "trend_type": pattern_info["trend_type"],
-                "reason": reason,
-                "technical_comment": technical_comment,
-                "operation_rating": strategy["operation_rating"],
-                "operation_bias": strategy["operation_bias"],
-                "operation_style": strategy["operation_style"],
-                "strategy_action": strategy["strategy_action"],
-                "entry_price": plan["entry_price"],
-                "target_price": plan["target_price"],
-                "stop_loss": plan["stop_loss"],
-                "risk_reward": risk_reward,
-                "risk_note": strategy["risk_note"],
-                "recommendation_score": recommendation_score,
-                "analysis_source": "historical_k",
-            }
-        )
+        merged.update({
+            "signal": pattern_info["signal"],
+            "trend_type": pattern_info["trend_type"],
+            "reason": reason,
+            "technical_comment": technical_comment,
+            "operation_rating": strategy["operation_rating"],
+            "operation_bias": strategy["operation_bias"],
+            "operation_style": strategy["operation_style"],
+            "strategy_action": strategy["strategy_action"],
+            "entry_price": plan["entry_price"],
+            "target_price": plan["target_price"],
+            "stop_loss": plan["stop_loss"],
+            "risk_reward": risk_reward,
+            "risk_note": strategy["risk_note"],
+            "recommendation_score": recommendation_score,
+            "analysis_source": "historical_k",
+        })
         return merged
 
     except Exception:
@@ -1381,11 +1132,8 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         return None
 
     symbol = safe_str(
-        row.get("symbol")
-        or row.get("stockNo")
-        or row.get("stock_no")
-        or row.get("code")
-        or row.get("ticker")
+        row.get("symbol") or row.get("stockNo") or row.get("stock_no")
+        or row.get("code") or row.get("ticker")
     )
     if not symbol:
         return None
@@ -1397,11 +1145,8 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         return None
 
     price = safe_float(
-        row.get("lastPrice")
-        or row.get("closePrice")
-        or row.get("tradePrice")
-        or row.get("price")
-        or row.get("currentPrice")
+        row.get("lastPrice") or row.get("closePrice") or row.get("tradePrice")
+        or row.get("price") or row.get("currentPrice")
     )
     if price <= 0:
         return None
@@ -1419,18 +1164,13 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         change_percent = (change / previous_close) * 100
 
     volume = safe_int(
-        row.get("tradeVolume")
-        or row.get("volume")
-        or row.get("totalVolume")
-        or row.get("accumulatedVolume")
-        or row.get("tradeVolumeAtBid")
+        row.get("tradeVolume") or row.get("volume") or row.get("totalVolume")
+        or row.get("accumulatedVolume") or row.get("tradeVolumeAtBid")
     )
     trade_value = safe_int(row.get("tradeValue"))
 
     if market_label == "興櫃" and not is_etf:
-        if volume < 100:
-            return None
-        if price < 1:
+        if volume < 100 or price < 1:
             return None
 
     open_price = safe_float(row.get("openPrice"))
@@ -1439,80 +1179,40 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 
     update_time_raw = row.get("lastUpdated") or row.get("time") or 0
     update_time_str = micros_to_taipei_str(update_time_raw)
-
     category = price_category(price)
 
     liquidity_bonus = min(volume / 5000, 20)
     volatility_ratio = (max(high_price - low_price, 0) / max(price, 1)) * 10 if price > 0 else 0
     stability_penalty = min(volatility_ratio, 10)
-
     score = round(abs(change_percent) * 10 + min(volume / 100000, 50), 2)
-
     base_recommendation_score = max(
-        0.0,
-        abs(change_percent) * 6 + liquidity_bonus + 2 - stability_penalty * 0.3,
+        0.0, abs(change_percent) * 6 + liquidity_bonus + 2 - stability_penalty * 0.3
     )
 
     signal_info = build_signal_and_reason(
-        price=price,
-        change=change,
-        change_percent=change_percent,
-        volume=volume,
-        high_price=high_price,
-        low_price=low_price,
-        open_price=open_price,
-        previous_close=previous_close,
+        price=price, change=change, change_percent=change_percent,
+        volume=volume, high_price=high_price, low_price=low_price,
+        open_price=open_price, previous_close=previous_close,
     )
-
     final_reason = enrich_reason_with_context(
-        base_reason=signal_info["reason"],
-        price=price,
-        open_price=open_price,
-        high_price=high_price,
-        low_price=low_price,
-        change_percent=change_percent,
-        volume=volume,
-        previous_close=previous_close,
+        base_reason=signal_info["reason"], price=price, open_price=open_price,
+        high_price=high_price, low_price=low_price, change_percent=change_percent,
+        volume=volume, previous_close=previous_close,
     )
-
-    plan = build_trade_plan(
-        price=price,
-        high_price=high_price,
-        low_price=low_price,
-        signal=signal_info["signal"],
-    )
-
+    plan = build_trade_plan(price=price, high_price=high_price, low_price=low_price, signal=signal_info["signal"])
     strategy_info = build_strategy_and_risk(
-        signal=signal_info["signal"],
-        price=price,
-        open_price=open_price,
-        high_price=high_price,
-        low_price=low_price,
-        volume=volume,
-        previous_close=previous_close,
+        signal=signal_info["signal"], price=price, open_price=open_price,
+        high_price=high_price, low_price=low_price, volume=volume, previous_close=previous_close,
     )
+    risk_reward = calc_risk_reward(plan["entry_price"], plan["target_price"], plan["stop_loss"])
 
-    risk_reward = calc_risk_reward(
-        entry_price=plan["entry_price"],
-        target_price=plan["target_price"],
-        stop_loss=plan["stop_loss"],
-    )
-
-    rating_bonus_map = {
-        "A": 18,
-        "B+": 12,
-        "C": 5,
-        "D": 0,
-    }
+    rating_bonus_map = {"A": 18, "B+": 12, "C": 5, "D": 0}
     recommendation_score = round(
-        base_recommendation_score + rating_bonus_map.get(strategy_info["operation_rating"], 0),
-        2,
+        base_recommendation_score + rating_bonus_map.get(strategy_info["operation_rating"], 0), 2
     )
-
-    display_market = "ETF" if is_etf else market_label
 
     return {
-        "market": display_market,
+        "market": "ETF" if is_etf else market_label,
         "symbol": symbol,
         "name": name,
         "price": round(price, 2),
@@ -1551,14 +1251,10 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 # Market Data
 # =========================
 def fetch_snapshot_rows_by_type(
-    stock_client,
-    market: str,
-    market_label: str,
-    quote_type: str,
+    stock_client, market: str, market_label: str, quote_type: str,
 ) -> List[Dict[str, Any]]:
     resp = stock_client.snapshot.quotes(market=market, type=quote_type)
     rows = extract_rows(resp)
-
     result: List[Dict[str, Any]] = []
     for row in rows:
         item = normalize_snapshot_row(row, market_label=market_label)
@@ -1568,51 +1264,24 @@ def fetch_snapshot_rows_by_type(
 
 
 def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]]:
+    # 移除多餘的 COMMONSTOCK 查詢，ALLBUT0999 已涵蓋所有股票
     stock_client = get_stock_rest_client()
-
-    common_rows: List[Dict[str, Any]] = []
-    other_rows: List[Dict[str, Any]] = []
-    errors: List[str] = []
-
     try:
-        common_rows = fetch_snapshot_rows_by_type(
-            stock_client=stock_client,
-            market=market,
-            market_label=market_label,
-            quote_type="COMMONSTOCK",
-        )
-    except Exception as e:
-        errors.append(f"{market_label}-COMMONSTOCK: {e}")
-
-    try:
-        other_rows = fetch_snapshot_rows_by_type(
+        return fetch_snapshot_rows_by_type(
             stock_client=stock_client,
             market=market,
             market_label=market_label,
             quote_type="ALLBUT0999",
         )
     except Exception as e:
-        errors.append(f"{market_label}-ALLBUT0999: {e}")
-
-    result = merge_stock_lists(common_rows, other_rows)
-
-    if not result and errors:
-        raise Exception("；".join(errors))
-
-    return result
+        raise Exception(f"{market_label} snapshot 失敗: {e}")
 
 
 def get_all_stocks_raw() -> Dict[str, Any]:
     all_stocks: List[Dict[str, Any]] = []
     errors: List[str] = []
 
-    market_jobs = [
-        ("TSE", "上市"),
-        ("OTC", "上櫃"),
-        ("ESB", "興櫃"),
-    ]
-
-    for market_code, market_label in market_jobs:
+    for market_code, market_label in [("TSE", "上市"), ("OTC", "上櫃"), ("ESB", "興櫃")]:
         try:
             rows = fetch_snapshot_market(market_code, market_label)
             all_stocks.extend(rows)
@@ -1624,10 +1293,7 @@ def get_all_stocks_raw() -> Dict[str, Any]:
     if not stocks:
         raise Exception("；".join(errors) if errors else "目前無法取得任何市場資料")
 
-    latest_raw = 0
-    for s in stocks:
-        latest_raw = max(latest_raw, safe_int(s.get("update_time_raw")))
-
+    latest_raw = max((safe_int(s.get("update_time_raw")) for s in stocks), default=0)
     data_date = micros_to_date_str(latest_raw) if latest_raw else now_taipei().strftime("%Y%m%d")
     last_update = micros_to_taipei_str(latest_raw) if latest_raw else format_dt_taipei(now_taipei())
 
@@ -1661,7 +1327,6 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
     _CACHE["data_date"] = result["data_date"]
     _CACHE["last_update"] = result["last_update"]
     _CACHE["message"] = result.get("message", "")
-
     return result
 
 
@@ -1671,12 +1336,10 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
 def build_categories(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     order = ["0-10", "10-20", "20-50", "50-100", "100-200", "200-500", "500-1000", "1000+"]
     counts = {k: 0 for k in order}
-
     for s in stocks:
         c = s.get("category", "")
         if c in counts:
             counts[c] += 1
-
     return [{"key": k, "label": k, "count": counts[k]} for k in order]
 
 
@@ -1689,28 +1352,16 @@ def filter_stocks(
     price_max: float = 0.0,
 ) -> List[Dict[str, Any]]:
     result = stocks
-
     market_lower = safe_str(market).lower()
     has_price_filter = price_min > 0 or price_max > 0
     has_category_filter = category != "all"
 
-    # 1. all 預設只看上市 + 上櫃
-    # 2. esb 只看興櫃
-    # 3. etf 只看 ETF
-    # 4. 價格分類不允許混入 興櫃 / ETF
     if market_lower in ("all", ""):
         result = [s for s in result if is_main_board_stock(s)]
     else:
         market_map = {
-            "tse": "上市",
-            "otc": "上櫃",
-            "esb": "興櫃",
-            "etf": "ETF",
-            "上市": "上市",
-            "上櫃": "上櫃",
-            "興櫃": "興櫃",
-            "etf": "ETF",
-            "ETF": "ETF",
+            "tse": "上市", "otc": "上櫃", "esb": "興櫃",
+            "etf": "ETF", "ETF": "ETF", "上市": "上市", "上櫃": "上櫃", "興櫃": "興櫃",
         }
         target_market = market_map.get(market_lower, market)
         result = [s for s in result if s.get("market") == target_market]
@@ -1724,14 +1375,12 @@ def filter_stocks(
     if q.strip():
         qq = q.strip().lower()
         result = [
-            s
-            for s in result
+            s for s in result
             if qq in safe_str(s.get("symbol")).lower() or qq in safe_str(s.get("name")).lower()
         ]
 
     if price_min > 0:
         result = [s for s in result if safe_float(s.get("price")) >= price_min]
-
     if price_max > 0:
         result = [s for s in result if safe_float(s.get("price")) <= price_max]
 
@@ -1740,75 +1389,65 @@ def filter_stocks(
 
 def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: str = "desc") -> List[Dict[str, Any]]:
     reverse = sort_dir.lower() != "asc"
-
     allowed = {
-        "score": "score",
-        "recommendation_score": "recommendation_score",
-        "price": "price",
-        "change": "change",
-        "change_percent": "change_percent",
-        "volume": "volume",
-        "trade_value": "trade_value",
-        "symbol": "symbol",
-        "name": "name",
-        "operation_rating": "operation_rating",
+        "score": "score", "recommendation_score": "recommendation_score",
+        "price": "price", "change": "change", "change_percent": "change_percent",
+        "volume": "volume", "trade_value": "trade_value",
+        "symbol": "symbol", "name": "name", "operation_rating": "operation_rating",
     }
     key = allowed.get(sort_by, "score")
 
     if key == "operation_rating":
         rating_order = {"A": 4, "B+": 3, "C": 2, "D": 1}
-        return sorted(
-            stocks,
-            key=lambda x: rating_order.get(x.get("operation_rating", ""), 0),
-            reverse=reverse,
-        )
+        return sorted(stocks, key=lambda x: rating_order.get(x.get("operation_rating", ""), 0), reverse=reverse)
 
     return sorted(stocks, key=lambda x: x.get(key, 0), reverse=reverse)
 
 
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
-    candidates = []
-    for s in stocks:
-        if not is_main_board_stock(s):
-            continue
-        if safe_float(s.get("price")) <= 0:
-            continue
-        if safe_int(s.get("volume")) <= 0:
-            continue
-        candidates.append(s)
-
+    candidates = [
+        s for s in stocks
+        if is_main_board_stock(s)
+        and safe_float(s.get("price")) > 0
+        and safe_int(s.get("volume")) > 0
+    ]
     candidates.sort(
-        key=lambda x: (
-            x.get("recommendation_score", 0),
-            x.get("volume", 0),
-            abs(x.get("change_percent", 0)),
-        ),
+        key=lambda x: (x.get("recommendation_score", 0), x.get("volume", 0), abs(x.get("change_percent", 0))),
         reverse=True,
     )
-
     top_items = candidates[:top_n]
-    result = []
-    for stock in top_items:
-        result.append(build_historical_analysis_for_stock(stock))
-    return result
+
+    # 平行抓歷史 K 線，max_workers=5 避免 API 限流
+    result_map: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_symbol = {
+            executor.submit(build_historical_analysis_for_stock, stock): stock["symbol"]
+            for stock in top_items
+        }
+        for future in as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                result_map[symbol] = future.result()
+            except Exception:
+                original = next((s for s in top_items if s["symbol"] == symbol), None)
+                if original:
+                    result_map[symbol] = original
+
+    return [result_map[s["symbol"]] for s in top_items if s["symbol"] in result_map]
 
 
 def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[str, Any]]:
     qq = safe_str(q).lower()
     if not qq:
         return None
-
     exact_symbol = [s for s in filtered if safe_str(s.get("symbol")).lower() == qq]
     if len(exact_symbol) == 1:
         return exact_symbol[0]
-
     exact_name = [s for s in filtered if safe_str(s.get("name")).lower() == qq]
     if len(exact_name) == 1:
         return exact_name[0]
-
     if len(filtered) == 1:
         return filtered[0]
-
     return None
 
 
@@ -1890,12 +1529,8 @@ def get_stocks(
         all_stocks = result["stocks"]
 
         filtered = filter_stocks(
-            all_stocks,
-            market=market,
-            category=category,
-            q=q,
-            price_min=price_min,
-            price_max=price_max,
+            all_stocks, market=market, category=category,
+            q=q, price_min=price_min, price_max=price_max,
         )
         filtered = sort_stocks(filtered, sort_by=sort_by, sort_dir=sort_dir)
 
@@ -1914,6 +1549,8 @@ def get_stocks(
             symbol = focused.get("symbol", "")
             paged = [focused if x.get("symbol") == symbol else x for x in paged]
 
+        main_board = [s for s in all_stocks if is_main_board_stock(s)]
+
         return {
             "success": True,
             "market_status": get_market_status_text(),
@@ -1923,6 +1560,10 @@ def get_stocks(
             "total": total_filtered,
             "offset": offset,
             "limit": limit,
+            # 前端 count 一次到位，不需額外打 3 個請求
+            "all_total": len(main_board),
+            "esb_total": len([s for s in all_stocks if s.get("market") == "興櫃"]),
+            "etf_total": len([s for s in all_stocks if s.get("market") == "ETF"]),
             "categories": cats,
             "recommendations": [clean_stock_output(x) for x in recs],
             "focused_stock": build_focused_analysis(focused) if focused else None,
