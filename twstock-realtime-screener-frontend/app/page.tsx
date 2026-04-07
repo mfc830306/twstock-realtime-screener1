@@ -307,10 +307,6 @@ export default function Home() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedCategory, rankType]);
-
   async function fetchCountsAndMeta() {
     const [allRes, esbRes, etfRes] = await Promise.all([
       fetch(`${BACKEND_BASE}?limit=1`, { cache: "no-store" }),
@@ -373,22 +369,34 @@ export default function Home() {
     setRecommendations(safeRecommendations);
   }
 
-  async function fetchPagedStocks() {
+  async function fetchPagedStocks(
+    override?: Partial<{
+      category: CategoryKey;
+      page: number;
+      rank: RankType;
+      keyword: string;
+    }>
+  ) {
     setLoading(true);
     setError("");
 
     try {
-      const categoryQuery = getCategoryQuery(selectedCategory);
-      const sortQuery = getSortQuery(rankType);
+      const category = override?.category ?? selectedCategory;
+      const page = override?.page ?? currentPage;
+      const rank = override?.rank ?? rankType;
+      const keyword = override?.keyword ?? debouncedSearchTerm;
+
+      const categoryQuery = getCategoryQuery(category);
+      const sortQuery = getSortQuery(rank);
 
       const params = new URLSearchParams({
         limit: String(ITEMS_PER_PAGE),
-        offset: String((currentPage - 1) * ITEMS_PER_PAGE),
+        offset: String((page - 1) * ITEMS_PER_PAGE),
         sort_by: sortQuery.sort_by,
         sort_dir: sortQuery.sort_dir,
       });
 
-      if (debouncedSearchTerm) params.set("q", debouncedSearchTerm);
+      if (keyword) params.set("q", keyword);
       if (categoryQuery.market) params.set("market", categoryQuery.market);
       if (categoryQuery.price_min !== undefined) {
         params.set("price_min", String(categoryQuery.price_min));
@@ -427,7 +435,7 @@ export default function Home() {
 
       if (data.focused_stock) {
         setFocusedStock(data.focused_stock);
-      } else if (!manualSelectedSymbol && !debouncedSearchTerm) {
+      } else if (!manualSelectedSymbol && !keyword) {
         setFocusedStock(null);
       }
     } catch (err) {
@@ -445,7 +453,12 @@ export default function Home() {
       await Promise.all([
         fetchCountsAndMeta(),
         fetchRecommendations(),
-        fetchPagedStocks(),
+        fetchPagedStocks({
+          category: selectedCategory,
+          page: currentPage,
+          rank: rankType,
+          keyword: debouncedSearchTerm,
+        }),
       ]);
 
       initialLoadedRef.current = true;
@@ -463,9 +476,14 @@ export default function Home() {
   useEffect(() => {
     if (!initialLoadedRef.current) return;
 
-    fetchPagedStocks();
+    fetchPagedStocks({
+      category: selectedCategory,
+      page: currentPage,
+      rank: rankType,
+      keyword: debouncedSearchTerm,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, selectedCategory, rankType, debouncedSearchTerm]);
+  }, [currentPage, debouncedSearchTerm]);
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
@@ -477,7 +495,12 @@ export default function Home() {
     if (!initialLoadedRef.current) return;
 
     const timer = setInterval(() => {
-      fetchPagedStocks();
+      fetchPagedStocks({
+        category: selectedCategory,
+        page: currentPage,
+        rank: rankType,
+        keyword: debouncedSearchTerm,
+      });
     }, 120000);
 
     return () => clearInterval(timer);
@@ -521,7 +544,13 @@ export default function Home() {
     }
 
     return null;
-  }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
+  }, [
+    manualSelectedSymbol,
+    stocks,
+    recommendations,
+    focusedStock,
+    debouncedSearchTerm,
+  ]);
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
@@ -640,6 +669,7 @@ export default function Home() {
             </div>
 
             <button
+              type="button"
               onClick={fetchAllData}
               disabled={loading}
               style={{
@@ -712,9 +742,17 @@ export default function Home() {
                   return (
                     <button
                       key={item.key}
+                      type="button"
                       onClick={() => {
                         setSelectedCategory(item.key);
                         setManualSelectedSymbol("");
+                        setCurrentPage(1);
+                        fetchPagedStocks({
+                          category: item.key,
+                          page: 1,
+                          rank: rankType,
+                          keyword: debouncedSearchTerm,
+                        });
                       }}
                       style={{
                         minWidth: isMobile ? "calc(50% - 6px)" : "118px",
@@ -763,21 +801,51 @@ export default function Home() {
 
             <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
               <button
-                onClick={() => setRankType("recommend")}
+                type="button"
+                onClick={() => {
+                  setRankType("recommend");
+                  setCurrentPage(1);
+                  fetchPagedStocks({
+                    category: selectedCategory,
+                    page: 1,
+                    rank: "recommend",
+                    keyword: debouncedSearchTerm,
+                  });
+                }}
                 style={rankType === "recommend" ? activeActionBtn : normalActionBtn}
               >
                 推薦
               </button>
 
               <button
-                onClick={() => setRankType("up")}
+                type="button"
+                onClick={() => {
+                  setRankType("up");
+                  setCurrentPage(1);
+                  fetchPagedStocks({
+                    category: selectedCategory,
+                    page: 1,
+                    rank: "up",
+                    keyword: debouncedSearchTerm,
+                  });
+                }}
                 style={rankType === "up" ? activeActionBtn : normalActionBtn}
               >
                 漲幅
               </button>
 
               <button
-                onClick={() => setRankType("down")}
+                type="button"
+                onClick={() => {
+                  setRankType("down");
+                  setCurrentPage(1);
+                  fetchPagedStocks({
+                    category: selectedCategory,
+                    page: 1,
+                    rank: "down",
+                    keyword: debouncedSearchTerm,
+                  });
+                }}
                 style={rankType === "down" ? activeActionBtn : normalActionBtn}
               >
                 跌幅
@@ -1328,6 +1396,7 @@ export default function Home() {
               }}
             >
               <button
+                type="button"
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
                 style={{
@@ -1359,6 +1428,7 @@ export default function Home() {
                 return (
                   <button
                     key={page}
+                    type="button"
                     onClick={() => setCurrentPage(page)}
                     style={{
                       ...pageBtnStyle,
@@ -1376,6 +1446,7 @@ export default function Home() {
               })}
 
               <button
+                type="button"
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
                 style={{
