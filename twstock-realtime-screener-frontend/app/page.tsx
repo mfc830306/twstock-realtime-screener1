@@ -343,21 +343,12 @@ export default function Home() {
   }
 
   async function fetchRecommendations() {
-    const categoryQuery = getCategoryQuery(selectedCategory);
     const params = new URLSearchParams({
       limit: "10",
       offset: "0",
       sort_by: "recommendation_score",
       sort_dir: "desc",
     });
-
-    if (categoryQuery.market) params.set("market", categoryQuery.market);
-    if (categoryQuery.price_min !== undefined) {
-      params.set("price_min", String(categoryQuery.price_min));
-    }
-    if (categoryQuery.price_max !== undefined) {
-      params.set("price_max", String(categoryQuery.price_max));
-    }
 
     const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
       cache: "no-store",
@@ -368,7 +359,13 @@ export default function Home() {
       throw new Error(data.error || data.message || "取得推薦資料失敗");
     }
 
-    const safeRecommendations = (data.recommendations || []).map(normalizeStock);
+    const safeRecommendations = (data.recommendations || [])
+      .map(normalizeStock)
+      .filter(
+        (stock) => stock.market === "上市" || stock.market === "上櫃"
+      )
+      .slice(0, 10);
+
     setRecommendations(safeRecommendations);
   }
 
