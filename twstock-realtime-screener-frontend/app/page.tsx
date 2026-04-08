@@ -27,7 +27,6 @@ type Stock = {
   risk_note?: string;
   update_time?: string;
   analysis_source?: string;
-  is_etf?: boolean;
 };
 
 type FocusedStock = {
@@ -66,10 +65,9 @@ type ApiResponse = {
   data_date?: string;
   last_update?: string;
   total?: number;
-  // 後端一次回傳三個 count，前端不需額外請求
   all_total?: number;
-  esb_total?: number;
-  etf_total?: number;
+  listed_total?: number;
+  otc_total?: number;
   stocks: Stock[];
   recommendations?: Stock[];
   categories?: BackendCategory[];
@@ -86,8 +84,6 @@ const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
-  { key: "esb", label: "興櫃" },
-  { key: "etf", label: "ETF" },
   { key: "0-50", label: "0-50" },
   { key: "50-100", label: "50-100" },
   { key: "100-200", label: "100-200" },
@@ -95,7 +91,14 @@ const PRICE_CATEGORIES = [
   { key: "500+", label: "500+" },
 ] as const;
 
+const MARKET_TABS = [
+  { key: "all", label: "全部" },
+  { key: "tse", label: "上市" },
+  { key: "otc", label: "上櫃" },
+] as const;
+
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
+type MarketKey = (typeof MARKET_TABS)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
 const ITEMS_PER_PAGE = 20;
@@ -194,19 +197,22 @@ function getRatingColor(rating?: string) {
 }
 
 function getCategoryQuery(category: CategoryKey): {
-  market?: string;
   price_min?: number;
   price_max?: number;
 } {
   switch (category) {
-    case "esb": return { market: "esb" };
-    case "etf": return { market: "etf" };
-    case "0-50": return { price_max: 50 };
-    case "50-100": return { price_min: 50, price_max: 100 };
-    case "100-200": return { price_min: 100, price_max: 200 };
-    case "200-500": return { price_min: 200, price_max: 500 };
-    case "500+": return { price_min: 500 };
-    default: return {};
+    case "0-50":
+      return { price_max: 50 };
+    case "50-100":
+      return { price_min: 50, price_max: 100 };
+    case "100-200":
+      return { price_min: 100, price_max: 200 };
+    case "200-500":
+      return { price_min: 200, price_max: 500 };
+    case "500+":
+      return { price_min: 500 };
+    default:
+      return {};
   }
 }
 
@@ -218,9 +224,7 @@ function getSortQuery(rankType: RankType): { sort_by: string; sort_dir: "asc" | 
 
 function buildCategoryCountsFromBackend(
   backendCategories: BackendCategory[],
-  allTotal: number,
-  esbTotal: number,
-  etfTotal: number
+  allTotal: number
 ): Record<CategoryKey, number> {
   const backendMap = new Map<string, number>();
   for (const item of backendCategories || []) {
@@ -228,8 +232,6 @@ function buildCategoryCountsFromBackend(
   }
   return {
     all: allTotal,
-    esb: esbTotal,
-    etf: etfTotal,
     "0-50": (backendMap.get("0-10") || 0) + (backendMap.get("10-20") || 0) + (backendMap.get("20-50") || 0),
     "50-100": backendMap.get("50-100") || 0,
     "100-200": backendMap.get("100-200") || 0,
@@ -248,6 +250,7 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("all");
+  const [selectedMarket, setSelectedMarket] = useState<MarketKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -257,8 +260,8 @@ export default function Home() {
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
   const [total, setTotal] = useState(0);
   const [allTotal, setAllTotal] = useState(0);
-  const [esbTotal, setEsbTotal] = useState(0);
-  const [etfTotal, setEtfTotal] = useState(0);
+  const [listedTotal, setListedTotal] = useState(0);
+  const [otcTotal, setOtcTotal] = useState(0);
 
   const initialLoadedRef = useRef(false);
 
@@ -277,7 +280,6 @@ export default function Home() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // 推薦資料：limit 從 200 降為 30，足夠選出最高分 10 檔
   async function fetchRecommendations() {
     const params = new URLSearchParams({
       limit: "30",
@@ -303,6 +305,7 @@ export default function Home() {
   async function fetchPagedStocks(
     override?: Partial<{
       category: CategoryKey;
+      market: MarketKey;
       page: number;
       rank: RankType;
       keyword: string;
@@ -313,6 +316,7 @@ export default function Home() {
 
     try {
       const category = override?.category ?? selectedCategory;
+      const market = override?.market ?? selectedMarket;
       const page = override?.page ?? currentPage;
       const rank = override?.rank ?? rankType;
       const keyword = override?.keyword ?? debouncedSearchTerm;
@@ -328,7 +332,7 @@ export default function Home() {
       });
 
       if (keyword) params.set("q", keyword);
-      if (categoryQuery.market) params.set("market", categoryQuery.market);
+      if (market !== "all") params.set("market", market);
       if (categoryQuery.price_min !== undefined) params.set("price_min", String(categoryQuery.price_min));
       if (categoryQuery.price_max !== undefined) params.set("price_max", String(categoryQuery.price_max));
 
@@ -342,10 +346,9 @@ export default function Home() {
       setStocks(safeStocks);
       setTotal(Number(data.total || 0));
 
-      // 後端一次回傳所有 count，直接更新，不需額外請求
       if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
-      if (data.esb_total !== undefined) setEsbTotal(Number(data.esb_total));
-      if (data.etf_total !== undefined) setEtfTotal(Number(data.etf_total));
+      if (data.listed_total !== undefined) setListedTotal(Number(data.listed_total));
+      if (data.otc_total !== undefined) setOtcTotal(Number(data.otc_total));
       if (data.categories) setBackendCategories(data.categories);
 
       setMarketStatus(data.market_status || "-");
@@ -366,7 +369,6 @@ export default function Home() {
     }
   }
 
-  // 初始化只發 2 個並行請求（移除原本的 fetchCountsAndMeta）
   async function fetchAllData() {
     try {
       setLoading(true);
@@ -376,6 +378,7 @@ export default function Home() {
         fetchRecommendations(),
         fetchPagedStocks({
           category: selectedCategory,
+          market: selectedMarket,
           page: currentPage,
           rank: rankType,
           keyword: debouncedSearchTerm,
@@ -398,24 +401,20 @@ export default function Home() {
     if (!initialLoadedRef.current) return;
     fetchPagedStocks({
       category: selectedCategory,
+      market: selectedMarket,
       page: currentPage,
       rank: rankType,
       keyword: debouncedSearchTerm,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, debouncedSearchTerm]);
-
-  useEffect(() => {
-    if (!initialLoadedRef.current) return;
-    fetchRecommendations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory]);
+  }, [currentPage, debouncedSearchTerm, selectedMarket]);
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
     const timer = setInterval(() => {
       fetchPagedStocks({
         category: selectedCategory,
+        market: selectedMarket,
         page: currentPage,
         rank: rankType,
         keyword: debouncedSearchTerm,
@@ -423,11 +422,20 @@ export default function Home() {
     }, 120000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, selectedCategory, rankType, debouncedSearchTerm]);
+  }, [currentPage, selectedCategory, selectedMarket, rankType, debouncedSearchTerm]);
 
   const categoryCounts = useMemo(
-    () => buildCategoryCountsFromBackend(backendCategories, allTotal, esbTotal, etfTotal),
-    [backendCategories, allTotal, esbTotal, etfTotal]
+    () => buildCategoryCountsFromBackend(backendCategories, allTotal),
+    [backendCategories, allTotal]
+  );
+
+  const marketCounts = useMemo(
+    () => ({
+      all: allTotal,
+      tse: listedTotal,
+      otc: otcTotal,
+    }),
+    [allTotal, listedTotal, otcTotal]
   );
 
   const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
@@ -609,6 +617,48 @@ export default function Home() {
           <div style={panelStyle}>
             <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>價格分類</h2>
 
+            <div style={{ marginBottom: "18px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+                {MARKET_TABS.map((item) => {
+                  const active = selectedMarket === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedMarket(item.key);
+                        setManualSelectedSymbol("");
+                        setCurrentPage(1);
+                        fetchPagedStocks({
+                          category: selectedCategory,
+                          market: item.key,
+                          page: 1,
+                          rank: rankType,
+                          keyword: debouncedSearchTerm,
+                        });
+                      }}
+                      style={{
+                        minWidth: isMobile ? "calc(50% - 6px)" : "118px",
+                        border: "none",
+                        borderRadius: "14px",
+                        padding: "14px 14px",
+                        fontSize: "15px",
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        color: "#fff",
+                        background: active
+                          ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                          : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
+                        boxShadow: active ? "0 8px 22px rgba(80, 150, 255, 0.22)" : "none",
+                      }}
+                    >
+                      {item.label} ({marketCounts[item.key] || 0})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div style={{ marginBottom: "20px" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
                 {PRICE_CATEGORIES.map((item) => {
@@ -621,7 +671,13 @@ export default function Home() {
                         setSelectedCategory(item.key);
                         setManualSelectedSymbol("");
                         setCurrentPage(1);
-                        fetchPagedStocks({ category: item.key, page: 1, rank: rankType, keyword: debouncedSearchTerm });
+                        fetchPagedStocks({
+                          category: item.key,
+                          market: selectedMarket,
+                          page: 1,
+                          rank: rankType,
+                          keyword: debouncedSearchTerm,
+                        });
                       }}
                       style={{
                         minWidth: isMobile ? "calc(50% - 6px)" : "118px",
@@ -651,7 +707,7 @@ export default function Home() {
                 setSearchTerm(e.target.value);
                 setManualSelectedSymbol("");
               }}
-              placeholder="搜尋股票代號 / 名稱 / ETF"
+              placeholder="搜尋股票代號 / 名稱"
               style={{
                 width: "100%",
                 height: "46px",
@@ -676,7 +732,13 @@ export default function Home() {
                     onClick={() => {
                       setRankType(r);
                       setCurrentPage(1);
-                      fetchPagedStocks({ category: selectedCategory, page: 1, rank: r, keyword: debouncedSearchTerm });
+                      fetchPagedStocks({
+                        category: selectedCategory,
+                        market: selectedMarket,
+                        page: 1,
+                        rank: r,
+                        keyword: debouncedSearchTerm,
+                      });
                     }}
                     style={rankType === r ? activeActionBtn : normalActionBtn}
                   >
