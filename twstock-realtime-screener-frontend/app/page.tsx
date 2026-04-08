@@ -1081,7 +1081,7 @@ export default function Home() {
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: "980px",
+                minWidth: "1060px",
                 tableLayout: "fixed",
               }}
             >
@@ -1090,7 +1090,8 @@ export default function Home() {
                   <th style={{ ...thStyle, width: "70px" }}>市場</th>
                   <th style={{ ...thStyle, width: "160px", textAlign: "left" }}>股票</th>
                   <th style={{ ...thStyle, width: "95px" }}>股價</th>
-                  <th style={{ ...thStyle, width: "120px" }}>漲跌</th>
+                  <th style={{ ...thStyle, width: "90px" }}>漲跌</th>
+                  <th style={{ ...thStyle, width: "90px" }}>漲跌%</th>
                   <th style={{ ...thStyle, width: "110px" }}>成交量</th>
                   <th style={{ ...thStyle, width: "120px" }}>訊號</th>
                   <th style={{ ...thStyle, width: "70px" }}>評級</th>
@@ -1114,6 +1115,7 @@ export default function Home() {
                         setFocusedStock(stockToFocused(stock));
                       }}
                       style={{
+                        height: "56px",
                         borderBottom: "1px solid rgba(255,255,255,0.06)",
                         background: isSelected ? "rgba(22, 71, 134, 0.88)" : "rgba(8, 36, 76, 0.55)",
                         cursor: "pointer",
@@ -1134,6 +1136,7 @@ export default function Home() {
                           style={{
                             display: "flex",
                             flexDirection: "column",
+                            justifyContent: "center",
                             gap: "1px",
                             minWidth: "0",
                             lineHeight: 1.05,
@@ -1168,37 +1171,51 @@ export default function Home() {
                       </td>
 
                       <td style={tdStyle}>
-                        <div style={{ fontSize: "18px", fontWeight: 900, color: "#ffffff", lineHeight: 1.05 }}>
+                        <span
+                          style={{
+                            fontSize: "18px",
+                            fontWeight: 900,
+                            color: "#ffffff",
+                            lineHeight: 1,
+                            display: "inline-block",
+                          }}
+                        >
                           {formatPrice(stock.price)}
-                        </div>
+                        </span>
                       </td>
 
                       <td style={tdStyle}>
-                        <div
+                        <span
                           style={{
                             color,
                             fontWeight: 900,
-                            fontSize: "16px",
-                            lineHeight: 1.05,
+                            fontSize: "15px",
+                            lineHeight: 1,
+                            display: "inline-block",
                           }}
                         >
                           {formatSigned(stock.change)}
-                        </div>
-                        <div
-                          style={{
-                            color,
-                            fontWeight: 800,
-                            fontSize: "11px",
-                            marginTop: "1px",
-                            lineHeight: 1.05,
-                          }}
-                        >
-                          {formatSigned(stock.change_percent)}%
-                        </div>
+                        </span>
                       </td>
 
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 800 }}>{formatNumber(stock.volume)}</div>
+                        <span
+                          style={{
+                            color,
+                            fontWeight: 800,
+                            fontSize: "13px",
+                            lineHeight: 1,
+                            display: "inline-block",
+                          }}
+                        >
+                          {formatSigned(stock.change_percent)}%
+                        </span>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span style={{ fontWeight: 800, display: "inline-block", lineHeight: 1 }}>
+                          {formatNumber(stock.volume)}
+                        </span>
                       </td>
 
                       <td style={tdStyle}>
@@ -1236,10 +1253,14 @@ export default function Home() {
                         {stock.operation_rating || "-"}
                       </td>
 
-                      <td style={tdStyle}>{stock.score ?? 0}</td>
+                      <td style={tdStyle}>
+                        <span style={{ display: "inline-block", lineHeight: 1 }}>
+                          {stock.score ?? 0}
+                        </span>
+                      </td>
 
                       <td style={tdStyle}>
-                        <span style={{ fontWeight: 800, color: "#cfe2ff" }}>
+                        <span style={{ fontWeight: 800, color: "#cfe2ff", display: "inline-block", lineHeight: 1 }}>
                           {stock.risk_reward || "-"}
                         </span>
                       </td>
