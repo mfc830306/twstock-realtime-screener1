@@ -82,14 +82,13 @@ type ApiResponse = {
 
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 
-// 移除 esb（興櫃）和 etf，只保留上市上櫃
 const PRICE_CATEGORIES = [
-  { key: "all",     label: "全部" },
-  { key: "0-50",    label: "0-50" },
-  { key: "50-100",  label: "50-100" },
+  { key: "all", label: "全部" },
+  { key: "0-50", label: "0-50" },
+  { key: "50-100", label: "50-100" },
   { key: "100-200", label: "100-200" },
   { key: "200-500", label: "200-500" },
-  { key: "500+",    label: "500+" },
+  { key: "500+", label: "500+" },
 ] as const;
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
@@ -196,17 +195,23 @@ function getCategoryQuery(category: CategoryKey): {
   price_max?: number;
 } {
   switch (category) {
-    case "0-50":    return { price_max: 50 };
-    case "50-100":  return { price_min: 50, price_max: 100 };
-    case "100-200": return { price_min: 100, price_max: 200 };
-    case "200-500": return { price_min: 200, price_max: 500 };
-    case "500+":    return { price_min: 500 };
-    default:        return {};
+    case "0-50":
+      return { price_max: 50 };
+    case "50-100":
+      return { price_min: 50, price_max: 100 };
+    case "100-200":
+      return { price_min: 100, price_max: 200 };
+    case "200-500":
+      return { price_min: 200, price_max: 500 };
+    case "500+":
+      return { price_min: 500 };
+    default:
+      return {};
   }
 }
 
 function getSortQuery(rankType: RankType): { sort_by: string; sort_dir: "asc" | "desc" } {
-  if (rankType === "up")   return { sort_by: "change_percent", sort_dir: "desc" };
+  if (rankType === "up") return { sort_by: "change_percent", sort_dir: "desc" };
   if (rankType === "down") return { sort_by: "change_percent", sort_dir: "asc" };
   return { sort_by: "recommendation_score", sort_dir: "desc" };
 }
@@ -221,33 +226,36 @@ function buildCategoryCountsFromBackend(
   }
   return {
     all: allTotal,
-    "0-50":    (backendMap.get("0-10") || 0) + (backendMap.get("10-20") || 0) + (backendMap.get("20-50") || 0),
-    "50-100":  backendMap.get("50-100") || 0,
+    "0-50":
+      (backendMap.get("0-10") || 0) +
+      (backendMap.get("10-20") || 0) +
+      (backendMap.get("20-50") || 0),
+    "50-100": backendMap.get("50-100") || 0,
     "100-200": backendMap.get("100-200") || 0,
     "200-500": backendMap.get("200-500") || 0,
-    "500+":    (backendMap.get("500-1000") || 0) + (backendMap.get("1000+") || 0),
+    "500+": (backendMap.get("500-1000") || 0) + (backendMap.get("1000+") || 0),
   };
 }
 
 export default function Home() {
-  const [stocks,            setStocks]            = useState<Stock[]>([]);
-  const [recommendations,   setRecommendations]   = useState<Stock[]>([]);
+  const [stocks, setStocks] = useState<Stock[]>([]);
+  const [recommendations, setRecommendations] = useState<Stock[]>([]);
   const [backendCategories, setBackendCategories] = useState<BackendCategory[]>([]);
-  const [marketStatus,      setMarketStatus]      = useState("-");
-  const [dataDate,          setDataDate]          = useState("-");
-  const [lastUpdate,        setLastUpdate]        = useState("-");
-  const [searchTerm,        setSearchTerm]        = useState("");
+  const [marketStatus, setMarketStatus] = useState("-");
+  const [dataDate, setDataDate] = useState("-");
+  const [lastUpdate, setLastUpdate] = useState("-");
+  const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
-  const [selectedCategory,  setSelectedCategory]  = useState<CategoryKey>("all");
-  const [rankType,          setRankType]          = useState<RankType>("recommend");
-  const [loading,           setLoading]           = useState(false);
-  const [error,             setError]             = useState("");
-  const [isMobile,          setIsMobile]          = useState(false);
-  const [currentPage,       setCurrentPage]       = useState(1);
-  const [focusedStock,      setFocusedStock]      = useState<FocusedStock | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("all");
+  const [rankType, setRankType] = useState<RankType>("recommend");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [isMobile, setIsMobile] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
-  const [total,             setTotal]             = useState(0);
-  const [allTotal,          setAllTotal]          = useState(0);
+  const [total, setTotal] = useState(0);
+  const [allTotal, setAllTotal] = useState(0);
 
   const initialLoadedRef = useRef(false);
 
@@ -280,7 +288,10 @@ export default function Home() {
     const source = (data.stocks || []).map(normalizeStock);
     const safeRecommendations = source
       .filter((stock) => stock.market === "上市" || stock.market === "上櫃")
-      .sort((a, b) => (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0))
+      .sort(
+        (a, b) =>
+          (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0)
+      )
       .slice(0, 10);
     setRecommendations(safeRecommendations);
   }
@@ -298,24 +309,26 @@ export default function Home() {
 
     try {
       const category = override?.category ?? selectedCategory;
-      const page     = override?.page     ?? currentPage;
-      const rank     = override?.rank     ?? rankType;
-      const keyword  = override?.keyword  ?? debouncedSearchTerm;
+      const page = override?.page ?? currentPage;
+      const rank = override?.rank ?? rankType;
+      const keyword = override?.keyword ?? debouncedSearchTerm;
 
       const categoryQuery = getCategoryQuery(category);
-      const sortQuery     = getSortQuery(rank);
+      const sortQuery = getSortQuery(rank);
 
       const params = new URLSearchParams({
-        limit:    String(ITEMS_PER_PAGE),
-        offset:   String((page - 1) * ITEMS_PER_PAGE),
-        sort_by:  sortQuery.sort_by,
+        limit: String(ITEMS_PER_PAGE),
+        offset: String((page - 1) * ITEMS_PER_PAGE),
+        sort_by: sortQuery.sort_by,
         sort_dir: sortQuery.sort_dir,
       });
 
       if (keyword) params.set("q", keyword);
-      if (categoryQuery.market)    params.set("market",    categoryQuery.market);
-      if (categoryQuery.price_min !== undefined) params.set("price_min", String(categoryQuery.price_min));
-      if (categoryQuery.price_max !== undefined) params.set("price_max", String(categoryQuery.price_max));
+      if (categoryQuery.market) params.set("market", categoryQuery.market);
+      if (categoryQuery.price_min !== undefined)
+        params.set("price_min", String(categoryQuery.price_min));
+      if (categoryQuery.price_max !== undefined)
+        params.set("price_max", String(categoryQuery.price_max));
 
       const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -327,16 +340,15 @@ export default function Home() {
       setStocks(safeStocks);
       setTotal(Number(data.total || 0));
 
-      // 後端回傳 all_total，直接更新，省去額外請求
       if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
       if (data.categories) setBackendCategories(data.categories);
 
       setMarketStatus(data.market_status || "-");
       setDataDate(
         data.data_date ||
-        data.source_summary?.twse_data_date ||
-        data.source_summary?.tpex_data_date ||
-        "-"
+          data.source_summary?.twse_data_date ||
+          data.source_summary?.tpex_data_date ||
+          "-"
       );
       setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
 
@@ -419,7 +431,10 @@ export default function Home() {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  const pageNumbers = useMemo(() => getPageNumbers(currentPage, totalPages), [currentPage, totalPages]);
+  const pageNumbers = useMemo(
+    () => getPageNumbers(currentPage, totalPages),
+    [currentPage, totalPages]
+  );
 
   const activeFocusedStock = useMemo(() => {
     if (manualSelectedSymbol) {
@@ -453,7 +468,6 @@ export default function Home() {
         color: "#ffffff",
       }}
     >
-      {/* ── Topbar ── */}
       <div
         style={{
           width: "100%",
@@ -559,7 +573,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ── Main content ── */}
       <div
         style={{
           maxWidth: "1400px",
@@ -591,7 +604,6 @@ export default function Home() {
             marginBottom: "22px",
           }}
         >
-          {/* ── 左側：分類篩選 ── */}
           <div style={panelStyle}>
             <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>價格分類</h2>
 
@@ -607,7 +619,12 @@ export default function Home() {
                         setSelectedCategory(item.key);
                         setManualSelectedSymbol("");
                         setCurrentPage(1);
-                        fetchPagedStocks({ category: item.key, page: 1, rank: rankType, keyword: debouncedSearchTerm });
+                        fetchPagedStocks({
+                          category: item.key,
+                          page: 1,
+                          rank: rankType,
+                          keyword: debouncedSearchTerm,
+                        });
                       }}
                       style={{
                         minWidth: isMobile ? "calc(50% - 6px)" : "118px",
@@ -662,7 +679,12 @@ export default function Home() {
                     onClick={() => {
                       setRankType(r);
                       setCurrentPage(1);
-                      fetchPagedStocks({ category: selectedCategory, page: 1, rank: r, keyword: debouncedSearchTerm });
+                      fetchPagedStocks({
+                        category: selectedCategory,
+                        page: 1,
+                        rank: r,
+                        keyword: debouncedSearchTerm,
+                      });
                     }}
                     style={rankType === r ? activeActionBtn : normalActionBtn}
                   >
@@ -689,7 +711,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* ── 右側：推薦10檔 ── */}
           <div style={panelStyle}>
             <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "10px" }}>🔥 推薦10檔</h2>
 
@@ -865,7 +886,6 @@ export default function Home() {
           </div>
         </section>
 
-        {/* ── 個股專業分析卡 ── */}
         {activeFocusedStock && (
           <section
             style={{
@@ -926,7 +946,12 @@ export default function Home() {
               </div>
               <div style={metricCardStyle}>
                 <div style={metricLabelStyle}>漲跌</div>
-                <div style={{ ...metricValueStyle, color: activeFocusedStock.change >= 0 ? "#ff8b8b" : "#57e389" }}>
+                <div
+                  style={{
+                    ...metricValueStyle,
+                    color: activeFocusedStock.change >= 0 ? "#ff8b8b" : "#57e389",
+                  }}
+                >
                   {formatSigned(activeFocusedStock.change)}
                 </div>
               </div>
@@ -992,9 +1017,9 @@ export default function Home() {
             >
               {[
                 { label: "建議進場", value: activeFocusedStock.entry_price },
-                { label: "目標價",   value: activeFocusedStock.target_price },
-                { label: "停損價",   value: activeFocusedStock.stop_loss },
-                { label: "風報比",   value: activeFocusedStock.risk_reward },
+                { label: "目標價", value: activeFocusedStock.target_price },
+                { label: "停損價", value: activeFocusedStock.stop_loss },
+                { label: "風報比", value: activeFocusedStock.risk_reward },
               ].map(({ label, value }) => (
                 <div key={label} style={tradePlanCardStyle}>
                   <div style={tradePlanLabelStyle}>{label}</div>
@@ -1020,7 +1045,6 @@ export default function Home() {
           </section>
         )}
 
-        {/* ── 股票列表 ── */}
         <section
           style={{
             background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
@@ -1049,19 +1073,27 @@ export default function Home() {
           </div>
 
           <div style={{ overflowX: "auto", borderRadius: "18px" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1500px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "980px" }}>
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
-                  {["市場", "代號", "名稱", "股價", "漲跌", "漲跌%", "成交量", "訊號", "評級", "分數", "風報比"].map(
-                    (h) => <th key={h} style={thStyle}>{h}</th>
-                  )}
+                  <th style={{ ...thStyle, width: "90px" }}>市場</th>
+                  <th style={{ ...thStyle, width: "190px", textAlign: "left" }}>股票</th>
+                  <th style={{ ...thStyle, width: "120px" }}>股價</th>
+                  <th style={{ ...thStyle, width: "140px" }}>漲跌</th>
+                  <th style={{ ...thStyle, width: "130px" }}>成交量</th>
+                  <th style={{ ...thStyle, width: "160px" }}>訊號</th>
+                  <th style={{ ...thStyle, width: "90px" }}>評級</th>
+                  <th style={{ ...thStyle, width: "90px" }}>分數</th>
+                  <th style={{ ...thStyle, width: "120px" }}>風報比</th>
                 </tr>
               </thead>
+
               <tbody>
                 {stocks.map((stock) => {
                   const isUp = stock.change >= 0;
                   const color = isUp ? "#ff4d4f" : "#00c853";
                   const isSelected = activeFocusedStock?.symbol === stock.symbol;
+
                   return (
                     <tr
                       key={stock.symbol}
@@ -1074,27 +1106,121 @@ export default function Home() {
                         borderBottom: "1px solid rgba(255,255,255,0.08)",
                         background: isSelected ? "rgba(22, 71, 134, 0.88)" : "rgba(8, 36, 76, 0.55)",
                         cursor: "pointer",
+                        transition: "0.18s ease",
                       }}
                     >
                       <td style={tdStyle}>{stock.market || "-"}</td>
-                      <td style={tdStyle}>{stock.symbol}</td>
-                      <td style={tdStyle}>{stock.name}</td>
-                      <td style={tdStyle}>{formatPrice(stock.price)}</td>
-                      <td style={tdStyle}>
-                        <div style={{ color, fontWeight: 900, fontSize: "18px" }}>{formatSigned(stock.change)}</div>
+
+                      <td style={{ ...tdStyle, textAlign: "left" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "4px",
+                            minWidth: "0",
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: "16px",
+                              fontWeight: 900,
+                              color: "#7fb6ff",
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {stock.symbol}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "14px",
+                              fontWeight: 700,
+                              color: "#ffffff",
+                              lineHeight: 1.25,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                            title={stock.name}
+                          >
+                            {stock.name}
+                          </div>
+                        </div>
                       </td>
+
                       <td style={tdStyle}>
-                        <div style={{ color, fontWeight: 800, fontSize: "15px" }}>
+                        <div style={{ fontSize: "18px", fontWeight: 900, color: "#ffffff" }}>
+                          {formatPrice(stock.price)}
+                        </div>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <div
+                          style={{
+                            color,
+                            fontWeight: 900,
+                            fontSize: "17px",
+                            lineHeight: 1.15,
+                          }}
+                        >
+                          {formatSigned(stock.change)}
+                        </div>
+                        <div
+                          style={{
+                            color,
+                            fontWeight: 800,
+                            fontSize: "13px",
+                            marginTop: "4px",
+                          }}
+                        >
                           {formatSigned(stock.change_percent)}%
                         </div>
                       </td>
-                      <td style={tdStyle}>{formatNumber(stock.volume)}</td>
-                      <td style={tdStyle}>{stock.signal || "-"}</td>
-                      <td style={{ ...tdStyle, color: getRatingColor(stock.operation_rating), fontWeight: 900 }}>
+
+                      <td style={tdStyle}>
+                        <div style={{ fontWeight: 800 }}>{formatNumber(stock.volume)}</div>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            maxWidth: "140px",
+                            background: "rgba(255,255,255,0.08)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            fontSize: "13px",
+                            fontWeight: 800,
+                            color: "#dbe8ff",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            verticalAlign: "middle",
+                          }}
+                          title={stock.signal || "-"}
+                        >
+                          {stock.signal || "-"}
+                        </span>
+                      </td>
+
+                      <td
+                        style={{
+                          ...tdStyle,
+                          color: getRatingColor(stock.operation_rating),
+                          fontWeight: 900,
+                          fontSize: "16px",
+                        }}
+                      >
                         {stock.operation_rating || "-"}
                       </td>
+
                       <td style={tdStyle}>{stock.score ?? 0}</td>
-                      <td style={tdStyle}>{stock.risk_reward || "-"}</td>
+
+                      <td style={tdStyle}>
+                        <span style={{ fontWeight: 800, color: "#cfe2ff" }}>
+                          {stock.risk_reward || "-"}
+                        </span>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1172,70 +1298,125 @@ export default function Home() {
 }
 
 const activeActionBtn: React.CSSProperties = {
-  border: "none", borderRadius: "14px", padding: "12px 16px",
-  fontSize: "15px", fontWeight: 800, cursor: "pointer", color: "#fff",
+  border: "none",
+  borderRadius: "14px",
+  padding: "12px 16px",
+  fontSize: "15px",
+  fontWeight: 800,
+  cursor: "pointer",
+  color: "#fff",
   background: "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)",
 };
 
 const normalActionBtn: React.CSSProperties = {
-  border: "none", borderRadius: "14px", padding: "12px 16px",
-  fontSize: "15px", fontWeight: 800, cursor: "pointer", color: "#fff",
+  border: "none",
+  borderRadius: "14px",
+  padding: "12px 16px",
+  fontSize: "15px",
+  fontWeight: 800,
+  cursor: "pointer",
+  color: "#fff",
   background: "#184889",
 };
 
 const pageBtnStyle: React.CSSProperties = {
-  border: "none", borderRadius: "12px", padding: "10px 14px",
-  minWidth: "44px", fontSize: "14px", fontWeight: 800, color: "#fff", background: "#184889",
+  border: "none",
+  borderRadius: "12px",
+  padding: "10px 14px",
+  minWidth: "44px",
+  fontSize: "14px",
+  fontWeight: 800,
+  color: "#fff",
+  background: "#184889",
 };
 
 const thStyle: React.CSSProperties = {
-  padding: "16px 14px", textAlign: "center", color: "#ffffff", fontSize: "16px", fontWeight: 800,
+  padding: "14px 12px",
+  textAlign: "center",
+  color: "#ffffff",
+  fontSize: "15px",
+  fontWeight: 800,
+  whiteSpace: "nowrap",
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "18px 14px", textAlign: "center", color: "#ffffff", fontSize: "15px", fontWeight: 700,
+  padding: "14px 12px",
+  textAlign: "center",
+  color: "#ffffff",
+  fontSize: "14px",
+  fontWeight: 700,
+  verticalAlign: "middle",
 };
 
 const analysisTagStyle: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)",
-  padding: "6px 10px", borderRadius: "999px", fontWeight: 800, color: "#dbe8ff", fontSize: "14px",
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  padding: "6px 10px",
+  borderRadius: "999px",
+  fontWeight: 800,
+  color: "#dbe8ff",
+  fontSize: "14px",
 };
 
 const metricCardStyle: React.CSSProperties = {
-  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "16px", padding: "14px 16px",
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "16px",
+  padding: "14px 16px",
 };
 
 const metricLabelStyle: React.CSSProperties = {
-  color: "#9fc3f6", fontSize: "13px", fontWeight: 700, marginBottom: "8px",
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
 };
 
 const metricValueStyle: React.CSSProperties = {
-  color: "#ffffff", fontSize: "22px", fontWeight: 900,
+  color: "#ffffff",
+  fontSize: "22px",
+  fontWeight: 900,
 };
 
 const analysisBlockStyle: React.CSSProperties = {
-  marginTop: "12px", padding: "14px 16px", borderRadius: "16px",
-  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+  marginTop: "12px",
+  padding: "14px 16px",
+  borderRadius: "16px",
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
 };
 
 const analysisBlockTitleStyle: React.CSSProperties = {
-  color: "#7fb6ff", fontSize: "15px", fontWeight: 900, marginBottom: "8px",
+  color: "#7fb6ff",
+  fontSize: "15px",
+  fontWeight: 900,
+  marginBottom: "8px",
 };
 
 const analysisBlockTextStyle: React.CSSProperties = {
-  color: "#dbe8ff", lineHeight: 1.85, fontSize: "15px", fontWeight: 700,
+  color: "#dbe8ff",
+  lineHeight: 1.85,
+  fontSize: "15px",
+  fontWeight: 700,
 };
 
 const tradePlanCardStyle: React.CSSProperties = {
   background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
-  border: "1px solid rgba(108,162,255,0.16)", borderRadius: "16px", padding: "14px 16px",
+  border: "1px solid rgba(108,162,255,0.16)",
+  borderRadius: "16px",
+  padding: "14px 16px",
 };
 
 const tradePlanLabelStyle: React.CSSProperties = {
-  color: "#9fc3f6", fontSize: "13px", fontWeight: 700, marginBottom: "8px",
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
 };
 
 const tradePlanValueStyle: React.CSSProperties = {
-  color: "#ffffff", fontSize: "16px", fontWeight: 900, lineHeight: 1.6,
+  color: "#ffffff",
+  fontSize: "16px",
+  fontWeight: 900,
+  lineHeight: 1.6,
 };
