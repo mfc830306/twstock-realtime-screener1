@@ -210,7 +210,10 @@ function getCategoryQuery(category: CategoryKey): {
   }
 }
 
-function getSortQuery(rankType: RankType): { sort_by: string; sort_dir: "asc" | "desc" } {
+function getSortQuery(rankType: RankType): {
+  sort_by: string;
+  sort_dir: "asc" | "desc";
+} {
   if (rankType === "up") return { sort_by: "change_percent", sort_dir: "desc" };
   if (rankType === "down") return { sort_by: "change_percent", sort_dir: "asc" };
   return { sort_by: "recommendation_score", sort_dir: "desc" };
@@ -1083,24 +1086,9 @@ export default function Home() {
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: "1020px",
                 tableLayout: "fixed",
               }}
             >
-              <colgroup>
-                <col style={{ width: "52px" }} />
-                <col style={{ width: "62px" }} />
-                <col />
-                <col style={{ width: "82px" }} />
-                <col style={{ width: "78px" }} />
-                <col style={{ width: "82px" }} />
-                <col style={{ width: "96px" }} />
-                <col style={{ width: "96px" }} />
-                <col style={{ width: "58px" }} />
-                <col style={{ width: "72px" }} />
-                <col style={{ width: "78px" }} />
-              </colgroup>
-
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
                   <th style={thStyle}>市場</th>
@@ -1134,35 +1122,21 @@ export default function Home() {
                       style={{
                         height: "46px",
                         borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        background: isSelected ? "rgba(22, 71, 134, 0.88)" : "rgba(8, 36, 76, 0.55)",
+                        background: isSelected
+                          ? "rgba(22, 71, 134, 0.88)"
+                          : "rgba(8, 36, 76, 0.55)",
                         cursor: "pointer",
                         transition: "0.18s ease",
                       }}
                     >
-                      <td
-                        style={{
-                          ...tdStyle,
-                          paddingLeft: "4px",
-                          paddingRight: "4px",
-                        }}
-                      >
-                        {stock.market || "-"}
-                      </td>
+                      <td style={tdStyle}>{stock.market || "-"}</td>
 
-                      <td
-                        style={{
-                          ...tdStyle,
-                          paddingLeft: "4px",
-                          paddingRight: "4px",
-                        }}
-                      >
+                      <td style={tdStyle}>
                         <span
                           style={{
                             fontSize: "13px",
                             fontWeight: 900,
                             color: "#7fb6ff",
-                            lineHeight: 1,
-                            display: "inline-block",
                           }}
                         >
                           {stock.symbol}
@@ -1173,8 +1147,6 @@ export default function Home() {
                         style={{
                           ...tdStyle,
                           textAlign: "left",
-                          paddingLeft: "4px",
-                          paddingRight: "4px",
                           overflow: "hidden",
                         }}
                         title={stock.name}
@@ -1185,9 +1157,7 @@ export default function Home() {
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                             whiteSpace: "nowrap",
-                            fontSize: "12px",
                             fontWeight: 700,
-                            lineHeight: 1.1,
                           }}
                         >
                           {stock.name}
@@ -1195,70 +1165,36 @@ export default function Home() {
                       </td>
 
                       <td style={tdStyle}>
-                        <span
-                          style={{
-                            fontSize: "15px",
-                            fontWeight: 900,
-                            color: "#ffffff",
-                            lineHeight: 1,
-                            display: "inline-block",
-                          }}
-                        >
-                          {formatPrice(stock.price)}
-                        </span>
+                        <span style={{ fontWeight: 900 }}>{formatPrice(stock.price)}</span>
                       </td>
 
                       <td style={tdStyle}>
-                        <span
-                          style={{
-                            color,
-                            fontWeight: 900,
-                            fontSize: "13px",
-                            lineHeight: 1,
-                            display: "inline-block",
-                          }}
-                        >
+                        <span style={{ color, fontWeight: 900 }}>
                           {formatSigned(stock.change)}
                         </span>
                       </td>
 
                       <td style={tdStyle}>
-                        <span
-                          style={{
-                            color,
-                            fontWeight: 800,
-                            fontSize: "12px",
-                            lineHeight: 1,
-                            display: "inline-block",
-                          }}
-                        >
+                        <span style={{ color, fontWeight: 800 }}>
                           {formatSigned(stock.change_percent)}%
                         </span>
                       </td>
 
-                      <td style={tdStyle}>
-                        <span style={{ fontWeight: 800, display: "inline-block", lineHeight: 1 }}>
-                          {formatNumber(stock.volume)}
-                        </span>
-                      </td>
+                      <td style={tdStyle}>{formatNumber(stock.volume)}</td>
 
                       <td style={tdStyle}>
                         <span
                           style={{
                             display: "inline-block",
-                            maxWidth: "86px",
+                            maxWidth: "100%",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
                             background: "rgba(255,255,255,0.08)",
-                            border: "1px solid rgba(255,255,255,0.08)",
                             padding: "3px 6px",
                             borderRadius: "999px",
                             fontSize: "10px",
                             fontWeight: 800,
-                            color: "#dbe8ff",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            verticalAlign: "middle",
-                            lineHeight: 1.1,
                           }}
                           title={stock.signal || "-"}
                         >
@@ -1271,30 +1207,14 @@ export default function Home() {
                           ...tdStyle,
                           color: getRatingColor(stock.operation_rating),
                           fontWeight: 900,
-                          fontSize: "14px",
                         }}
                       >
                         {stock.operation_rating || "-"}
                       </td>
 
-                      <td style={tdStyle}>
-                        <span style={{ display: "inline-block", lineHeight: 1 }}>
-                          {stock.score ?? 0}
-                        </span>
-                      </td>
+                      <td style={tdStyle}>{stock.score ?? 0}</td>
 
-                      <td style={tdStyle}>
-                        <span
-                          style={{
-                            fontWeight: 800,
-                            color: "#cfe2ff",
-                            display: "inline-block",
-                            lineHeight: 1,
-                          }}
-                        >
-                          {stock.risk_reward || "-"}
-                        </span>
-                      </td>
+                      <td style={tdStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
                   );
                 })}
@@ -1345,7 +1265,9 @@ export default function Home() {
                     onClick={() => setCurrentPage(page)}
                     style={{
                       ...pageBtnStyle,
-                      background: active ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)" : "#184889",
+                      background: active
+                        ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                        : "#184889",
                       boxShadow: active ? "0 8px 22px rgba(80, 150, 255, 0.22)" : "none",
                     }}
                   >
@@ -1418,7 +1340,7 @@ const thStyle: React.CSSProperties = {
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "6px 4px",
+  padding: "6px 6px",
   textAlign: "center",
   color: "#ffffff",
   fontSize: "12px",
