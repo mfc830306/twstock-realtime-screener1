@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Stock = {
   market?: string;
@@ -11,810 +11,1468 @@ type Stock = {
   change_percent: number;
   volume?: number;
   score?: number;
+  recommendation_score?: number;
   signal?: string;
-  grade?: string;
-  risk_reward_ratio?: string;
+  trend_type?: string;
+  reason?: string;
+  technical_comment?: string;
+  operation_rating?: string;
+  operation_bias?: string;
+  operation_style?: string;
+  strategy_action?: string;
+  entry_price?: string;
+  target_price?: string;
+  stop_loss?: string;
+  risk_reward?: string;
+  risk_note?: string;
+  update_time?: string;
+  analysis_source?: string;
 };
 
-type CategoryItem = {
+type FocusedStock = {
+  symbol: string;
+  name: string;
+  market: string;
+  price: number;
+  change: number;
+  change_percent: number;
+  volume: number;
+  signal: string;
+  trend_type: string;
+  operation_rating: string;
+  operation_bias: string;
+  operation_style: string;
+  technical_comment: string;
+  analysis: string;
+  strategy_action: string;
+  entry_price: string;
+  target_price: string;
+  stop_loss: string;
+  risk_reward: string;
+  risk_note: string;
+  update_time: string;
+};
+
+type BackendCategory = {
   key: string;
   label: string;
   count: number;
 };
 
 type ApiResponse = {
-  success?: boolean;
+  success: boolean;
   market_status?: string;
   data_date?: string;
   last_update?: string;
   total?: number;
-  stocks?: Stock[];
-  categories?: CategoryItem[];
+  all_total?: number;
+  twse_total?: number;
+  otc_total?: number;
+  stocks: Stock[];
+  recommendations?: Stock[];
+  categories?: BackendCategory[];
+  focused_stock?: FocusedStock | null;
   message?: string;
+  error?: string;
+  source_summary?: {
+    twse_data_date?: string;
+    tpex_data_date?: string;
+  };
 };
 
-const BACKEND_URL = "https://twstock-realtime-screener1.onrender.com/stocks";
-const PAGE_SIZE = 20;
+const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 
-function formatNumber(value: number | undefined | null, digits = 2) {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "-";
-  return n.toLocaleString("zh-TW", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: digits,
-  });
+const PRICE_CATEGORIES = [
+  { key: "all", label: "全部" },
+  { key: "0-50", label: "0-50" },
+  { key: "50-100", label: "50-100" },
+  { key: "100-200", label: "100-200" },
+  { key: "200-500", label: "200-500" },
+  { key: "500+", label: "500+" },
+] as const;
+
+type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
+type RankType = "recommend" | "up" | "down";
+
+const ITEMS_PER_PAGE = 20;
+
+function formatNumber(num?: number) {
+  if (num === undefined || num === null || Number.isNaN(num)) return "-";
+  return num.toLocaleString("zh-TW");
 }
 
-function formatPrice(value: number | undefined | null) {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "-";
-  return n.toLocaleString("zh-TW", {
-    minimumFractionDigits: n >= 100 ? 0 : 2,
-    maximumFractionDigits: n >= 100 ? 1 : 2,
-  });
+function formatPrice(num?: number) {
+  if (num === undefined || num === null || Number.isNaN(num)) return "-";
+  return num.toLocaleString("zh-TW");
 }
 
-function formatVolume(value: number | undefined | null) {
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return "-";
-  return n.toLocaleString("zh-TW");
+function formatSigned(num?: number, digits = 2) {
+  if (num === undefined || num === null || Number.isNaN(num)) return "-";
+  return `${num > 0 ? "+" : num < 0 ? "" : ""}${num.toFixed(digits)}`;
 }
 
-function getPriceCategory(price: number) {
-  if (price < 10) return "0-10";
-  if (price < 20) return "10-20";
-  if (price < 50) return "20-50";
-  if (price < 100) return "50-100";
-  if (price < 200) return "100-200";
-  if (price < 500) return "200-500";
-  if (price < 1000) return "500-1000";
-  return "1000+";
-}
-
-function buildCategories(stocks: Stock[]): CategoryItem[] {
-  const order = [
-    "all",
-    "0-10",
-    "10-20",
-    "20-50",
-    "50-100",
-    "100-200",
-    "200-500",
-    "500-1000",
-    "1000+",
-  ];
-
-  const labels: Record<string, string> = {
-    all: "全部",
-    "0-10": "0-10",
-    "10-20": "10-20",
-    "20-50": "20-50",
-    "50-100": "50-100",
-    "100-200": "100-200",
-    "200-500": "200-500",
-    "500-1000": "500-1000",
-    "1000+": "1000+",
-  };
-
-  const counter: Record<string, number> = {
-    all: stocks.length,
-    "0-10": 0,
-    "10-20": 0,
-    "20-50": 0,
-    "50-100": 0,
-    "100-200": 0,
-    "200-500": 0,
-    "500-1000": 0,
-    "1000+": 0,
-  };
-
-  for (const stock of stocks) {
-    const key = getPriceCategory(Number(stock.price || 0));
-    counter[key] += 1;
+function formatDateString(dateText?: string) {
+  if (!dateText || dateText === "-") return "-";
+  const clean = String(dateText).replace(/\D/g, "");
+  if (clean.length === 8) {
+    return `${clean.slice(0, 4)}/${clean.slice(4, 6)}/${clean.slice(6, 8)}`;
   }
-
-  return order.map((key) => ({
-    key,
-    label: labels[key],
-    count: counter[key] || 0,
-  }));
+  return dateText;
 }
 
-export default function Page() {
+function getMarketLightColor(status?: string) {
+  if (!status) return "#f59e0b";
+  if (status.includes("開盤")) return "#22c55e";
+  if (status.includes("收盤")) return "#ef4444";
+  return "#f59e0b";
+}
+
+function normalizeStock(s: Stock): Stock {
+  return {
+    ...s,
+    price: Number(s.price ?? 0),
+    change: Number(s.change ?? 0),
+    change_percent: Number(s.change_percent ?? 0),
+    volume: Number(s.volume ?? 0),
+    score: Number(s.score ?? 0),
+    recommendation_score: Number(s.recommendation_score ?? 0),
+  };
+}
+
+function getPageNumbers(currentPage: number, totalPages: number): number[] {
+  const pages: number[] = [];
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pages.push(i);
+    return pages;
+  }
+  const start = Math.max(1, currentPage - 2);
+  const end = Math.min(totalPages, currentPage + 2);
+  if (start > 1) pages.push(1);
+  if (start > 2) pages.push(-1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (end < totalPages - 1) pages.push(-2);
+  if (end < totalPages) pages.push(totalPages);
+  return pages;
+}
+
+function stockToFocused(stock: Stock): FocusedStock {
+  return {
+    symbol: stock.symbol,
+    name: stock.name,
+    market: stock.market || "-",
+    price: Number(stock.price || 0),
+    change: Number(stock.change || 0),
+    change_percent: Number(stock.change_percent || 0),
+    volume: Number(stock.volume || 0),
+    signal: stock.signal || "-",
+    trend_type: stock.trend_type || "-",
+    operation_rating: stock.operation_rating || "-",
+    operation_bias: stock.operation_bias || "-",
+    operation_style: stock.operation_style || "-",
+    technical_comment: stock.technical_comment || stock.reason || "-",
+    analysis: stock.reason || "-",
+    strategy_action: stock.strategy_action || "-",
+    entry_price: stock.entry_price || "-",
+    target_price: stock.target_price || "-",
+    stop_loss: stock.stop_loss || "-",
+    risk_reward: stock.risk_reward || "-",
+    risk_note: stock.risk_note || "-",
+    update_time: stock.update_time || "-",
+  };
+}
+
+function getRatingColor(rating?: string) {
+  if (rating === "A") return "#ffd95f";
+  if (rating === "B+") return "#7ee787";
+  if (rating === "C") return "#7fb6ff";
+  if (rating === "D") return "#ff9c9c";
+  return "#dbe8ff";
+}
+
+function getCategoryQuery(category: CategoryKey): {
+  market?: string;
+  price_min?: number;
+  price_max?: number;
+} {
+  switch (category) {
+    case "0-50":
+      return { price_max: 50 };
+    case "50-100":
+      return { price_min: 50, price_max: 100 };
+    case "100-200":
+      return { price_min: 100, price_max: 200 };
+    case "200-500":
+      return { price_min: 200, price_max: 500 };
+    case "500+":
+      return { price_min: 500 };
+    default:
+      return {};
+  }
+}
+
+function getSortQuery(rankType: RankType): { sort_by: string; sort_dir: "asc" | "desc" } {
+  if (rankType === "up") return { sort_by: "change_percent", sort_dir: "desc" };
+  if (rankType === "down") return { sort_by: "change_percent", sort_dir: "asc" };
+  return { sort_by: "recommendation_score", sort_dir: "desc" };
+}
+
+function buildCategoryCountsFromBackend(
+  backendCategories: BackendCategory[],
+  allTotal: number
+): Record<CategoryKey, number> {
+  const backendMap = new Map<string, number>();
+  for (const item of backendCategories || []) {
+    backendMap.set(item.key, Number(item.count || 0));
+  }
+  return {
+    all: allTotal,
+    "0-50":
+      (backendMap.get("0-10") || 0) +
+      (backendMap.get("10-20") || 0) +
+      (backendMap.get("20-50") || 0),
+    "50-100": backendMap.get("50-100") || 0,
+    "100-200": backendMap.get("100-200") || 0,
+    "200-500": backendMap.get("200-500") || 0,
+    "500+": (backendMap.get("500-1000") || 0) + (backendMap.get("1000+") || 0),
+  };
+}
+
+export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [recommendations, setRecommendations] = useState<Stock[]>([]);
+  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>([]);
   const [marketStatus, setMarketStatus] = useState("-");
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
-  const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortType, setSortType] = useState<"change_desc" | "change_asc" | "volume_desc" | "score_desc">("change_desc");
-  const [page, setPage] = useState(1);
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("all");
+  const [rankType, setRankType] = useState<RankType>("recommend");
   const [loading, setLoading] = useState(false);
-  const [errorText, setErrorText] = useState("");
+  const [error, setError] = useState("");
+  const [isMobile, setIsMobile] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
+  const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
+  const [total, setTotal] = useState(0);
+  const [allTotal, setAllTotal] = useState(0);
 
-  const fetchStocks = async () => {
+  const initialLoadedRef = useRef(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 900);
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  async function fetchRecommendations() {
+    const params = new URLSearchParams({
+      limit: "30",
+      offset: "0",
+      sort_by: "recommendation_score",
+      sort_dir: "desc",
+    });
+    const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
+    const data: ApiResponse = await res.json();
+    if (!data.success) throw new Error(data.error || data.message || "取得推薦資料失敗");
+
+    const source = (data.stocks || []).map(normalizeStock);
+    const safeRecommendations = source
+      .filter((stock) => stock.market === "上市" || stock.market === "上櫃")
+      .sort(
+        (a, b) =>
+          (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0)
+      )
+      .slice(0, 10);
+    setRecommendations(safeRecommendations);
+  }
+
+  async function fetchPagedStocks(
+    override?: Partial<{
+      category: CategoryKey;
+      page: number;
+      rank: RankType;
+      keyword: string;
+    }>
+  ) {
+    setLoading(true);
+    setError("");
+
     try {
-      setLoading(true);
-      setErrorText("");
+      const category = override?.category ?? selectedCategory;
+      const page = override?.page ?? currentPage;
+      const rank = override?.rank ?? rankType;
+      const keyword = override?.keyword ?? debouncedSearchTerm;
 
-      const res = await fetch(BACKEND_URL, { cache: "no-store" });
+      const categoryQuery = getCategoryQuery(category);
+      const sortQuery = getSortQuery(rank);
+
+      const params = new URLSearchParams({
+        limit: String(ITEMS_PER_PAGE),
+        offset: String((page - 1) * ITEMS_PER_PAGE),
+        sort_by: sortQuery.sort_by,
+        sort_dir: sortQuery.sort_dir,
+      });
+
+      if (keyword) params.set("q", keyword);
+      if (categoryQuery.market) params.set("market", categoryQuery.market);
+      if (categoryQuery.price_min !== undefined) {
+        params.set("price_min", String(categoryQuery.price_min));
+      }
+      if (categoryQuery.price_max !== undefined) {
+        params.set("price_max", String(categoryQuery.price_max));
+      }
+
+      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const data: ApiResponse = await res.json();
+      if (!data.success) throw new Error(data.error || data.message || "取得資料失敗");
 
-      const incomingStocks = Array.isArray(data.stocks) ? data.stocks : [];
-      setStocks(incomingStocks);
-      setCategories(
-        Array.isArray(data.categories) && data.categories.length > 0
-          ? [{ key: "all", label: "全部", count: incomingStocks.length }, ...data.categories.filter((c) => c.key !== "all")]
-          : buildCategories(incomingStocks)
-      );
+      const safeStocks = (data.stocks || []).map(normalizeStock);
+      setStocks(safeStocks);
+      setTotal(Number(data.total || 0));
+
+      if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
+      if (data.categories) setBackendCategories(data.categories);
+
       setMarketStatus(data.market_status || "-");
-      setDataDate(data.data_date || "-");
-      setLastUpdate(data.last_update || "-");
-    } catch (error) {
-      console.error(error);
-      setErrorText("讀取資料失敗");
+      setDataDate(
+        data.data_date ||
+          data.source_summary?.twse_data_date ||
+          data.source_summary?.tpex_data_date ||
+          "-"
+      );
+      setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
+
+      if (data.focused_stock) {
+        setFocusedStock(data.focused_stock);
+      } else if (!manualSelectedSymbol && !keyword) {
+        setFocusedStock(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "載入失敗");
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  async function fetchAllData() {
+    try {
+      setLoading(true);
+      setError("");
+      await Promise.all([
+        fetchRecommendations(),
+        fetchPagedStocks({
+          category: selectedCategory,
+          page: currentPage,
+          rank: rankType,
+          keyword: debouncedSearchTerm,
+        }),
+      ]);
+      initialLoadedRef.current = true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "載入失敗");
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    fetchStocks();
-    const timer = setInterval(fetchStocks, 20000);
-    return () => clearInterval(timer);
+    fetchAllData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    setPage(1);
-  }, [selectedCategory, searchTerm, sortType]);
-
-  const filteredStocks = useMemo(() => {
-    let result = [...stocks];
-
-    if (selectedCategory !== "all") {
-      result = result.filter((stock) => {
-        const price = Number(stock.price || 0);
-        return getPriceCategory(price) === selectedCategory;
-      });
-    }
-
-    const keyword = searchTerm.trim().toLowerCase();
-    if (keyword) {
-      result = result.filter((stock) => {
-        const symbol = String(stock.symbol || "").toLowerCase();
-        const name = String(stock.name || "").toLowerCase();
-        return symbol.includes(keyword) || name.includes(keyword);
-      });
-    }
-
-    result.sort((a, b) => {
-      if (sortType === "change_desc") {
-        return Number(b.change_percent || 0) - Number(a.change_percent || 0);
-      }
-      if (sortType === "change_asc") {
-        return Number(a.change_percent || 0) - Number(b.change_percent || 0);
-      }
-      if (sortType === "volume_desc") {
-        return Number(b.volume || 0) - Number(a.volume || 0);
-      }
-      return Number(b.score || 0) - Number(a.score || 0);
+    if (!initialLoadedRef.current) return;
+    fetchPagedStocks({
+      category: selectedCategory,
+      page: currentPage,
+      rank: rankType,
+      keyword: debouncedSearchTerm,
     });
-
-    return result;
-  }, [stocks, selectedCategory, searchTerm, sortType]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredStocks.length / PAGE_SIZE));
-
-  const pagedStocks = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return filteredStocks.slice(start, start + PAGE_SIZE);
-  }, [filteredStocks, page]);
-
-  const recommendStocks = useMemo(() => {
-    return [...stocks]
-      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
-      .slice(0, 10);
-  }, [stocks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, debouncedSearchTerm]);
 
   useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
+    if (!initialLoadedRef.current) return;
+    fetchRecommendations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCategory]);
+
+  useEffect(() => {
+    if (!initialLoadedRef.current) return;
+    const timer = setInterval(() => {
+      fetchPagedStocks({
+        category: selectedCategory,
+        page: currentPage,
+        rank: rankType,
+        keyword: debouncedSearchTerm,
+      });
+    }, 120000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, selectedCategory, rankType, debouncedSearchTerm]);
+
+  const categoryCounts = useMemo(
+    () => buildCategoryCountsFromBackend(backendCategories, allTotal),
+    [backendCategories, allTotal]
+  );
+
+  const totalPages = Math.max(1, Math.ceil(total / ITEMS_PER_PAGE));
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  const pageNumbers = useMemo(
+    () => getPageNumbers(currentPage, totalPages),
+    [currentPage, totalPages]
+  );
+
+  const activeFocusedStock = useMemo(() => {
+    if (manualSelectedSymbol) {
+      const manualTarget =
+        stocks.find((stock) => stock.symbol === manualSelectedSymbol) ||
+        recommendations.find((stock) => stock.symbol === manualSelectedSymbol);
+      if (manualTarget) return stockToFocused(manualTarget);
     }
-  }, [page, totalPages]);
+    if (focusedStock) return focusedStock;
+    if (debouncedSearchTerm && stocks.length === 1) return stockToFocused(stocks[0]);
+    return null;
+  }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
+
+  const panelStyle: React.CSSProperties = {
+    background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
+    border: "1px solid rgba(80, 140, 220, 0.22)",
+    borderRadius: "22px",
+    padding: isMobile ? "18px" : "24px",
+    minHeight: isMobile ? "auto" : "540px",
+    boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+    overflow: "hidden",
+  };
+
+  const marketLightColor = getMarketLightColor(marketStatus);
 
   return (
-    <main className="page-wrap">
-      <div className="page-inner">
-        <section className="top-summary-card">
-          <div className="summary-grid">
-            <div className="summary-item">
-              <div className="summary-label">市場狀態</div>
-              <div className="summary-value">{marketStatus}</div>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "linear-gradient(180deg, #08264d 0%, #0a2d5e 100%)",
+        color: "#ffffff",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          borderBottom: "1px solid rgba(80, 140, 220, 0.15)",
+          background: "rgba(7, 33, 70, 0.55)",
+          backdropFilter: "blur(6px)",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "1400px",
+            margin: "0 auto",
+            padding: isMobile ? "14px 16px" : "14px 36px",
+            display: "flex",
+            alignItems: isMobile ? "flex-start" : "center",
+            justifyContent: "space-between",
+            gap: "16px",
+            flexWrap: "wrap",
+            flexDirection: isMobile ? "column" : "row",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap" }}>
+            <div
+              style={{
+                fontSize: isMobile ? "28px" : "34px",
+                fontWeight: 900,
+                lineHeight: 1,
+                letterSpacing: "1px",
+                color: "#5ea4ff",
+              }}
+            >
+              TWSTOCK
             </div>
-            <div className="summary-item">
-              <div className="summary-label">資料日期</div>
-              <div className="summary-value">{dataDate}</div>
-            </div>
-            <div className="summary-item">
-              <div className="summary-label">最後更新</div>
-              <div className="summary-value">{lastUpdate}</div>
-            </div>
-          </div>
-        </section>
-
-        <section className="top-panel-grid">
-          <div className="panel-card">
-            <div className="panel-title">股票分類</div>
-
-            <div className="category-list">
-              {categories.map((cat) => (
-                <button
-                  key={cat.key}
-                  type="button"
-                  className={`category-btn ${selectedCategory === cat.key ? "active" : ""}`}
-                  onClick={() => setSelectedCategory(cat.key)}
-                >
-                  <span>{cat.label}</span>
-                  <span className="category-count">({cat.count})</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="filter-box">
-              <input
-                className="search-input"
-                type="text"
-                placeholder="搜尋股票代號 / 名稱"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-
-              <select
-                className="sort-select"
-                value={sortType}
-                onChange={(e) => setSortType(e.target.value as "change_desc" | "change_asc" | "volume_desc" | "score_desc")}
-              >
-                <option value="change_desc">漲幅由大到小</option>
-                <option value="change_asc">跌幅由大到小</option>
-                <option value="volume_desc">成交量由大到小</option>
-                <option value="score_desc">分數由大到小</option>
-              </select>
+            <div style={{ fontSize: isMobile ? "20px" : "24px", opacity: 0.95, fontWeight: 700 }}>
+              - 即時選股系統
             </div>
           </div>
 
-          <div className="panel-card">
-            <div className="panel-title">推薦 10 檔</div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: isMobile ? "stretch" : "center",
+              gap: "12px",
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+              width: isMobile ? "100%" : "auto",
+              flexDirection: isMobile ? "column" : "row",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px 18px",
+                padding: "10px 16px",
+                borderRadius: "14px",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "#e8f1ff",
+                fontSize: "14px",
+                fontWeight: 700,
+                flexWrap: "wrap",
+                width: isMobile ? "100%" : "auto",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span
+                  style={{
+                    width: "10px",
+                    height: "10px",
+                    borderRadius: "50%",
+                    background: marketLightColor,
+                    boxShadow: `0 0 6px ${marketLightColor}`,
+                    display: "inline-block",
+                  }}
+                />
+                市場狀態：{marketStatus}
+              </span>
+              <span>資料日期：{formatDateString(dataDate)}</span>
+              <span>最後更新：{lastUpdate}</span>
+            </div>
 
-            <div className="recommend-list">
-              {recommendStocks.map((stock, index) => {
-                const up = Number(stock.change_percent || 0) >= 0;
+            <button
+              type="button"
+              onClick={fetchAllData}
+              disabled={loading}
+              style={{
+                border: "none",
+                borderRadius: "12px",
+                padding: "10px 16px",
+                background: "linear-gradient(180deg, #5aa5ff 0%, #3c7ff1 100%)",
+                color: "#fff",
+                fontWeight: 800,
+                cursor: loading ? "not-allowed" : "pointer",
+                opacity: loading ? 0.7 : 1,
+                minWidth: "78px",
+                width: isMobile ? "100%" : "auto",
+              }}
+            >
+              {loading ? "更新中" : "更新"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          maxWidth: "1400px",
+          margin: "0 auto",
+          padding: isMobile ? "18px 16px 24px" : "26px 36px",
+        }}
+      >
+        {error && (
+          <div
+            style={{
+              marginBottom: "16px",
+              background: "rgba(255, 80, 80, 0.15)",
+              border: "1px solid rgba(255, 120, 120, 0.35)",
+              color: "#ffd4d4",
+              padding: "12px 16px",
+              borderRadius: "12px",
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr" : "minmax(320px, 390px) minmax(0, 1fr)",
+            gap: "20px",
+            alignItems: "start",
+            marginBottom: "22px",
+          }}
+        >
+          <div style={panelStyle}>
+            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>價格分類</h2>
+
+            <div style={{ marginBottom: "20px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+                {PRICE_CATEGORIES.map((item) => {
+                  const active = selectedCategory === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCategory(item.key);
+                        setManualSelectedSymbol("");
+                        setCurrentPage(1);
+                        fetchPagedStocks({
+                          category: item.key,
+                          page: 1,
+                          rank: rankType,
+                          keyword: debouncedSearchTerm,
+                        });
+                      }}
+                      style={{
+                        minWidth: isMobile ? "calc(50% - 6px)" : "118px",
+                        border: "none",
+                        borderRadius: "14px",
+                        padding: "14px 14px",
+                        fontSize: "15px",
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        color: "#fff",
+                        background: active
+                          ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                          : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
+                        boxShadow: active ? "0 8px 22px rgba(80, 150, 255, 0.22)" : "none",
+                      }}
+                    >
+                      {item.label} ({categoryCounts[item.key] || 0})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <input
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setManualSelectedSymbol("");
+              }}
+              placeholder="搜尋股票代號 / 名稱"
+              style={{
+                width: "100%",
+                height: "46px",
+                borderRadius: "14px",
+                border: "none",
+                outline: "none",
+                padding: "0 16px",
+                fontSize: "15px",
+                marginBottom: "18px",
+                background: "#e8edf5",
+                color: "#123",
+              }}
+            />
+
+            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+              {(["recommend", "up", "down"] as RankType[]).map((r) => {
+                const labels = { recommend: "推薦", up: "漲幅", down: "跌幅" };
                 return (
-                  <div key={`${stock.symbol}-${index}`} className="recommend-item">
-                    <div className="recommend-top">
-                      <div className="recommend-name-wrap">
-                        <span className="recommend-symbol">{stock.symbol}</span>
-                        <span className="recommend-name">{stock.name}</span>
-                      </div>
-                      <div className={`recommend-pct ${up ? "up" : "down"}`}>
-                        {up ? "+" : ""}
-                        {formatNumber(stock.change_percent)}%
-                      </div>
-                    </div>
-
-                    <div className="recommend-sub">
-                      <span>股價 {formatPrice(stock.price)}</span>
-                      <span>分數 {formatNumber(stock.score)}</span>
-                    </div>
-                  </div>
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => {
+                      setRankType(r);
+                      setCurrentPage(1);
+                      fetchPagedStocks({
+                        category: selectedCategory,
+                        page: 1,
+                        rank: r,
+                        keyword: debouncedSearchTerm,
+                      });
+                    }}
+                    style={rankType === r ? activeActionBtn : normalActionBtn}
+                  >
+                    {labels[r]}
+                  </button>
                 );
               })}
             </div>
-          </div>
-        </section>
 
-        <section className="table-card">
-          <div className="table-header">
-            <div className="table-title">股票列表 ({filteredStocks.length})</div>
-            <div className="table-meta">
-              {loading ? "資料更新中..." : errorText ? errorText : `第 ${page} / ${totalPages} 頁，每頁 ${PAGE_SIZE} 檔`}
+            <div
+              style={{
+                marginTop: "18px",
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+                paddingTop: "16px",
+                color: "#d9e8ff",
+                lineHeight: 1.8,
+                fontSize: "14px",
+              }}
+            >
+              <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
+                交易模式說明
+              </div>
+              <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
+              <div>• 點擊推薦股或列表股，也可直接切換分析</div>
+              <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
             </div>
           </div>
 
-          <div className="table-scroll">
-            <table className="stock-table">
+          <div style={panelStyle}>
+            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "10px" }}>🔥 推薦10檔</h2>
+
+            <div
+              style={{
+                maxHeight: isMobile ? "none" : "470px",
+                overflowY: isMobile ? "visible" : "auto",
+                paddingRight: isMobile ? "0" : "6px",
+              }}
+            >
+              {recommendations.length === 0 ? (
+                <div style={{ color: "#cfe2ff", padding: "16px 4px", fontWeight: 700 }}>
+                  目前沒有可顯示的推薦資料
+                </div>
+              ) : (
+                recommendations.map((stock) => {
+                  const isUp = stock.change >= 0;
+                  const changeColor = isUp ? "#ff4d4f" : "#00c853";
+                  const isSelected = activeFocusedStock?.symbol === stock.symbol;
+
+                  return (
+                    <div
+                      key={stock.symbol}
+                      onClick={() => {
+                        setManualSelectedSymbol(stock.symbol);
+                        setSearchTerm(stock.symbol);
+                        setFocusedStock(stockToFocused(stock));
+                      }}
+                      style={{
+                        background: isSelected ? "rgba(71, 126, 214, 0.48)" : "rgba(40, 87, 150, 0.45)",
+                        border: isSelected
+                          ? "1px solid rgba(120, 180, 255, 0.52)"
+                          : "1px solid rgba(86, 145, 228, 0.22)",
+                        borderRadius: "18px",
+                        padding: "16px 18px",
+                        marginBottom: "12px",
+                        cursor: "pointer",
+                        boxShadow: isSelected
+                          ? "0 0 0 1px rgba(120,180,255,0.25), 0 12px 24px rgba(0,0,0,0.18)"
+                          : "none",
+                        transition: "0.2s ease",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: "12px",
+                          marginBottom: "10px",
+                          flexDirection: isMobile ? "column" : "row",
+                        }}
+                      >
+                        <div style={{ width: "100%" }}>
+                          <div
+                            style={{
+                              fontSize: isMobile ? "20px" : "22px",
+                              fontWeight: 900,
+                              marginBottom: "10px",
+                              color: "#7fb6ff",
+                            }}
+                          >
+                            {stock.symbol} {stock.name}
+                          </div>
+
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "14px",
+                              flexWrap: "wrap",
+                              alignItems: "center",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                background: "rgba(255, 107, 107, 0.12)",
+                                border: "1px solid rgba(255, 107, 107, 0.28)",
+                                borderRadius: "999px",
+                                padding: "5px 10px",
+                                fontSize: "14px",
+                                fontWeight: 700,
+                                color: "#ff9c9c",
+                              }}
+                            >
+                              {stock.signal || "強勢多方"}
+                            </span>
+
+                            {stock.operation_rating && (
+                              <span
+                                style={{
+                                  background: "rgba(255,255,255,0.08)",
+                                  borderRadius: "999px",
+                                  padding: "5px 10px",
+                                  fontSize: "14px",
+                                  fontWeight: 800,
+                                  color: getRatingColor(stock.operation_rating),
+                                }}
+                              >
+                                評級 {stock.operation_rating}
+                              </span>
+                            )}
+
+                            <span
+                              style={{
+                                background: "rgba(255,255,255,0.08)",
+                                borderRadius: "999px",
+                                padding: "5px 10px",
+                                fontSize: "14px",
+                                fontWeight: 800,
+                                color: "#dbe8ff",
+                              }}
+                            >
+                              {stock.market || "-"}
+                            </span>
+
+                            <span style={{ fontWeight: 700, color: "#dce9ff" }}>
+                              股價 {formatPrice(stock.price)}
+                            </span>
+                            <span style={{ fontWeight: 900, color: changeColor }}>
+                              漲跌 {formatSigned(stock.change)}
+                            </span>
+                            <span style={{ fontWeight: 900, color: changeColor }}>
+                              漲跌% {formatSigned(stock.change_percent)}%
+                            </span>
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            color: "#ffd95f",
+                            fontSize: "18px",
+                            fontWeight: 900,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          分數 {stock.score ?? 0}
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          color: "#dbe8ff",
+                          lineHeight: 1.8,
+                          fontSize: "15px",
+                          marginBottom: "10px",
+                        }}
+                      >
+                        {stock.reason || "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "16px",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          color: "#9fc3f6",
+                          fontWeight: 800,
+                          fontSize: "15px",
+                        }}
+                      >
+                        <span>進場：{stock.entry_price || "-"}</span>
+                        <span>目標：{stock.target_price || "-"}</span>
+                        <span>停損：{stock.stop_loss || "-"}</span>
+                        <span>風報比：{stock.risk_reward || "-"}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </section>
+
+        {activeFocusedStock && (
+          <section
+            style={{
+              marginBottom: "22px",
+              background: "linear-gradient(180deg, #102f63 0%, #0c2955 100%)",
+              border: "1px solid rgba(100,160,255,0.25)",
+              borderRadius: "22px",
+              padding: isMobile ? "18px" : "24px",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "flex-start" : "center",
+                gap: "12px",
+                flexDirection: isMobile ? "column" : "row",
+                marginBottom: "14px",
+              }}
+            >
+              <div>
+                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0, marginBottom: "8px" }}>
+                  📊 個股專業分析
+                </h2>
+                <div style={{ fontSize: isMobile ? "22px" : "26px", fontWeight: 900, color: "#7fb6ff" }}>
+                  {activeFocusedStock.symbol} {activeFocusedStock.name}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                <span style={analysisTagStyle}>{activeFocusedStock.market}</span>
+                <span style={analysisTagStyle}>{activeFocusedStock.signal}</span>
+                <span style={analysisTagStyle}>{activeFocusedStock.trend_type}</span>
+                <span
+                  style={{
+                    ...analysisTagStyle,
+                    color: getRatingColor(activeFocusedStock.operation_rating),
+                    borderColor: "rgba(255,255,255,0.16)",
+                  }}
+                >
+                  評級 {activeFocusedStock.operation_rating}
+                </span>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
+                gap: "12px",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>現價</div>
+                <div style={metricValueStyle}>{formatPrice(activeFocusedStock.price)}</div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>漲跌</div>
+                <div
+                  style={{
+                    ...metricValueStyle,
+                    color: activeFocusedStock.change >= 0 ? "#ff8b8b" : "#57e389",
+                  }}
+                >
+                  {formatSigned(activeFocusedStock.change)}
+                </div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>漲跌%</div>
+                <div
+                  style={{
+                    ...metricValueStyle,
+                    color: activeFocusedStock.change_percent >= 0 ? "#ff8b8b" : "#57e389",
+                  }}
+                >
+                  {formatSigned(activeFocusedStock.change_percent)}%
+                </div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>成交量</div>
+                <div style={metricValueStyle}>{formatNumber(activeFocusedStock.volume)}</div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                gap: "14px",
+                marginBottom: "14px",
+              }}
+            >
+              <div style={analysisBlockStyle}>
+                <div style={analysisBlockTitleStyle}>操作方向</div>
+                <div style={analysisBlockTextStyle}>
+                  {activeFocusedStock.operation_bias} ｜ {activeFocusedStock.operation_style}
+                </div>
+              </div>
+              <div style={analysisBlockStyle}>
+                <div style={analysisBlockTitleStyle}>更新時間</div>
+                <div style={analysisBlockTextStyle}>{activeFocusedStock.update_time || "-"}</div>
+              </div>
+            </div>
+
+            <div style={analysisBlockStyle}>
+              <div style={analysisBlockTitleStyle}>技術分析</div>
+              <div style={analysisBlockTextStyle}>{activeFocusedStock.technical_comment}</div>
+            </div>
+
+            <div style={analysisBlockStyle}>
+              <div style={analysisBlockTitleStyle}>分析結論</div>
+              <div style={analysisBlockTextStyle}>{activeFocusedStock.analysis}</div>
+            </div>
+
+            <div style={analysisBlockStyle}>
+              <div style={analysisBlockTitleStyle}>操作戰略</div>
+              <div style={analysisBlockTextStyle}>{activeFocusedStock.strategy_action}</div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
+                gap: "12px",
+                marginTop: "16px",
+              }}
+            >
+              {[
+                { label: "建議進場", value: activeFocusedStock.entry_price },
+                { label: "目標價", value: activeFocusedStock.target_price },
+                { label: "停損價", value: activeFocusedStock.stop_loss },
+                { label: "風報比", value: activeFocusedStock.risk_reward },
+              ].map(({ label, value }) => (
+                <div key={label} style={tradePlanCardStyle}>
+                  <div style={tradePlanLabelStyle}>{label}</div>
+                  <div style={tradePlanValueStyle}>{value || "-"}</div>
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                marginTop: "16px",
+                padding: "14px 16px",
+                borderRadius: "16px",
+                background: "rgba(255, 92, 92, 0.08)",
+                border: "1px solid rgba(255, 120, 120, 0.18)",
+                color: "#ffb4b4",
+                lineHeight: 1.8,
+                fontWeight: 700,
+              }}
+            >
+              ⚠️ 風險提醒：{activeFocusedStock.risk_note || "-"}
+            </div>
+          </section>
+        )}
+
+        <section
+          style={{
+            background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
+            border: "1px solid rgba(80, 140, 220, 0.22)",
+            borderRadius: "22px",
+            padding: isMobile ? "16px" : "20px",
+            boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: isMobile ? "flex-start" : "center",
+              gap: "12px",
+              marginBottom: "16px",
+              flexDirection: isMobile ? "column" : "row",
+            }}
+          >
+            <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>
+              股票列表 ({total})
+            </h2>
+            <div style={{ color: "#cfe2ff", fontSize: "14px", fontWeight: 700 }}>
+              第 {currentPage} / {totalPages} 頁，每頁 {ITEMS_PER_PAGE} 檔
+            </div>
+          </div>
+
+          <div style={{ overflowX: "auto", borderRadius: "18px" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                minWidth: "1020px",
+                tableLayout: "fixed",
+              }}
+            >
               <thead>
-                <tr>
-                  <th className="col-market">市場</th>
-                  <th className="col-stock">股票代號 股票名稱</th>
-                  <th className="col-price">股價</th>
-                  <th className="col-change">漲跌</th>
-                  <th className="col-change-pct">漲跌%</th>
-                  <th className="col-volume">成交量</th>
-                  <th className="col-signal">訊號</th>
-                  <th className="col-grade">評級</th>
-                  <th className="col-score">分數</th>
-                  <th className="col-rr">風報比</th>
+                <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
+                  <th style={{ ...thStyle, width: "60px" }}>市場</th>
+                  <th style={{ ...thStyle, width: "170px", textAlign: "left" }}>股票代號 股票名稱</th>
+                  <th style={{ ...thStyle, width: "90px" }}>股價</th>
+                  <th style={{ ...thStyle, width: "85px" }}>漲跌</th>
+                  <th style={{ ...thStyle, width: "90px" }}>漲跌%</th>
+                  <th style={{ ...thStyle, width: "105px" }}>成交量</th>
+                  <th style={{ ...thStyle, width: "110px" }}>訊號</th>
+                  <th style={{ ...thStyle, width: "65px" }}>評級</th>
+                  <th style={{ ...thStyle, width: "85px" }}>分數</th>
+                  <th style={{ ...thStyle, width: "85px" }}>風報比</th>
                 </tr>
               </thead>
 
               <tbody>
-                {pagedStocks.map((stock) => {
-                  const isUp = Number(stock.change || 0) >= 0;
-                  const isUpPct = Number(stock.change_percent || 0) >= 0;
+                {stocks.map((stock) => {
+                  const isUp = stock.change >= 0;
+                  const color = isUp ? "#ff4d4f" : "#00c853";
+                  const isSelected = activeFocusedStock?.symbol === stock.symbol;
 
                   return (
-                    <tr key={`${stock.symbol}-${stock.name}`}>
-                      <td className="col-market">{stock.market || "-"}</td>
+                    <tr
+                      key={stock.symbol}
+                      onClick={() => {
+                        setManualSelectedSymbol(stock.symbol);
+                        setSearchTerm(stock.symbol);
+                        setFocusedStock(stockToFocused(stock));
+                      }}
+                      style={{
+                        height: "48px",
+                        borderBottom: "1px solid rgba(255,255,255,0.06)",
+                        background: isSelected ? "rgba(22, 71, 134, 0.88)" : "rgba(8, 36, 76, 0.55)",
+                        cursor: "pointer",
+                        transition: "0.18s ease",
+                      }}
+                    >
+                      <td style={tdStyle}>{stock.market || "-"}</td>
 
-                      <td className="col-stock">
-                        <div className="stock-id-name">
-                          <span className="stock-symbol">{stock.symbol}</span>
-                          <span className="stock-name">{stock.name}</span>
+                      <td
+                        style={{
+                          ...tdStyle,
+                          textAlign: "left",
+                          paddingLeft: "6px",
+                          paddingRight: "6px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            minWidth: "0",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: "14px",
+                              fontWeight: 900,
+                              color: "#7fb6ff",
+                              flexShrink: 0,
+                              lineHeight: 1,
+                            }}
+                          >
+                            {stock.symbol}
+                          </span>
+
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              color: "#ffffff",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              lineHeight: 1,
+                              minWidth: 0,
+                            }}
+                            title={stock.name}
+                          >
+                            {stock.name}
+                          </span>
                         </div>
                       </td>
 
-                      <td className="col-price">{formatPrice(stock.price)}</td>
-
-                      <td className={`col-change ${isUp ? "up" : "down"}`}>
-                        {isUp ? "+" : ""}
-                        {formatNumber(stock.change)}
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            fontSize: "16px",
+                            fontWeight: 900,
+                            color: "#ffffff",
+                            lineHeight: 1,
+                            display: "inline-block",
+                          }}
+                        >
+                          {formatPrice(stock.price)}
+                        </span>
                       </td>
 
-                      <td className={`col-change-pct ${isUpPct ? "up" : "down"}`}>
-                        {isUpPct ? "+" : ""}
-                        {formatNumber(stock.change_percent)}%
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            color,
+                            fontWeight: 900,
+                            fontSize: "14px",
+                            lineHeight: 1,
+                            display: "inline-block",
+                          }}
+                        >
+                          {formatSigned(stock.change)}
+                        </span>
                       </td>
 
-                      <td className="col-volume">{formatVolume(stock.volume)}</td>
-                      <td className="col-signal">{stock.signal || "-"}</td>
-                      <td className="col-grade">{stock.grade || "-"}</td>
-                      <td className="col-score">{formatNumber(stock.score)}</td>
-                      <td className="col-rr">{stock.risk_reward_ratio || "-"}</td>
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            color,
+                            fontWeight: 800,
+                            fontSize: "12px",
+                            lineHeight: 1,
+                            display: "inline-block",
+                          }}
+                        >
+                          {formatSigned(stock.change_percent)}%
+                        </span>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span style={{ fontWeight: 800, display: "inline-block", lineHeight: 1 }}>
+                          {formatNumber(stock.volume)}
+                        </span>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            maxWidth: "96px",
+                            background: "rgba(255,255,255,0.08)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                            padding: "3px 7px",
+                            borderRadius: "999px",
+                            fontSize: "10px",
+                            fontWeight: 800,
+                            color: "#dbe8ff",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            verticalAlign: "middle",
+                            lineHeight: 1.1,
+                          }}
+                          title={stock.signal || "-"}
+                        >
+                          {stock.signal || "-"}
+                        </span>
+                      </td>
+
+                      <td
+                        style={{
+                          ...tdStyle,
+                          color: getRatingColor(stock.operation_rating),
+                          fontWeight: 900,
+                          fontSize: "15px",
+                        }}
+                      >
+                        {stock.operation_rating || "-"}
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span style={{ display: "inline-block", lineHeight: 1 }}>
+                          {stock.score ?? 0}
+                        </span>
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            fontWeight: 800,
+                            color: "#cfe2ff",
+                            display: "inline-block",
+                            lineHeight: 1,
+                          }}
+                        >
+                          {stock.risk_reward || "-"}
+                        </span>
+                      </td>
                     </tr>
                   );
                 })}
-
-                {pagedStocks.length === 0 && (
-                  <tr>
-                    <td colSpan={10} className="empty-row">
-                      查無資料
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
 
-          <div className="pagination-bar">
-            <button
-              type="button"
-              className="page-btn"
-              disabled={page <= 1}
-              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+          {totalPages > 1 && (
+            <div
+              style={{
+                marginTop: "18px",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: "8px",
+                flexWrap: "wrap",
+              }}
             >
-              上一頁
-            </button>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                style={{
+                  ...pageBtnStyle,
+                  opacity: currentPage === 1 ? 0.45 : 1,
+                  cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                }}
+              >
+                上一頁
+              </button>
 
-            <div className="page-number-group">
-              {Array.from({ length: totalPages }, (_, i) => i + 1)
-                .filter((p) => {
-                  if (totalPages <= 10) return true;
-                  return p === 1 || p === totalPages || Math.abs(p - page) <= 2;
-                })
-                .map((p, index, arr) => {
-                  const prev = arr[index - 1];
-                  const showDots = prev && p - prev > 1;
-
+              {pageNumbers.map((page, idx) => {
+                if (page < 0) {
                   return (
-                    <div key={p} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      {showDots && <span className="page-dots">...</span>}
-                      <button
-                        type="button"
-                        className={`page-btn ${page === p ? "active" : ""}`}
-                        onClick={() => setPage(p)}
-                      >
-                        {p}
-                      </button>
-                    </div>
+                    <span
+                      key={`ellipsis-${idx}`}
+                      style={{ color: "#d9e7ff", padding: "0 4px", fontWeight: 800 }}
+                    >
+                      ...
+                    </span>
                   );
-                })}
-            </div>
+                }
+                const active = currentPage === page;
+                return (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    style={{
+                      ...pageBtnStyle,
+                      background: active ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)" : "#184889",
+                      boxShadow: active ? "0 8px 22px rgba(80, 150, 255, 0.22)" : "none",
+                    }}
+                  >
+                    {page}
+                  </button>
+                );
+              })}
 
-            <button
-              type="button"
-              className="page-btn"
-              disabled={page >= totalPages}
-              onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-            >
-              下一頁
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                style={{
+                  ...pageBtnStyle,
+                  opacity: currentPage === totalPages ? 0.45 : 1,
+                  cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                }}
+              >
+                下一頁
+              </button>
+            </div>
+          )}
         </section>
       </div>
-
-      <style jsx>{`
-        .page-wrap {
-          width: 100%;
-          min-height: 100vh;
-          background: #08264d;
-          padding: 12px;
-          color: #ffffff;
-        }
-
-        .page-inner {
-          width: 100%;
-          max-width: 1600px;
-          margin: 0 auto;
-        }
-
-        .top-summary-card,
-        .panel-card,
-        .table-card {
-          background: #0d2d5b;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 18px;
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-        }
-
-        .top-summary-card {
-          padding: 14px 16px;
-          margin-bottom: 14px;
-        }
-
-        .summary-grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        .summary-item {
-          background: rgba(255, 255, 255, 0.04);
-          border-radius: 12px;
-          padding: 12px 14px;
-        }
-
-        .summary-label {
-          font-size: 12px;
-          color: #b8cff5;
-          margin-bottom: 6px;
-        }
-
-        .summary-value {
-          font-size: 18px;
-          font-weight: 700;
-        }
-
-        .top-panel-grid {
-          display: grid;
-          grid-template-columns: 360px minmax(0, 1fr);
-          gap: 14px;
-          margin-bottom: 14px;
-        }
-
-        .panel-card {
-          padding: 14px;
-        }
-
-        .panel-title {
-          font-size: 28px;
-          font-weight: 800;
-          margin-bottom: 12px;
-        }
-
-        .category-list {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-          margin-bottom: 14px;
-        }
-
-        .category-btn {
-          border: none;
-          border-radius: 12px;
-          padding: 12px 10px;
-          background: rgba(255, 255, 255, 0.06);
-          color: #ffffff;
-          cursor: pointer;
-          font-size: 15px;
-          font-weight: 700;
-        }
-
-        .category-btn.active {
-          background: linear-gradient(180deg, #3a78c7 0%, #1d4f96 100%);
-        }
-
-        .category-count {
-          margin-left: 4px;
-          color: #d2e5ff;
-        }
-
-        .filter-box {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-
-        .search-input,
-        .sort-select {
-          width: 100%;
-          height: 44px;
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          border-radius: 12px;
-          background: rgba(255, 255, 255, 0.06);
-          color: #ffffff;
-          padding: 0 12px;
-          outline: none;
-        }
-
-        .sort-select option {
-          color: #000000;
-        }
-
-        .recommend-list {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-          max-height: 360px;
-          overflow-y: auto;
-          padding-right: 4px;
-        }
-
-        .recommend-item {
-          background: rgba(255, 255, 255, 0.05);
-          border-radius: 12px;
-          padding: 12px;
-        }
-
-        .recommend-top {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 8px;
-        }
-
-        .recommend-name-wrap {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-        }
-
-        .recommend-symbol {
-          font-weight: 800;
-          color: #9fd0ff;
-          flex: 0 0 auto;
-        }
-
-        .recommend-name {
-          font-weight: 700;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .recommend-sub {
-          display: flex;
-          gap: 14px;
-          flex-wrap: wrap;
-          color: #c5d8f7;
-          font-size: 13px;
-        }
-
-        .table-card {
-          padding: 14px;
-        }
-
-        .table-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 12px;
-        }
-
-        .table-title {
-          font-size: 18px;
-          font-weight: 800;
-        }
-
-        .table-meta {
-          font-size: 13px;
-          color: #c7daf5;
-        }
-
-        .table-scroll {
-          width: 100%;
-          overflow-x: auto;
-        }
-
-        .stock-table {
-          width: 100%;
-          border-collapse: collapse;
-          table-layout: fixed;
-          min-width: 1120px;
-          background: #0d2d5b;
-          border-radius: 14px;
-          overflow: hidden;
-        }
-
-        .stock-table thead th {
-          background: linear-gradient(180deg, #3972be 0%, #27589c 100%);
-          color: #ffffff;
-          font-size: 13px;
-          font-weight: 800;
-          padding: 10px 8px;
-          white-space: nowrap;
-        }
-
-        .stock-table tbody td {
-          padding: 10px 8px;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-          white-space: nowrap;
-          font-size: 14px;
-          font-weight: 700;
-        }
-
-        .stock-table tbody tr:hover {
-          background: rgba(255, 255, 255, 0.03);
-        }
-
-        .col-market {
-          width: 48px;
-          text-align: center;
-        }
-
-        .col-stock {
-          width: 190px;
-          text-align: left;
-        }
-
-        .col-price {
-          width: 70px;
-          text-align: right;
-        }
-
-        .col-change {
-          width: 76px;
-          text-align: center;
-        }
-
-        .col-change-pct {
-          width: 82px;
-          text-align: center;
-        }
-
-        .col-volume {
-          width: 92px;
-          text-align: center;
-        }
-
-        .col-signal {
-          width: 90px;
-          text-align: center;
-        }
-
-        .col-grade {
-          width: 70px;
-          text-align: center;
-        }
-
-        .col-score {
-          width: 78px;
-          text-align: center;
-        }
-
-        .col-rr {
-          width: 78px;
-          text-align: center;
-        }
-
-        .stock-id-name {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          overflow: hidden;
-          min-width: 0;
-        }
-
-        .stock-symbol {
-          flex: 0 0 auto;
-          font-weight: 800;
-          color: #8fc4ff;
-        }
-
-        .stock-name {
-          flex: 1 1 auto;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .up {
-          color: #ff5b6e;
-        }
-
-        .down {
-          color: #57d38c;
-        }
-
-        .empty-row {
-          text-align: center;
-          padding: 24px 12px !important;
-          color: #c7daf5;
-        }
-
-        .pagination-bar {
-          margin-top: 14px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-
-        .page-number-group {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
-
-        .page-btn {
-          min-width: 42px;
-          height: 38px;
-          border: none;
-          border-radius: 10px;
-          padding: 0 12px;
-          background: rgba(255, 255, 255, 0.08);
-          color: #ffffff;
-          font-weight: 700;
-          cursor: pointer;
-        }
-
-        .page-btn.active {
-          background: linear-gradient(180deg, #3a78c7 0%, #1d4f96 100%);
-        }
-
-        .page-btn:disabled {
-          opacity: 0.45;
-          cursor: not-allowed;
-        }
-
-        .page-dots {
-          color: #c7daf5;
-          font-weight: 700;
-        }
-
-        @media (max-width: 1100px) {
-          .top-panel-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 768px) {
-          .page-wrap {
-            padding: 10px;
-          }
-
-          .summary-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .panel-title {
-            font-size: 22px;
-          }
-
-          .category-list {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .stock-table {
-            min-width: 980px;
-          }
-        }
-      `}</style>
     </main>
   );
 }
+
+const activeActionBtn: React.CSSProperties = {
+  border: "none",
+  borderRadius: "14px",
+  padding: "12px 16px",
+  fontSize: "15px",
+  fontWeight: 800,
+  cursor: "pointer",
+  color: "#fff",
+  background: "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)",
+};
+
+const normalActionBtn: React.CSSProperties = {
+  border: "none",
+  borderRadius: "14px",
+  padding: "12px 16px",
+  fontSize: "15px",
+  fontWeight: 800,
+  cursor: "pointer",
+  color: "#fff",
+  background: "#184889",
+};
+
+const pageBtnStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: "12px",
+  padding: "10px 14px",
+  minWidth: "44px",
+  fontSize: "14px",
+  fontWeight: 800,
+  color: "#fff",
+  background: "#184889",
+};
+
+const thStyle: React.CSSProperties = {
+  padding: "8px 8px",
+  textAlign: "center",
+  color: "#ffffff",
+  fontSize: "12px",
+  fontWeight: 800,
+  whiteSpace: "nowrap",
+  lineHeight: 1.1,
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: "6px 8px",
+  textAlign: "center",
+  color: "#ffffff",
+  fontSize: "12px",
+  fontWeight: 700,
+  verticalAlign: "middle",
+  lineHeight: 1,
+};
+
+const analysisTagStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  padding: "6px 10px",
+  borderRadius: "999px",
+  fontWeight: 800,
+  color: "#dbe8ff",
+  fontSize: "14px",
+};
+
+const metricCardStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "16px",
+  padding: "14px 16px",
+};
+
+const metricLabelStyle: React.CSSProperties = {
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
+};
+
+const metricValueStyle: React.CSSProperties = {
+  color: "#ffffff",
+  fontSize: "22px",
+  fontWeight: 900,
+};
+
+const analysisBlockStyle: React.CSSProperties = {
+  marginTop: "12px",
+  padding: "14px 16px",
+  borderRadius: "16px",
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const analysisBlockTitleStyle: React.CSSProperties = {
+  color: "#7fb6ff",
+  fontSize: "15px",
+  fontWeight: 900,
+  marginBottom: "8px",
+};
+
+const analysisBlockTextStyle: React.CSSProperties = {
+  color: "#dbe8ff",
+  lineHeight: 1.85,
+  fontSize: "15px",
+  fontWeight: 700,
+};
+
+const tradePlanCardStyle: React.CSSProperties = {
+  background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
+  border: "1px solid rgba(108,162,255,0.16)",
+  borderRadius: "16px",
+  padding: "14px 16px",
+};
+
+const tradePlanLabelStyle: React.CSSProperties = {
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
+};
+
+const tradePlanValueStyle: React.CSSProperties = {
+  color: "#ffffff",
+  fontSize: "16px",
+  fontWeight: 900,
+  lineHeight: 1.6,
+};
