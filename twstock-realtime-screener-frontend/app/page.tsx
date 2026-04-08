@@ -1081,25 +1081,39 @@ export default function Home() {
           <div style={{ overflowX: "auto", borderRadius: "18px" }}>
             <table
               style={{
-                width: "max-content",
+                width: "100%",
                 borderCollapse: "collapse",
-                minWidth: "930px",
+                minWidth: "1020px",
                 tableLayout: "fixed",
               }}
             >
+              <colgroup>
+                <col style={{ width: "52px" }} />
+                <col style={{ width: "62px" }} />
+                <col />
+                <col style={{ width: "82px" }} />
+                <col style={{ width: "78px" }} />
+                <col style={{ width: "82px" }} />
+                <col style={{ width: "96px" }} />
+                <col style={{ width: "96px" }} />
+                <col style={{ width: "58px" }} />
+                <col style={{ width: "72px" }} />
+                <col style={{ width: "78px" }} />
+              </colgroup>
+
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
-                  <th style={{ ...thStyle, width: "54px" }}>市場</th>
-                  <th style={{ ...thStyle, width: "72px" }}>代號</th>
-                  <th style={{ ...thStyle, width: "112px", textAlign: "left" }}>名稱</th>
-                  <th style={{ ...thStyle, width: "82px" }}>股價</th>
-                  <th style={{ ...thStyle, width: "78px" }}>漲跌</th>
-                  <th style={{ ...thStyle, width: "82px" }}>漲跌%</th>
-                  <th style={{ ...thStyle, width: "96px" }}>成交量</th>
-                  <th style={{ ...thStyle, width: "96px" }}>訊號</th>
-                  <th style={{ ...thStyle, width: "58px" }}>評級</th>
-                  <th style={{ ...thStyle, width: "72px" }}>分數</th>
-                  <th style={{ ...thStyle, width: "78px" }}>風報比</th>
+                  <th style={thStyle}>市場</th>
+                  <th style={thStyle}>代號</th>
+                  <th style={{ ...thStyle, textAlign: "left" }}>名稱</th>
+                  <th style={thStyle}>股價</th>
+                  <th style={thStyle}>漲跌</th>
+                  <th style={thStyle}>漲跌%</th>
+                  <th style={thStyle}>成交量</th>
+                  <th style={thStyle}>訊號</th>
+                  <th style={thStyle}>評級</th>
+                  <th style={thStyle}>分數</th>
+                  <th style={thStyle}>風報比</th>
                 </tr>
               </thead>
 
@@ -1159,8 +1173,8 @@ export default function Home() {
                         style={{
                           ...tdStyle,
                           textAlign: "left",
-                          paddingLeft: "6px",
-                          paddingRight: "6px",
+                          paddingLeft: "4px",
+                          paddingRight: "4px",
                           overflow: "hidden",
                         }}
                         title={stock.name}
@@ -1404,7 +1418,7 @@ const thStyle: React.CSSProperties = {
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "6px 6px",
+  padding: "6px 4px",
   textAlign: "center",
   color: "#ffffff",
   fontSize: "12px",
