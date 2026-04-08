@@ -325,10 +325,12 @@ export default function Home() {
 
       if (keyword) params.set("q", keyword);
       if (categoryQuery.market) params.set("market", categoryQuery.market);
-      if (categoryQuery.price_min !== undefined)
+      if (categoryQuery.price_min !== undefined) {
         params.set("price_min", String(categoryQuery.price_min));
-      if (categoryQuery.price_max !== undefined)
+      }
+      if (categoryQuery.price_max !== undefined) {
         params.set("price_max", String(categoryQuery.price_max));
+      }
 
       const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -704,7 +706,9 @@ export default function Home() {
                 fontSize: "14px",
               }}
             >
-              <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>交易模式說明</div>
+              <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
+                交易模式說明
+              </div>
               <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
               <div>• 點擊推薦股或列表股，也可直接切換分析</div>
               <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
@@ -1073,18 +1077,25 @@ export default function Home() {
           </div>
 
           <div style={{ overflowX: "auto", borderRadius: "18px" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "980px" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                minWidth: "980px",
+                tableLayout: "fixed",
+              }}
+            >
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
-                  <th style={{ ...thStyle, width: "90px" }}>市場</th>
-                  <th style={{ ...thStyle, width: "190px", textAlign: "left" }}>股票</th>
-                  <th style={{ ...thStyle, width: "120px" }}>股價</th>
-                  <th style={{ ...thStyle, width: "140px" }}>漲跌</th>
-                  <th style={{ ...thStyle, width: "130px" }}>成交量</th>
-                  <th style={{ ...thStyle, width: "160px" }}>訊號</th>
-                  <th style={{ ...thStyle, width: "90px" }}>評級</th>
+                  <th style={{ ...thStyle, width: "70px" }}>市場</th>
+                  <th style={{ ...thStyle, width: "160px", textAlign: "left" }}>股票</th>
+                  <th style={{ ...thStyle, width: "95px" }}>股價</th>
+                  <th style={{ ...thStyle, width: "120px" }}>漲跌</th>
+                  <th style={{ ...thStyle, width: "110px" }}>成交量</th>
+                  <th style={{ ...thStyle, width: "120px" }}>訊號</th>
+                  <th style={{ ...thStyle, width: "70px" }}>評級</th>
                   <th style={{ ...thStyle, width: "90px" }}>分數</th>
-                  <th style={{ ...thStyle, width: "120px" }}>風報比</th>
+                  <th style={{ ...thStyle, width: "90px" }}>風報比</th>
                 </tr>
               </thead>
 
@@ -1103,7 +1114,7 @@ export default function Home() {
                         setFocusedStock(stockToFocused(stock));
                       }}
                       style={{
-                        borderBottom: "1px solid rgba(255,255,255,0.08)",
+                        borderBottom: "1px solid rgba(255,255,255,0.06)",
                         background: isSelected ? "rgba(22, 71, 134, 0.88)" : "rgba(8, 36, 76, 0.55)",
                         cursor: "pointer",
                         transition: "0.18s ease",
@@ -1111,34 +1122,43 @@ export default function Home() {
                     >
                       <td style={tdStyle}>{stock.market || "-"}</td>
 
-                      <td style={{ ...tdStyle, textAlign: "left" }}>
+                      <td
+                        style={{
+                          ...tdStyle,
+                          textAlign: "left",
+                          paddingLeft: "10px",
+                          paddingRight: "10px",
+                        }}
+                      >
                         <div
                           style={{
                             display: "flex",
                             flexDirection: "column",
-                            gap: "4px",
+                            gap: "1px",
                             minWidth: "0",
+                            lineHeight: 1.05,
                           }}
                         >
                           <div
                             style={{
-                              fontSize: "16px",
+                              fontSize: "15px",
                               fontWeight: 900,
                               color: "#7fb6ff",
-                              lineHeight: 1.2,
+                              lineHeight: 1.05,
                             }}
                           >
                             {stock.symbol}
                           </div>
                           <div
                             style={{
-                              fontSize: "14px",
+                              fontSize: "12px",
                               fontWeight: 700,
                               color: "#ffffff",
-                              lineHeight: 1.25,
+                              lineHeight: 1.1,
                               whiteSpace: "nowrap",
                               overflow: "hidden",
                               textOverflow: "ellipsis",
+                              opacity: 0.95,
                             }}
                             title={stock.name}
                           >
@@ -1148,7 +1168,7 @@ export default function Home() {
                       </td>
 
                       <td style={tdStyle}>
-                        <div style={{ fontSize: "18px", fontWeight: 900, color: "#ffffff" }}>
+                        <div style={{ fontSize: "18px", fontWeight: 900, color: "#ffffff", lineHeight: 1.05 }}>
                           {formatPrice(stock.price)}
                         </div>
                       </td>
@@ -1158,8 +1178,8 @@ export default function Home() {
                           style={{
                             color,
                             fontWeight: 900,
-                            fontSize: "17px",
-                            lineHeight: 1.15,
+                            fontSize: "16px",
+                            lineHeight: 1.05,
                           }}
                         >
                           {formatSigned(stock.change)}
@@ -1168,8 +1188,9 @@ export default function Home() {
                           style={{
                             color,
                             fontWeight: 800,
-                            fontSize: "13px",
-                            marginTop: "4px",
+                            fontSize: "11px",
+                            marginTop: "1px",
+                            lineHeight: 1.05,
                           }}
                         >
                           {formatSigned(stock.change_percent)}%
@@ -1184,18 +1205,19 @@ export default function Home() {
                         <span
                           style={{
                             display: "inline-block",
-                            maxWidth: "140px",
+                            maxWidth: "104px",
                             background: "rgba(255,255,255,0.08)",
                             border: "1px solid rgba(255,255,255,0.08)",
-                            padding: "6px 10px",
+                            padding: "4px 8px",
                             borderRadius: "999px",
-                            fontSize: "13px",
+                            fontSize: "11px",
                             fontWeight: 800,
                             color: "#dbe8ff",
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                             verticalAlign: "middle",
+                            lineHeight: 1.1,
                           }}
                           title={stock.signal || "-"}
                         >
@@ -1255,7 +1277,10 @@ export default function Home() {
               {pageNumbers.map((page, idx) => {
                 if (page < 0) {
                   return (
-                    <span key={`ellipsis-${idx}`} style={{ color: "#d9e7ff", padding: "0 4px", fontWeight: 800 }}>
+                    <span
+                      key={`ellipsis-${idx}`}
+                      style={{ color: "#d9e7ff", padding: "0 4px", fontWeight: 800 }}
+                    >
                       ...
                     </span>
                   );
@@ -1331,21 +1356,23 @@ const pageBtnStyle: React.CSSProperties = {
 };
 
 const thStyle: React.CSSProperties = {
-  padding: "14px 12px",
+  padding: "10px 10px",
   textAlign: "center",
   color: "#ffffff",
-  fontSize: "15px",
+  fontSize: "13px",
   fontWeight: 800,
   whiteSpace: "nowrap",
+  lineHeight: 1.1,
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "14px 12px",
+  padding: "8px 10px",
   textAlign: "center",
   color: "#ffffff",
-  fontSize: "14px",
+  fontSize: "13px",
   fontWeight: 700,
   verticalAlign: "middle",
+  lineHeight: 1.15,
 };
 
 const analysisTagStyle: React.CSSProperties = {
