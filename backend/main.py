@@ -32,7 +32,7 @@ _CACHE: Dict[str, Any] = {
     "last_update": "",
     "message": "",
 }
-CACHE_SECONDS = 60  # 從 20 秒改為 60 秒，減少不必要的重抓
+CACHE_SECONDS = 60
 
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 HISTORY_CACHE_HOURS = 6
@@ -224,24 +224,8 @@ def format_number(num: float) -> str:
     return f"{num:,.2f}"
 
 
-def is_etf_symbol(symbol: str, name: str) -> bool:
-    s = safe_str(symbol)
-    n = safe_str(name).upper()
-    if s.startswith("00"):
-        return True
-    if "ETF" in n:
-        return True
-    return False
-
-
-def is_valid_stock_symbol(symbol: str, is_etf: bool) -> bool:
+def is_valid_stock_symbol(symbol: str) -> bool:
     s = safe_str(symbol).upper()
-    if not s:
-        return False
-    if is_etf:
-        if len(s) in (4, 5, 6) and s[:4].isdigit():
-            return True
-        return False
     return len(s) == 4 and s.isdigit()
 
 
@@ -1139,9 +1123,8 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         return None
 
     name = safe_str(row.get("name") or row.get("stockName") or row.get("stock_name") or symbol)
-    is_etf = is_etf_symbol(symbol, name)
 
-    if not is_valid_stock_symbol(symbol, is_etf=is_etf):
+    if not is_valid_stock_symbol(symbol):
         return None
 
     price = safe_float(
@@ -1168,10 +1151,6 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         or row.get("accumulatedVolume") or row.get("tradeVolumeAtBid")
     )
     trade_value = safe_int(row.get("tradeValue"))
-
-    if market_label == "興櫃" and not is_etf:
-        if volume < 100 or price < 1:
-            return None
 
     open_price = safe_float(row.get("openPrice"))
     high_price = safe_float(row.get("highPrice"))
@@ -1212,7 +1191,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     )
 
     return {
-        "market": "ETF" if is_etf else market_label,
+        "market": market_label,
         "symbol": symbol,
         "name": name,
         "price": round(price, 2),
@@ -1229,7 +1208,6 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         "update_time": update_time_str,
         "update_time_raw": update_time_raw,
         "category": category,
-        "is_etf": is_etf,
         "signal": signal_info["signal"],
         "trend_type": strategy_info["trend_type"],
         "reason": final_reason,
@@ -1264,7 +1242,6 @@ def fetch_snapshot_rows_by_type(
 
 
 def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]]:
-    # 移除多餘的 COMMONSTOCK 查詢，ALLBUT0999 已涵蓋所有股票
     stock_client = get_stock_rest_client()
     try:
         return fetch_snapshot_rows_by_type(
@@ -1281,7 +1258,7 @@ def get_all_stocks_raw() -> Dict[str, Any]:
     all_stocks: List[Dict[str, Any]] = []
     errors: List[str] = []
 
-    for market_code, market_label in [("TSE", "上市"), ("OTC", "上櫃"), ("ESB", "興櫃")]:
+    for market_code, market_label in [("TSE", "上市"), ("OTC", "上櫃")]:
         try:
             rows = fetch_snapshot_market(market_code, market_label)
             all_stocks.extend(rows)
@@ -1351,23 +1328,18 @@ def filter_stocks(
     price_min: float = 0.0,
     price_max: float = 0.0,
 ) -> List[Dict[str, Any]]:
-    result = stocks
+    result = [s for s in stocks if is_main_board_stock(s)]
     market_lower = safe_str(market).lower()
-    has_price_filter = price_min > 0 or price_max > 0
-    has_category_filter = category != "all"
 
-    if market_lower in ("all", ""):
-        result = [s for s in result if is_main_board_stock(s)]
-    else:
+    if market_lower not in ("all", ""):
         market_map = {
-            "tse": "上市", "otc": "上櫃", "esb": "興櫃",
-            "etf": "ETF", "ETF": "ETF", "上市": "上市", "上櫃": "上櫃", "興櫃": "興櫃",
+            "tse": "上市",
+            "otc": "上櫃",
+            "上市": "上市",
+            "上櫃": "上櫃",
         }
         target_market = market_map.get(market_lower, market)
         result = [s for s in result if s.get("market") == target_market]
-
-    if (has_price_filter or has_category_filter) and market_lower not in ("esb", "etf"):
-        result = [s for s in result if is_main_board_stock(s)]
 
     if category != "all":
         result = [s for s in result if s.get("category") == category]
@@ -1417,7 +1389,6 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
     )
     top_items = candidates[:top_n]
 
-    # 平行抓歷史 K 線，max_workers=5 避免 API 限流
     result_map: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_symbol = {
@@ -1468,7 +1439,6 @@ def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
         "low": s.get("low", 0),
         "update_time": s.get("update_time", ""),
         "category": s.get("category", ""),
-        "is_etf": s.get("is_etf", False),
         "signal": s.get("signal", ""),
         "trend_type": s.get("trend_type", ""),
         "reason": s.get("reason", ""),
@@ -1541,7 +1511,8 @@ def get_stocks(
         if offset == 0 and market == "all" and not q.strip():
             recs = build_recommendations(all_stocks, top_n=10)
 
-        cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
+        main_board = [s for s in all_stocks if is_main_board_stock(s)]
+        cats = build_categories(main_board)
 
         focused = find_focused_stock(filtered, q)
         if focused:
@@ -1549,7 +1520,8 @@ def get_stocks(
             symbol = focused.get("symbol", "")
             paged = [focused if x.get("symbol") == symbol else x for x in paged]
 
-        main_board = [s for s in all_stocks if is_main_board_stock(s)]
+        listed_total = len([s for s in all_stocks if s.get("market") == "上市"])
+        otc_total = len([s for s in all_stocks if s.get("market") == "上櫃"])
 
         return {
             "success": True,
@@ -1560,10 +1532,9 @@ def get_stocks(
             "total": total_filtered,
             "offset": offset,
             "limit": limit,
-            # 前端 count 一次到位，不需額外打 3 個請求
             "all_total": len(main_board),
-            "esb_total": len([s for s in all_stocks if s.get("market") == "興櫃"]),
-            "etf_total": len([s for s in all_stocks if s.get("market") == "ETF"]),
+            "listed_total": listed_total,
+            "otc_total": otc_total,
             "categories": cats,
             "recommendations": [clean_stock_output(x) for x in recs],
             "focused_stock": build_focused_analysis(focused) if focused else None,
