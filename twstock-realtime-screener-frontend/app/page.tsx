@@ -744,7 +744,9 @@ export default function Home() {
                         setFocusedStock(stockToFocused(stock));
                       }}
                       style={{
-                        background: isSelected ? "rgba(71, 126, 214, 0.48)" : "rgba(40, 87, 150, 0.45)",
+                        background: isSelected
+                          ? "rgba(71, 126, 214, 0.48)"
+                          : "rgba(40, 87, 150, 0.45)",
                         border: isSelected
                           ? "1px solid rgba(120, 180, 255, 0.52)"
                           : "1px solid rgba(86, 145, 228, 0.22)",
@@ -1079,24 +1081,25 @@ export default function Home() {
           <div style={{ overflowX: "auto", borderRadius: "18px" }}>
             <table
               style={{
-                width: "100%",
+                width: "max-content",
                 borderCollapse: "collapse",
-                minWidth: "1020px",
+                minWidth: "930px",
                 tableLayout: "fixed",
               }}
             >
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
-                  <th style={{ ...thStyle, width: "60px" }}>市場</th>
-                  <th style={{ ...thStyle, width: "170px", textAlign: "left" }}>股票代號 股票名稱</th>
-                  <th style={{ ...thStyle, width: "90px" }}>股價</th>
-                  <th style={{ ...thStyle, width: "85px" }}>漲跌</th>
-                  <th style={{ ...thStyle, width: "90px" }}>漲跌%</th>
-                  <th style={{ ...thStyle, width: "105px" }}>成交量</th>
-                  <th style={{ ...thStyle, width: "110px" }}>訊號</th>
-                  <th style={{ ...thStyle, width: "65px" }}>評級</th>
-                  <th style={{ ...thStyle, width: "85px" }}>分數</th>
-                  <th style={{ ...thStyle, width: "85px" }}>風報比</th>
+                  <th style={{ ...thStyle, width: "54px" }}>市場</th>
+                  <th style={{ ...thStyle, width: "72px" }}>代號</th>
+                  <th style={{ ...thStyle, width: "112px", textAlign: "left" }}>名稱</th>
+                  <th style={{ ...thStyle, width: "82px" }}>股價</th>
+                  <th style={{ ...thStyle, width: "78px" }}>漲跌</th>
+                  <th style={{ ...thStyle, width: "82px" }}>漲跌%</th>
+                  <th style={{ ...thStyle, width: "96px" }}>成交量</th>
+                  <th style={{ ...thStyle, width: "96px" }}>訊號</th>
+                  <th style={{ ...thStyle, width: "58px" }}>評級</th>
+                  <th style={{ ...thStyle, width: "72px" }}>分數</th>
+                  <th style={{ ...thStyle, width: "78px" }}>風報比</th>
                 </tr>
               </thead>
 
@@ -1115,14 +1118,42 @@ export default function Home() {
                         setFocusedStock(stockToFocused(stock));
                       }}
                       style={{
-                        height: "48px",
+                        height: "46px",
                         borderBottom: "1px solid rgba(255,255,255,0.06)",
                         background: isSelected ? "rgba(22, 71, 134, 0.88)" : "rgba(8, 36, 76, 0.55)",
                         cursor: "pointer",
                         transition: "0.18s ease",
                       }}
                     >
-                      <td style={tdStyle}>{stock.market || "-"}</td>
+                      <td
+                        style={{
+                          ...tdStyle,
+                          paddingLeft: "4px",
+                          paddingRight: "4px",
+                        }}
+                      >
+                        {stock.market || "-"}
+                      </td>
+
+                      <td
+                        style={{
+                          ...tdStyle,
+                          paddingLeft: "4px",
+                          paddingRight: "4px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "13px",
+                            fontWeight: 900,
+                            color: "#7fb6ff",
+                            lineHeight: 1,
+                            display: "inline-block",
+                          }}
+                        >
+                          {stock.symbol}
+                        </span>
+                      </td>
 
                       <td
                         style={{
@@ -1130,51 +1161,29 @@ export default function Home() {
                           textAlign: "left",
                           paddingLeft: "6px",
                           paddingRight: "6px",
+                          overflow: "hidden",
                         }}
+                        title={stock.name}
                       >
-                        <div
+                        <span
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "6px",
-                            minWidth: "0",
-                            whiteSpace: "nowrap",
+                            display: "block",
                             overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            fontSize: "12px",
+                            fontWeight: 700,
+                            lineHeight: 1.1,
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: "14px",
-                              fontWeight: 900,
-                              color: "#7fb6ff",
-                              flexShrink: 0,
-                              lineHeight: 1,
-                            }}
-                          >
-                            {stock.symbol}
-                          </span>
-
-                          <span
-                            style={{
-                              fontSize: "12px",
-                              fontWeight: 700,
-                              color: "#ffffff",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              lineHeight: 1,
-                              minWidth: 0,
-                            }}
-                            title={stock.name}
-                          >
-                            {stock.name}
-                          </span>
-                        </div>
+                          {stock.name}
+                        </span>
                       </td>
 
                       <td style={tdStyle}>
                         <span
                           style={{
-                            fontSize: "16px",
+                            fontSize: "15px",
                             fontWeight: 900,
                             color: "#ffffff",
                             lineHeight: 1,
@@ -1190,7 +1199,7 @@ export default function Home() {
                           style={{
                             color,
                             fontWeight: 900,
-                            fontSize: "14px",
+                            fontSize: "13px",
                             lineHeight: 1,
                             display: "inline-block",
                           }}
@@ -1223,10 +1232,10 @@ export default function Home() {
                         <span
                           style={{
                             display: "inline-block",
-                            maxWidth: "96px",
+                            maxWidth: "86px",
                             background: "rgba(255,255,255,0.08)",
                             border: "1px solid rgba(255,255,255,0.08)",
-                            padding: "3px 7px",
+                            padding: "3px 6px",
                             borderRadius: "999px",
                             fontSize: "10px",
                             fontWeight: 800,
@@ -1248,7 +1257,7 @@ export default function Home() {
                           ...tdStyle,
                           color: getRatingColor(stock.operation_rating),
                           fontWeight: 900,
-                          fontSize: "15px",
+                          fontSize: "14px",
                         }}
                       >
                         {stock.operation_rating || "-"}
@@ -1385,7 +1394,7 @@ const pageBtnStyle: React.CSSProperties = {
 };
 
 const thStyle: React.CSSProperties = {
-  padding: "8px 8px",
+  padding: "8px 6px",
   textAlign: "center",
   color: "#ffffff",
   fontSize: "12px",
@@ -1395,7 +1404,7 @@ const thStyle: React.CSSProperties = {
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: "6px 8px",
+  padding: "6px 6px",
   textAlign: "center",
   color: "#ffffff",
   fontSize: "12px",
