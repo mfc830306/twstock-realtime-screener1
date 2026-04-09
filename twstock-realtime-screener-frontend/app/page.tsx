@@ -80,16 +80,84 @@ type ApiResponse = {
   };
 };
 
+type ValidationSummaryOverall = {
+  count: number;
+  win_rate_t1: number;
+  win_rate_t3: number;
+  win_rate_t5: number;
+  target_hit_rate_5d: number;
+  stop_hit_rate_5d: number;
+  both_same_bar_rate_5d: number;
+  avg_strategy_return_t1: number;
+  avg_strategy_return_t3: number;
+  avg_strategy_return_t5: number;
+  avg_raw_return_t5: number;
+  avg_mfe_5d: number;
+  avg_mae_5d: number;
+};
+
+type ValidationSummaryResponse = {
+  success: boolean;
+  lookback_days: number;
+  holding_days: number;
+  overall?: ValidationSummaryOverall;
+};
+
+type ValidationDetailItem = {
+  date: string;
+  symbol: string;
+  name: string;
+  market: string;
+  signal: string;
+  direction: string;
+  operation_rating: string;
+  strategy_return_t5: number;
+  target_hit: boolean;
+  stop_hit: boolean;
+  first_hit: string;
+};
+
+type ValidationDetailsResponse = {
+  success: boolean;
+  lookback_days: number;
+  holding_days: number;
+  count: number;
+  items: ValidationDetailItem[];
+};
+
+type ValidationLogItem = {
+  date: string;
+  symbol: string;
+  name: string;
+  market: string;
+  pick_price: number;
+  signal: string;
+  trend_type: string;
+  operation_bias: string;
+  operation_rating: string;
+  recommendation_score: number;
+  entry_price: string;
+  target_price: string;
+  stop_loss: string;
+  risk_reward: string;
+};
+
+type ValidationLogsResponse = {
+  success: boolean;
+  total: number;
+  items: ValidationLogItem[];
+};
+
 const BACKEND_ROOT = "https://twstock-realtime-screener1.onrender.com";
 const BACKEND_BASE = `${BACKEND_ROOT}/stocks`;
 
 const PRICE_CATEGORIES = [
-  { key: "all",     label: "全部" },
-  { key: "0-50",    label: "0-50" },
-  { key: "50-100",  label: "50-100" },
+  { key: "all", label: "全部" },
+  { key: "0-50", label: "0-50" },
+  { key: "50-100", label: "50-100" },
   { key: "100-200", label: "100-200" },
   { key: "200-500", label: "200-500" },
-  { key: "500+",    label: "500+" },
+  { key: "500+", label: "500+" },
 ] as const;
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
@@ -107,6 +175,11 @@ const formatPrice = formatNumber;
 function formatSigned(num?: number, digits = 2) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
   return `${num > 0 ? "+" : num < 0 ? "" : ""}${num.toFixed(digits)}`;
+}
+
+function formatPercent(num?: number, digits = 2) {
+  if (num === undefined || num === null || Number.isNaN(num)) return "-";
+  return `${num.toFixed(digits)}%`;
 }
 
 function formatDateString(dateText?: string) {
@@ -208,7 +281,10 @@ function getCategoryQuery(category: CategoryKey): {
   }
 }
 
-function getSortQuery(rankType: RankType): { sort_by: string; sort_dir: "asc" | "desc" } {
+function getSortQuery(rankType: RankType): {
+  sort_by: string;
+  sort_dir: "asc" | "desc";
+} {
   if (rankType === "up") return { sort_by: "change_percent", sort_dir: "desc" };
   if (rankType === "down") return { sort_by: "change_percent", sort_dir: "asc" };
   return { sort_by: "recommendation_score", sort_dir: "desc" };
@@ -224,24 +300,43 @@ function buildCategoryCountsFromBackend(
   }
   return {
     all: allTotal,
-    "0-50": (backendMap.get("0-10") || 0) + (backendMap.get("10-20") || 0) + (backendMap.get("20-50") || 0),
+    "0-50":
+      (backendMap.get("0-10") || 0) +
+      (backendMap.get("10-20") || 0) +
+      (backendMap.get("20-50") || 0),
     "50-100": backendMap.get("50-100") || 0,
     "100-200": backendMap.get("100-200") || 0,
     "200-500": backendMap.get("200-500") || 0,
-    "500+": (backendMap.get("500-1000") || 0) + (backendMap.get("1000+") || 0),
+    "500+":
+      (backendMap.get("500-1000") || 0) +
+      (backendMap.get("1000+") || 0),
   };
+}
+
+function getSummaryStatusText(overall?: ValidationSummaryOverall) {
+  if (!overall || overall.count === 0) return "尚無可驗證資料";
+  if (overall.avg_strategy_return_t5 > 1 && overall.win_rate_t5 >= 55) {
+    return "策略表現偏正向";
+  }
+  if (overall.avg_strategy_return_t5 > 0 && overall.win_rate_t5 >= 50) {
+    return "策略初步可觀察";
+  }
+  return "策略仍需持續驗證";
 }
 
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [recommendations, setRecommendations] = useState<Stock[]>([]);
-  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>([]);
+  const [backendCategories, setBackendCategories] = useState<BackendCategory[]>(
+    []
+  );
   const [marketStatus, setMarketStatus] = useState("-");
   const [dataDate, setDataDate] = useState("-");
   const [lastUpdate, setLastUpdate] = useState("-");
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("all");
+  const [selectedCategory, setSelectedCategory] =
+    useState<CategoryKey>("all");
   const [rankType, setRankType] = useState<RankType>("recommend");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -251,6 +346,16 @@ export default function Home() {
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
   const [total, setTotal] = useState(0);
   const [allTotal, setAllTotal] = useState(0);
+
+  const [showValidationPanel, setShowValidationPanel] = useState(false);
+  const [validationLoading, setValidationLoading] = useState(false);
+  const [validationError, setValidationError] = useState("");
+  const [validationSummary, setValidationSummary] =
+    useState<ValidationSummaryResponse | null>(null);
+  const [validationDetails, setValidationDetails] = useState<
+    ValidationDetailItem[]
+  >([]);
+  const [validationLogs, setValidationLogs] = useState<ValidationLogItem[]>([]);
 
   const initialLoadedRef = useRef(false);
 
@@ -281,20 +386,34 @@ export default function Home() {
       sort_by: "recommendation_score",
       sort_dir: "desc",
     });
-    const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
+    const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
+      cache: "no-store",
+    });
     const data: ApiResponse = await res.json();
-    if (!data.success) throw new Error(data.error || data.message || "取得推薦資料失敗");
+    if (!data.success) {
+      throw new Error(data.error || data.message || "取得推薦資料失敗");
+    }
 
     const source = (data.stocks || []).map(normalizeStock);
     const safeRecommendations = source
       .filter((s) => s.market === "上市" || s.market === "上櫃")
-      .sort((a, b) => (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0))
+      .sort(
+        (a, b) =>
+          (b.recommendation_score || b.score || 0) -
+          (a.recommendation_score || a.score || 0)
+      )
       .slice(0, 10);
+
     setRecommendations(safeRecommendations);
   }
 
   async function fetchPagedStocks(
-    override?: Partial<{ category: CategoryKey; page: number; rank: RankType; keyword: string }>
+    override?: Partial<{
+      category: CategoryKey;
+      page: number;
+      rank: RankType;
+      keyword: string;
+    }>
   ) {
     setLoading(true);
     setError("");
@@ -316,14 +435,22 @@ export default function Home() {
 
       if (keyword) params.set("q", keyword);
       if (categoryQuery.market) params.set("market", categoryQuery.market);
-      if (categoryQuery.price_min !== undefined) params.set("price_min", String(categoryQuery.price_min));
-      if (categoryQuery.price_max !== undefined) params.set("price_max", String(categoryQuery.price_max));
+      if (categoryQuery.price_min !== undefined) {
+        params.set("price_min", String(categoryQuery.price_min));
+      }
+      if (categoryQuery.price_max !== undefined) {
+        params.set("price_max", String(categoryQuery.price_max));
+      }
 
-      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
+      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data: ApiResponse = await res.json();
-      if (!data.success) throw new Error(data.error || data.message || "取得資料失敗");
+      if (!data.success) {
+        throw new Error(data.error || data.message || "取得資料失敗");
+      }
 
       setStocks((data.stocks || []).map(normalizeStock));
       setTotal(Number(data.total || 0));
@@ -369,6 +496,42 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "載入失敗");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchValidationCenter() {
+    setValidationLoading(true);
+    setValidationError("");
+    try {
+      const [summaryRes, detailsRes, logsRes] = await Promise.all([
+        fetch(`${BACKEND_ROOT}/validation/summary`, { cache: "no-store" }),
+        fetch(`${BACKEND_ROOT}/validation/details?lookback_days=180&holding_days=5`, {
+          cache: "no-store",
+        }),
+        fetch(`${BACKEND_ROOT}/validation/logs?limit=10`, { cache: "no-store" }),
+      ]);
+
+      if (!summaryRes.ok || !detailsRes.ok || !logsRes.ok) {
+        throw new Error("驗證資料讀取失敗");
+      }
+
+      const summaryData: ValidationSummaryResponse = await summaryRes.json();
+      const detailsData: ValidationDetailsResponse = await detailsRes.json();
+      const logsData: ValidationLogsResponse = await logsRes.json();
+
+      if (!summaryData.success) throw new Error("驗證總覽讀取失敗");
+      if (!detailsData.success) throw new Error("驗證明細讀取失敗");
+      if (!logsData.success) throw new Error("驗證紀錄讀取失敗");
+
+      setValidationSummary(summaryData);
+      setValidationDetails((detailsData.items || []).slice(0, 8));
+      setValidationLogs((logsData.items || []).slice(0, 8));
+    } catch (err) {
+      setValidationError(
+        err instanceof Error ? err.message : "驗證資料載入失敗"
+      );
+    } finally {
+      setValidationLoading(false);
     }
   }
 
@@ -426,9 +589,17 @@ export default function Home() {
       if (t) return stockToFocused(t);
     }
     if (focusedStock) return focusedStock;
-    if (debouncedSearchTerm && stocks.length === 1) return stockToFocused(stocks[0]);
+    if (debouncedSearchTerm && stocks.length === 1) {
+      return stockToFocused(stocks[0]);
+    }
     return null;
-  }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
+  }, [
+    manualSelectedSymbol,
+    stocks,
+    recommendations,
+    focusedStock,
+    debouncedSearchTerm,
+  ]);
 
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
@@ -441,23 +612,6 @@ export default function Home() {
   };
 
   const marketLightColor = getMarketLightColor(marketStatus);
-
-  const validationMiniBtnStyle: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    height: isMobile ? "28px" : "26px",
-    padding: isMobile ? "0 8px" : "0 7px",
-    borderRadius: "8px",
-    border: "1px solid rgba(255,255,255,0.14)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#dbe8ff",
-    textDecoration: "none",
-    fontSize: isMobile ? "11px" : "10px",
-    fontWeight: 800,
-    lineHeight: 1,
-    whiteSpace: "nowrap",
-  };
 
   return (
     <main
@@ -488,7 +642,9 @@ export default function Home() {
             flexDirection: isMobile ? "column" : "row",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap" }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap" }}
+          >
             <div
               style={{
                 fontSize: isMobile ? "28px" : "34px",
@@ -500,10 +656,13 @@ export default function Home() {
             >
               TWSTOCK
             </div>
-            <div style={{ fontSize: isMobile ? "20px" : "24px", opacity: 0.95, fontWeight: 700 }}>
+            <div
+              style={{ fontSize: isMobile ? "20px" : "24px", opacity: 0.95, fontWeight: 700 }}
+            >
               - 即時選股系統
             </div>
           </div>
+
           <div
             style={{
               display: "flex",
@@ -547,6 +706,7 @@ export default function Home() {
               <span>資料日期：{formatDateString(dataDate)}</span>
               <span>最後更新：{lastUpdate}</span>
             </div>
+
             <button
               type="button"
               onClick={fetchAllData}
@@ -605,52 +765,42 @@ export default function Home() {
             <div
               style={{
                 display: "flex",
-                alignItems: isMobile ? "flex-start" : "center",
+                alignItems: "center",
                 justifyContent: "space-between",
                 gap: "10px",
                 marginBottom: "18px",
-                flexWrap: "nowrap",
               }}
             >
-              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0, flexShrink: 0 }}>
+              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>
                 價格分類
               </h2>
 
-              <div
+              <button
+                type="button"
+                onClick={async () => {
+                  const next = !showValidationPanel;
+                  setShowValidationPanel(next);
+                  if (next && !validationSummary && !validationLoading) {
+                    await fetchValidationCenter();
+                  }
+                }}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  flexWrap: "wrap",
-                  justifyContent: "flex-end",
-                  marginLeft: "10px",
+                  border: "1px solid rgba(255,255,255,0.14)",
+                  borderRadius: "9px",
+                  background: showValidationPanel
+                    ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                    : "rgba(255,255,255,0.06)",
+                  color: "#ffffff",
+                  fontWeight: 800,
+                  fontSize: "11px",
+                  padding: isMobile ? "7px 10px" : "6px 10px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
                 }}
               >
-                <a
-                  href={`${BACKEND_ROOT}/validation/summary`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={validationMiniBtnStyle}
-                >
-                  總結
-                </a>
-                <a
-                  href={`${BACKEND_ROOT}/validation/details`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={validationMiniBtnStyle}
-                >
-                  明細
-                </a>
-                <a
-                  href={`${BACKEND_ROOT}/validation/logs`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={validationMiniBtnStyle}
-                >
-                  紀錄
-                </a>
-              </div>
+                {showValidationPanel ? "收合驗證中心" : "驗證中心"}
+              </button>
             </div>
 
             <div style={{ marginBottom: "20px" }}>
@@ -750,7 +900,13 @@ export default function Home() {
                 fontSize: "14px",
               }}
             >
-              <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
+              <div
+                style={{
+                  fontWeight: 900,
+                  color: "#9fc3f6",
+                  marginBottom: "6px",
+                }}
+              >
                 交易模式說明
               </div>
               <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
@@ -771,7 +927,13 @@ export default function Home() {
               }}
             >
               {recommendations.length === 0 ? (
-                <div style={{ color: "#cfe2ff", padding: "16px 4px", fontWeight: 700 }}>
+                <div
+                  style={{
+                    color: "#cfe2ff",
+                    padding: "16px 4px",
+                    fontWeight: 700,
+                  }}
+                >
                   目前沒有可顯示的推薦資料
                 </div>
               ) : (
@@ -847,6 +1009,7 @@ export default function Home() {
                             >
                               {stock.signal || "強勢多方"}
                             </span>
+
                             {stock.operation_rating && (
                               <span
                                 style={{
@@ -861,6 +1024,7 @@ export default function Home() {
                                 評級 {stock.operation_rating}
                               </span>
                             )}
+
                             <span
                               style={{
                                 background: "rgba(255,255,255,0.08)",
@@ -873,6 +1037,7 @@ export default function Home() {
                             >
                               {stock.market || "-"}
                             </span>
+
                             <span style={{ fontWeight: 700, color: "#dce9ff" }}>
                               股價 {formatPrice(stock.price)}
                             </span>
@@ -884,6 +1049,7 @@ export default function Home() {
                             </span>
                           </div>
                         </div>
+
                         <div
                           style={{
                             color: "#ffd95f",
@@ -895,6 +1061,7 @@ export default function Home() {
                           分數 {stock.score ?? 0}
                         </div>
                       </div>
+
                       <div
                         style={{
                           color: "#dbe8ff",
@@ -903,8 +1070,10 @@ export default function Home() {
                           marginBottom: "10px",
                         }}
                       >
-                        {stock.reason || "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
+                        {stock.reason ||
+                          "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
                       </div>
+
                       <div
                         style={{
                           display: "flex",
@@ -929,6 +1098,368 @@ export default function Home() {
           </div>
         </section>
 
+        {showValidationPanel && (
+          <section
+            style={{
+              marginBottom: "22px",
+              background: "linear-gradient(180deg, #102f63 0%, #0c2955 100%)",
+              border: "1px solid rgba(100,160,255,0.25)",
+              borderRadius: "22px",
+              padding: isMobile ? "18px" : "24px",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "flex-start" : "center",
+                gap: "12px",
+                flexDirection: isMobile ? "column" : "row",
+                marginBottom: "16px",
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    fontSize: "24px",
+                    fontWeight: 900,
+                    margin: 0,
+                    marginBottom: "8px",
+                  }}
+                >
+                  📘 驗證中心
+                </h2>
+                <div
+                  style={{
+                    color: "#cfe2ff",
+                    fontSize: "14px",
+                    fontWeight: 700,
+                  }}
+                >
+                  將原本的 summary / details / logs 整合成同一個頁面顯示
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={fetchValidationCenter}
+                disabled={validationLoading}
+                style={{
+                  border: "none",
+                  borderRadius: "12px",
+                  padding: "10px 16px",
+                  background: "linear-gradient(180deg, #5aa5ff 0%, #3c7ff1 100%)",
+                  color: "#fff",
+                  fontWeight: 800,
+                  cursor: validationLoading ? "not-allowed" : "pointer",
+                  opacity: validationLoading ? 0.7 : 1,
+                }}
+              >
+                {validationLoading ? "讀取中" : "重新整理驗證"}
+              </button>
+            </div>
+
+            {validationError && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                  background: "rgba(255,80,80,0.15)",
+                  border: "1px solid rgba(255,120,120,0.35)",
+                  color: "#ffd4d4",
+                  padding: "12px 16px",
+                  borderRadius: "12px",
+                }}
+              >
+                {validationError}
+              </div>
+            )}
+
+            {validationLoading && !validationSummary ? (
+              <div
+                style={{
+                  color: "#dbe8ff",
+                  fontWeight: 700,
+                  padding: "12px 4px",
+                }}
+              >
+                驗證資料載入中...
+              </div>
+            ) : (
+              <>
+                <div
+                  style={{
+                    marginBottom: "16px",
+                    padding: "14px 16px",
+                    borderRadius: "16px",
+                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    color: "#dbe8ff",
+                    fontWeight: 800,
+                    lineHeight: 1.8,
+                  }}
+                >
+                  驗證狀態：{getSummaryStatusText(validationSummary?.overall)}
+                  {validationSummary?.overall?.count === 0 &&
+                    "（目前尚未累積到已完成 5 日驗證的資料）"}
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile
+                      ? "1fr 1fr"
+                      : "repeat(6, minmax(0,1fr))",
+                    gap: "12px",
+                    marginBottom: "18px",
+                  }}
+                >
+                  <div style={validationMetricCardStyle}>
+                    <div style={validationMetricLabelStyle}>驗證筆數</div>
+                    <div style={validationMetricValueStyle}>
+                      {formatNumber(validationSummary?.overall?.count || 0)}
+                    </div>
+                  </div>
+
+                  <div style={validationMetricCardStyle}>
+                    <div style={validationMetricLabelStyle}>1日勝率</div>
+                    <div style={validationMetricValueStyle}>
+                      {formatPercent(validationSummary?.overall?.win_rate_t1 || 0)}
+                    </div>
+                  </div>
+
+                  <div style={validationMetricCardStyle}>
+                    <div style={validationMetricLabelStyle}>3日勝率</div>
+                    <div style={validationMetricValueStyle}>
+                      {formatPercent(validationSummary?.overall?.win_rate_t3 || 0)}
+                    </div>
+                  </div>
+
+                  <div style={validationMetricCardStyle}>
+                    <div style={validationMetricLabelStyle}>5日勝率</div>
+                    <div style={validationMetricValueStyle}>
+                      {formatPercent(validationSummary?.overall?.win_rate_t5 || 0)}
+                    </div>
+                  </div>
+
+                  <div style={validationMetricCardStyle}>
+                    <div style={validationMetricLabelStyle}>5日平均報酬</div>
+                    <div
+                      style={{
+                        ...validationMetricValueStyle,
+                        color:
+                          (validationSummary?.overall?.avg_strategy_return_t5 || 0) >=
+                          0
+                            ? "#7ee787"
+                            : "#ff9c9c",
+                      }}
+                    >
+                      {formatSigned(
+                        validationSummary?.overall?.avg_strategy_return_t5 || 0
+                      )}
+                      %
+                    </div>
+                  </div>
+
+                  <div style={validationMetricCardStyle}>
+                    <div style={validationMetricLabelStyle}>停利 / 停損</div>
+                    <div
+                      style={{
+                        ...validationMetricValueStyle,
+                        fontSize: isMobile ? "15px" : "16px",
+                      }}
+                    >
+                      {formatPercent(
+                        validationSummary?.overall?.target_hit_rate_5d || 0
+                      )}{" "}
+                      /{" "}
+                      {formatPercent(
+                        validationSummary?.overall?.stop_hit_rate_5d || 0
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                    gap: "16px",
+                  }}
+                >
+                  <div style={validationBlockStyle}>
+                    <div style={validationBlockTitleStyle}>最近驗證結果</div>
+
+                    {validationDetails.length === 0 ? (
+                      <div style={validationEmptyStyle}>
+                        目前沒有已完成驗證的資料
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table
+                          style={{
+                            width: "100%",
+                            borderCollapse: "collapse",
+                            minWidth: "520px",
+                          }}
+                        >
+                          <thead>
+                            <tr>
+                              {["日期", "股票", "方向", "評級", "5日報酬", "結果"].map(
+                                (h) => (
+                                  <th key={h} style={validationThStyle}>
+                                    {h}
+                                  </th>
+                                )
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {validationDetails.map((item, idx) => {
+                              const ret = Number(item.strategy_return_t5 || 0);
+                              const resultText = item.target_hit
+                                ? "已停利"
+                                : item.stop_hit
+                                ? "已停損"
+                                : item.first_hit === "none"
+                                ? "未觸發"
+                                : "觀察中";
+
+                              return (
+                                <tr
+                                  key={`${item.symbol}-${idx}`}
+                                  style={{
+                                    borderTop:
+                                      "1px solid rgba(255,255,255,0.06)",
+                                  }}
+                                >
+                                  <td style={validationTdStyle}>
+                                    {formatDateString(item.date)}
+                                  </td>
+                                  <td
+                                    style={{
+                                      ...validationTdStyle,
+                                      fontWeight: 900,
+                                      color: "#7fb6ff",
+                                    }}
+                                  >
+                                    {item.symbol} {item.name}
+                                  </td>
+                                  <td style={validationTdStyle}>
+                                    {item.direction === "long"
+                                      ? "做多"
+                                      : item.direction === "short"
+                                      ? "做空"
+                                      : "-"}
+                                  </td>
+                                  <td
+                                    style={{
+                                      ...validationTdStyle,
+                                      color: getRatingColor(item.operation_rating),
+                                    }}
+                                  >
+                                    {item.operation_rating || "-"}
+                                  </td>
+                                  <td
+                                    style={{
+                                      ...validationTdStyle,
+                                      color: ret >= 0 ? "#7ee787" : "#ff9c9c",
+                                      fontWeight: 900,
+                                    }}
+                                  >
+                                    {formatSigned(ret)}%
+                                  </td>
+                                  <td style={validationTdStyle}>{resultText}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={validationBlockStyle}>
+                    <div style={validationBlockTitleStyle}>最近推薦紀錄</div>
+
+                    {validationLogs.length === 0 ? (
+                      <div style={validationEmptyStyle}>
+                        目前尚未找到推薦紀錄
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table
+                          style={{
+                            width: "100%",
+                            borderCollapse: "collapse",
+                            minWidth: "560px",
+                          }}
+                        >
+                          <thead>
+                            <tr>
+                              {["日期", "股票", "訊號", "評級", "進場", "目標", "停損"].map(
+                                (h) => (
+                                  <th key={h} style={validationThStyle}>
+                                    {h}
+                                  </th>
+                                )
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {validationLogs.map((item, idx) => (
+                              <tr
+                                key={`${item.symbol}-${idx}`}
+                                style={{
+                                  borderTop:
+                                    "1px solid rgba(255,255,255,0.06)",
+                                }}
+                              >
+                                <td style={validationTdStyle}>
+                                  {formatDateString(item.date)}
+                                </td>
+                                <td
+                                  style={{
+                                    ...validationTdStyle,
+                                    fontWeight: 900,
+                                    color: "#7fb6ff",
+                                  }}
+                                >
+                                  {item.symbol} {item.name}
+                                </td>
+                                <td style={validationTdStyle}>
+                                  {item.signal || "-"}
+                                </td>
+                                <td
+                                  style={{
+                                    ...validationTdStyle,
+                                    color: getRatingColor(item.operation_rating),
+                                  }}
+                                >
+                                  {item.operation_rating || "-"}
+                                </td>
+                                <td style={validationTdStyle}>
+                                  {item.entry_price || "-"}
+                                </td>
+                                <td style={validationTdStyle}>
+                                  {item.target_price || "-"}
+                                </td>
+                                <td style={validationTdStyle}>
+                                  {item.stop_loss || "-"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
         {activeFocusedStock && (
           <section
             style={{
@@ -951,14 +1482,35 @@ export default function Home() {
               }}
             >
               <div>
-                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0, marginBottom: "8px" }}>
+                <h2
+                  style={{
+                    fontSize: "24px",
+                    fontWeight: 900,
+                    margin: 0,
+                    marginBottom: "8px",
+                  }}
+                >
                   📊 個股專業分析
                 </h2>
-                <div style={{ fontSize: isMobile ? "22px" : "26px", fontWeight: 900, color: "#7fb6ff" }}>
+                <div
+                  style={{
+                    fontSize: isMobile ? "22px" : "26px",
+                    fontWeight: 900,
+                    color: "#7fb6ff",
+                  }}
+                >
                   {activeFocusedStock.symbol} {activeFocusedStock.name}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
                 <span style={analysisTagStyle}>{activeFocusedStock.market}</span>
                 <span style={analysisTagStyle}>{activeFocusedStock.signal}</span>
                 <span style={analysisTagStyle}>{activeFocusedStock.trend_type}</span>
@@ -984,14 +1536,17 @@ export default function Home() {
             >
               <div style={metricCardStyle}>
                 <div style={metricLabelStyle}>現價</div>
-                <div style={metricValueStyle}>{formatPrice(activeFocusedStock.price)}</div>
+                <div style={metricValueStyle}>
+                  {formatPrice(activeFocusedStock.price)}
+                </div>
               </div>
               <div style={metricCardStyle}>
                 <div style={metricLabelStyle}>漲跌</div>
                 <div
                   style={{
                     ...metricValueStyle,
-                    color: activeFocusedStock.change >= 0 ? "#ff8b8b" : "#57e389",
+                    color:
+                      activeFocusedStock.change >= 0 ? "#ff8b8b" : "#57e389",
                   }}
                 >
                   {formatSigned(activeFocusedStock.change)}
@@ -1002,7 +1557,10 @@ export default function Home() {
                 <div
                   style={{
                     ...metricValueStyle,
-                    color: activeFocusedStock.change_percent >= 0 ? "#ff8b8b" : "#57e389",
+                    color:
+                      activeFocusedStock.change_percent >= 0
+                        ? "#ff8b8b"
+                        : "#57e389",
                   }}
                 >
                   {formatSigned(activeFocusedStock.change_percent)}%
@@ -1010,7 +1568,9 @@ export default function Home() {
               </div>
               <div style={metricCardStyle}>
                 <div style={metricLabelStyle}>成交量</div>
-                <div style={metricValueStyle}>{formatNumber(activeFocusedStock.volume)}</div>
+                <div style={metricValueStyle}>
+                  {formatNumber(activeFocusedStock.volume)}
+                </div>
               </div>
             </div>
 
@@ -1025,18 +1585,23 @@ export default function Home() {
               <div style={analysisBlockStyle}>
                 <div style={analysisBlockTitleStyle}>操作方向</div>
                 <div style={analysisBlockTextStyle}>
-                  {activeFocusedStock.operation_bias} ｜ {activeFocusedStock.operation_style}
+                  {activeFocusedStock.operation_bias} ｜{" "}
+                  {activeFocusedStock.operation_style}
                 </div>
               </div>
               <div style={analysisBlockStyle}>
                 <div style={analysisBlockTitleStyle}>更新時間</div>
-                <div style={analysisBlockTextStyle}>{activeFocusedStock.update_time || "-"}</div>
+                <div style={analysisBlockTextStyle}>
+                  {activeFocusedStock.update_time || "-"}
+                </div>
               </div>
             </div>
 
             <div style={analysisBlockStyle}>
               <div style={analysisBlockTitleStyle}>技術分析</div>
-              <div style={analysisBlockTextStyle}>{activeFocusedStock.technical_comment}</div>
+              <div style={analysisBlockTextStyle}>
+                {activeFocusedStock.technical_comment}
+              </div>
             </div>
             <div style={analysisBlockStyle}>
               <div style={analysisBlockTitleStyle}>分析結論</div>
@@ -1044,7 +1609,9 @@ export default function Home() {
             </div>
             <div style={analysisBlockStyle}>
               <div style={analysisBlockTitleStyle}>操作戰略</div>
-              <div style={analysisBlockTextStyle}>{activeFocusedStock.strategy_action}</div>
+              <div style={analysisBlockTextStyle}>
+                {activeFocusedStock.strategy_action}
+              </div>
             </div>
 
             <div
@@ -1104,8 +1671,16 @@ export default function Home() {
               flexDirection: isMobile ? "column" : "row",
             }}
           >
-            <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>股票列表 ({total})</h2>
-            <div style={{ color: "#cfe2ff", fontSize: "14px", fontWeight: 700 }}>
+            <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>
+              股票列表 ({total})
+            </h2>
+            <div
+              style={{
+                color: "#cfe2ff",
+                fontSize: "14px",
+                fontWeight: 700,
+              }}
+            >
               第 {currentPage} / {totalPages} 頁，每頁 {ITEMS_PER_PAGE} 檔
             </div>
           </div>
@@ -1134,20 +1709,30 @@ export default function Home() {
               </colgroup>
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
-                  {["市場", "代號", "名稱", "股價", "漲跌", "漲跌%", "成交量", "訊號", "評級", "分數", "風報比"].map(
-                    (h, i) => (
-                      <th
-                        key={h}
-                        style={{
-                          ...thStyle,
-                          textAlign: i === 2 ? "left" : "center",
-                          paddingLeft: i === 2 ? "10px" : undefined,
-                        }}
-                      >
-                        {h}
-                      </th>
-                    )
-                  )}
+                  {[
+                    "市場",
+                    "代號",
+                    "名稱",
+                    "股價",
+                    "漲跌",
+                    "漲跌%",
+                    "成交量",
+                    "訊號",
+                    "評級",
+                    "分數",
+                    "風報比",
+                  ].map((h, i) => (
+                    <th
+                      key={h}
+                      style={{
+                        ...thStyle,
+                        textAlign: i === 2 ? "left" : "center",
+                        paddingLeft: i === 2 ? "10px" : undefined,
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -1166,17 +1751,26 @@ export default function Home() {
                       style={{
                         height: "46px",
                         borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        background: isSelected ? "rgba(22,71,134,0.88)" : "rgba(8,36,76,0.55)",
+                        background: isSelected
+                          ? "rgba(22,71,134,0.88)"
+                          : "rgba(8,36,76,0.55)",
                         cursor: "pointer",
                         transition: "background 0.15s",
                       }}
                     >
                       <td style={tdStyle}>{stock.market || "-"}</td>
                       <td style={tdStyle}>
-                        <span style={{ fontWeight: 900, color: "#7fb6ff" }}>{stock.symbol}</span>
+                        <span style={{ fontWeight: 900, color: "#7fb6ff" }}>
+                          {stock.symbol}
+                        </span>
                       </td>
                       <td
-                        style={{ ...tdStyle, textAlign: "left", paddingLeft: "10px", overflow: "hidden" }}
+                        style={{
+                          ...tdStyle,
+                          textAlign: "left",
+                          paddingLeft: "10px",
+                          overflow: "hidden",
+                        }}
                         title={stock.name}
                       >
                         <span
@@ -1191,10 +1785,14 @@ export default function Home() {
                         </span>
                       </td>
                       <td style={tdStyle}>
-                        <span style={{ fontWeight: 900 }}>{formatPrice(stock.price)}</span>
+                        <span style={{ fontWeight: 900 }}>
+                          {formatPrice(stock.price)}
+                        </span>
                       </td>
                       <td style={tdStyle}>
-                        <span style={{ color, fontWeight: 900 }}>{formatSigned(stock.change)}</span>
+                        <span style={{ color, fontWeight: 900 }}>
+                          {formatSigned(stock.change)}
+                        </span>
                       </td>
                       <td style={tdStyle}>
                         <span style={{ color, fontWeight: 800 }}>
@@ -1262,17 +1860,23 @@ export default function Home() {
               >
                 上一頁
               </button>
+
               {pageNumbers.map((page, idx) => {
                 if (page < 0) {
                   return (
                     <span
                       key={`e-${idx}`}
-                      style={{ color: "#d9e7ff", padding: "0 4px", fontWeight: 800 }}
+                      style={{
+                        color: "#d9e7ff",
+                        padding: "0 4px",
+                        fontWeight: 800,
+                      }}
                     >
                       ...
                     </span>
                   );
                 }
+
                 const active = currentPage === page;
                 return (
                   <button
@@ -1284,21 +1888,27 @@ export default function Home() {
                       background: active
                         ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
                         : "#184889",
-                      boxShadow: active ? "0 8px 22px rgba(80,150,255,0.22)" : "none",
+                      boxShadow: active
+                        ? "0 8px 22px rgba(80,150,255,0.22)"
+                        : "none",
                     }}
                   >
                     {page}
                   </button>
                 );
               })}
+
               <button
                 type="button"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                onClick={() =>
+                  setCurrentPage((p) => Math.min(totalPages, p + 1))
+                }
                 disabled={currentPage === totalPages}
                 style={{
                   ...pageBtnStyle,
                   opacity: currentPage === totalPages ? 0.45 : 1,
-                  cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                  cursor:
+                    currentPage === totalPages ? "not-allowed" : "pointer",
                 }}
               >
                 下一頁
@@ -1419,7 +2029,8 @@ const analysisBlockTextStyle: React.CSSProperties = {
 };
 
 const tradePlanCardStyle: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
+  background:
+    "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
   border: "1px solid rgba(108,162,255,0.16)",
   borderRadius: "16px",
   padding: "14px 16px",
@@ -1437,4 +2048,63 @@ const tradePlanValueStyle: React.CSSProperties = {
   fontSize: "16px",
   fontWeight: 900,
   lineHeight: 1.6,
+};
+
+const validationMetricCardStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "16px",
+  padding: "14px 16px",
+};
+
+const validationMetricLabelStyle: React.CSSProperties = {
+  color: "#9fc3f6",
+  fontSize: "13px",
+  fontWeight: 700,
+  marginBottom: "8px",
+};
+
+const validationMetricValueStyle: React.CSSProperties = {
+  color: "#ffffff",
+  fontSize: "20px",
+  fontWeight: 900,
+};
+
+const validationBlockStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "18px",
+  padding: "16px",
+};
+
+const validationBlockTitleStyle: React.CSSProperties = {
+  color: "#7fb6ff",
+  fontSize: "16px",
+  fontWeight: 900,
+  marginBottom: "12px",
+};
+
+const validationEmptyStyle: React.CSSProperties = {
+  color: "#cfe2ff",
+  fontSize: "14px",
+  fontWeight: 700,
+  padding: "10px 4px",
+};
+
+const validationThStyle: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px 8px",
+  color: "#9fc3f6",
+  fontSize: "12px",
+  fontWeight: 800,
+  whiteSpace: "nowrap",
+};
+
+const validationTdStyle: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px 8px",
+  color: "#ffffff",
+  fontSize: "13px",
+  fontWeight: 700,
+  verticalAlign: "middle",
 };
