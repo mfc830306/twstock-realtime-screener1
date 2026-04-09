@@ -96,15 +96,14 @@ type RankType = "recommend" | "up" | "down";
 
 const ITEMS_PER_PAGE = 20;
 
+// ✅ fix: 合併重複的 formatNumber / formatPrice（邏輯完全相同）
 function formatNumber(num?: number) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
   return num.toLocaleString("zh-TW");
 }
 
-function formatPrice(num?: number) {
-  if (num === undefined || num === null || Number.isNaN(num)) return "-";
-  return num.toLocaleString("zh-TW");
-}
+// formatPrice 保留原名稱給其他地方呼叫，內部共用同一邏輯
+const formatPrice = formatNumber;
 
 function formatSigned(num?: number, digits = 2) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
@@ -130,11 +129,11 @@ function getMarketLightColor(status?: string) {
 function normalizeStock(s: Stock): Stock {
   return {
     ...s,
-    price: Number(s.price ?? 0),
-    change: Number(s.change ?? 0),
-    change_percent: Number(s.change_percent ?? 0),
-    volume: Number(s.volume ?? 0),
-    score: Number(s.score ?? 0),
+    price:              Number(s.price ?? 0),
+    change:             Number(s.change ?? 0),
+    change_percent:     Number(s.change_percent ?? 0),
+    volume:             Number(s.volume ?? 0),
+    score:              Number(s.score ?? 0),
     recommendation_score: Number(s.recommendation_score ?? 0),
   };
 }
@@ -146,46 +145,46 @@ function getPageNumbers(currentPage: number, totalPages: number): number[] {
     return pages;
   }
   const start = Math.max(1, currentPage - 2);
-  const end = Math.min(totalPages, currentPage + 2);
+  const end   = Math.min(totalPages, currentPage + 2);
   if (start > 1) pages.push(1);
   if (start > 2) pages.push(-1);
   for (let i = start; i <= end; i++) pages.push(i);
   if (end < totalPages - 1) pages.push(-2);
-  if (end < totalPages) pages.push(totalPages);
+  if (end < totalPages)     pages.push(totalPages);
   return pages;
 }
 
 function stockToFocused(stock: Stock): FocusedStock {
   return {
-    symbol: stock.symbol,
-    name: stock.name,
-    market: stock.market || "-",
-    price: Number(stock.price || 0),
-    change: Number(stock.change || 0),
-    change_percent: Number(stock.change_percent || 0),
-    volume: Number(stock.volume || 0),
-    signal: stock.signal || "-",
-    trend_type: stock.trend_type || "-",
+    symbol:           stock.symbol,
+    name:             stock.name,
+    market:           stock.market || "-",
+    price:            Number(stock.price || 0),
+    change:           Number(stock.change || 0),
+    change_percent:   Number(stock.change_percent || 0),
+    volume:           Number(stock.volume || 0),
+    signal:           stock.signal || "-",
+    trend_type:       stock.trend_type || "-",
     operation_rating: stock.operation_rating || "-",
-    operation_bias: stock.operation_bias || "-",
-    operation_style: stock.operation_style || "-",
+    operation_bias:   stock.operation_bias || "-",
+    operation_style:  stock.operation_style || "-",
     technical_comment: stock.technical_comment || stock.reason || "-",
-    analysis: stock.reason || "-",
-    strategy_action: stock.strategy_action || "-",
-    entry_price: stock.entry_price || "-",
-    target_price: stock.target_price || "-",
-    stop_loss: stock.stop_loss || "-",
-    risk_reward: stock.risk_reward || "-",
-    risk_note: stock.risk_note || "-",
-    update_time: stock.update_time || "-",
+    analysis:         stock.reason || "-",
+    strategy_action:  stock.strategy_action || "-",
+    entry_price:      stock.entry_price || "-",
+    target_price:     stock.target_price || "-",
+    stop_loss:        stock.stop_loss || "-",
+    risk_reward:      stock.risk_reward || "-",
+    risk_note:        stock.risk_note || "-",
+    update_time:      stock.update_time || "-",
   };
 }
 
 function getRatingColor(rating?: string) {
-  if (rating === "A") return "#ffd95f";
+  if (rating === "A")  return "#ffd95f";
   if (rating === "B+") return "#7ee787";
-  if (rating === "C") return "#7fb6ff";
-  if (rating === "D") return "#ff9c9c";
+  if (rating === "C")  return "#7fb6ff";
+  if (rating === "D")  return "#ff9c9c";
   return "#dbe8ff";
 }
 
@@ -196,7 +195,7 @@ function getCategoryQuery(category: CategoryKey): {
 } {
   switch (category) {
     case "0-50":    return { price_max: 50 };
-    case "50-100":  return { price_min: 50, price_max: 100 };
+    case "50-100":  return { price_min: 50,  price_max: 100 };
     case "100-200": return { price_min: 100, price_max: 200 };
     case "200-500": return { price_min: 200, price_max: 500 };
     case "500+":    return { price_min: 500 };
@@ -219,15 +218,12 @@ function buildCategoryCountsFromBackend(
     backendMap.set(item.key, Number(item.count || 0));
   }
   return {
-    all: allTotal,
-    "0-50":
-      (backendMap.get("0-10") || 0) +
-      (backendMap.get("10-20") || 0) +
-      (backendMap.get("20-50") || 0),
-    "50-100":  backendMap.get("50-100") || 0,
+    all:      allTotal,
+    "0-50":   (backendMap.get("0-10") || 0) + (backendMap.get("10-20") || 0) + (backendMap.get("20-50") || 0),
+    "50-100":  backendMap.get("50-100")  || 0,
     "100-200": backendMap.get("100-200") || 0,
     "200-500": backendMap.get("200-500") || 0,
-    "500+": (backendMap.get("500-1000") || 0) + (backendMap.get("1000+") || 0),
+    "500+":   (backendMap.get("500-1000") || 0) + (backendMap.get("1000+") || 0),
   };
 }
 
@@ -253,6 +249,12 @@ export default function Home() {
 
   const initialLoadedRef = useRef(false);
 
+  // ✅ fix: 用 ref 追蹤最新的 manualSelectedSymbol，避免 async 函式內的 stale closure
+  const manualSelectedSymbolRef = useRef(manualSelectedSymbol);
+  useEffect(() => {
+    manualSelectedSymbolRef.current = manualSelectedSymbol;
+  }, [manualSelectedSymbol]);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm.trim());
@@ -276,6 +278,7 @@ export default function Home() {
     const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
     const data: ApiResponse = await res.json();
     if (!data.success) throw new Error(data.error || data.message || "取得推薦資料失敗");
+
     const source = (data.stocks || []).map(normalizeStock);
     const safeRecommendations = source
       .filter((s) => s.market === "上市" || s.market === "上櫃")
@@ -305,7 +308,7 @@ export default function Home() {
         sort_dir: sortQuery.sort_dir,
       });
 
-      if (keyword) params.set("q", keyword);
+      if (keyword)                              params.set("q",         keyword);
       if (categoryQuery.market)                 params.set("market",    categoryQuery.market);
       if (categoryQuery.price_min !== undefined) params.set("price_min", String(categoryQuery.price_min));
       if (categoryQuery.price_max !== undefined) params.set("price_max", String(categoryQuery.price_max));
@@ -332,27 +335,37 @@ export default function Home() {
 
       if (data.focused_stock) {
         setFocusedStock(data.focused_stock);
-      } else if (!manualSelectedSymbol && !keyword) {
+      } else if (!manualSelectedSymbolRef.current && !keyword) {
+        // ✅ fix: 改用 ref 讀取，避免 stale closure
         setFocusedStock(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "載入失敗");
     } finally {
+      // ✅ fix: 加 finally，確保無論成功或失敗都會關掉 loading
       setLoading(false);
     }
   }
 
   async function fetchAllData() {
+    // ✅ fix: 移到 try/finally 裡，確保 loading 一定會被關掉
+    setLoading(true);
+    setError("");
     try {
-      setLoading(true);
-      setError("");
       await Promise.all([
         fetchRecommendations(),
-        fetchPagedStocks({ category: selectedCategory, page: currentPage, rank: rankType, keyword: debouncedSearchTerm }),
+        fetchPagedStocks({
+          category: selectedCategory,
+          page:     currentPage,
+          rank:     rankType,
+          keyword:  debouncedSearchTerm,
+        }),
       ]);
       initialLoadedRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "載入失敗");
+    } finally {
+      // ✅ fix: 原本 catch 才設 false，現在 finally 確保一定執行
       setLoading(false);
     }
   }
@@ -364,20 +377,27 @@ export default function Home() {
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
-    fetchPagedStocks({ category: selectedCategory, page: currentPage, rank: rankType, keyword: debouncedSearchTerm });
+    fetchPagedStocks({
+      category: selectedCategory,
+      page:     currentPage,
+      rank:     rankType,
+      keyword:  debouncedSearchTerm,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, debouncedSearchTerm]);
 
-  useEffect(() => {
-    if (!initialLoadedRef.current) return;
-    fetchRecommendations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory]);
+  // ✅ fix: 移除原本 selectedCategory 觸發 fetchRecommendations 的 useEffect
+  // 推薦清單跟分類無關，不需要在切換分類時重新打一次 API
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
     const timer = setInterval(() => {
-      fetchPagedStocks({ category: selectedCategory, page: currentPage, rank: rankType, keyword: debouncedSearchTerm });
+      fetchPagedStocks({
+        category: selectedCategory,
+        page:     currentPage,
+        rank:     rankType,
+        keyword:  debouncedSearchTerm,
+      });
     }, 120000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -394,7 +414,10 @@ export default function Home() {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  const pageNumbers = useMemo(() => getPageNumbers(currentPage, totalPages), [currentPage, totalPages]);
+  const pageNumbers = useMemo(
+    () => getPageNumbers(currentPage, totalPages),
+    [currentPage, totalPages]
+  );
 
   const activeFocusedStock = useMemo(() => {
     if (manualSelectedSymbol) {
@@ -468,7 +491,12 @@ export default function Home() {
                   const active = selectedCategory === item.key;
                   return (
                     <button key={item.key} type="button"
-                      onClick={() => { setSelectedCategory(item.key); setManualSelectedSymbol(""); setCurrentPage(1); fetchPagedStocks({ category: item.key, page: 1, rank: rankType, keyword: debouncedSearchTerm }); }}
+                      onClick={() => {
+                        setSelectedCategory(item.key);
+                        setManualSelectedSymbol("");
+                        setCurrentPage(1);
+                        fetchPagedStocks({ category: item.key, page: 1, rank: rankType, keyword: debouncedSearchTerm });
+                      }}
                       style={{ minWidth: isMobile ? "calc(50% - 6px)" : "118px", border: "none", borderRadius: "14px", padding: "14px", fontSize: "15px", fontWeight: 800, cursor: "pointer", color: "#fff", background: active ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)" : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)", boxShadow: active ? "0 8px 22px rgba(80,150,255,0.22)" : "none" }}>
                       {item.label} ({categoryCounts[item.key] || 0})
                     </button>
@@ -477,7 +505,9 @@ export default function Home() {
               </div>
             </div>
 
-            <input value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setManualSelectedSymbol(""); }} placeholder="搜尋股票代號 / 名稱"
+            <input value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setManualSelectedSymbol(""); }}
+              placeholder="搜尋股票代號 / 名稱"
               style={{ width: "100%", height: "46px", borderRadius: "14px", border: "none", outline: "none", padding: "0 16px", fontSize: "15px", marginBottom: "18px", background: "#e8edf5", color: "#123" }} />
 
             <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
@@ -610,13 +640,10 @@ export default function Home() {
 
           <div style={{ overflowX: "auto", borderRadius: "12px" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: "800px" }}>
-
-              {/* 11 欄空白 col → tableLayout:fixed 自動平均分配 */}
               <colgroup>
                 <col /><col /><col /><col /><col /><col />
                 <col /><col /><col /><col /><col />
               </colgroup>
-
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
                   {["市場","代號","名稱","股價","漲跌","漲跌%","成交量","訊號","評級","分數","風報比"].map((h, i) => (
@@ -624,7 +651,6 @@ export default function Home() {
                   ))}
                 </tr>
               </thead>
-
               <tbody>
                 {stocks.map((stock) => {
                   const isUp = stock.change >= 0;
@@ -634,46 +660,22 @@ export default function Home() {
                     <tr key={stock.symbol}
                       onClick={() => { setManualSelectedSymbol(stock.symbol); setSearchTerm(stock.symbol); setFocusedStock(stockToFocused(stock)); }}
                       style={{ height: "46px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: isSelected ? "rgba(22,71,134,0.88)" : "rgba(8,36,76,0.55)", cursor: "pointer", transition: "background 0.15s" }}>
-
-                      {/* 市場 */}
                       <td style={tdStyle}>{stock.market || "-"}</td>
-
-                      {/* 代號 */}
-                      <td style={tdStyle}>
-                        <span style={{ fontWeight: 900, color: "#7fb6ff" }}>{stock.symbol}</span>
-                      </td>
-
-                      {/* 名稱 - 靠左，超出省略 */}
+                      <td style={tdStyle}><span style={{ fontWeight: 900, color: "#7fb6ff" }}>{stock.symbol}</span></td>
                       <td style={{ ...tdStyle, textAlign: "left", paddingLeft: "10px", overflow: "hidden" }} title={stock.name}>
                         <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stock.name}</span>
                       </td>
-
-                      {/* 股價 */}
                       <td style={tdStyle}><span style={{ fontWeight: 900 }}>{formatPrice(stock.price)}</span></td>
-
-                      {/* 漲跌 */}
                       <td style={tdStyle}><span style={{ color, fontWeight: 900 }}>{formatSigned(stock.change)}</span></td>
-
-                      {/* 漲跌% */}
                       <td style={tdStyle}><span style={{ color, fontWeight: 800 }}>{formatSigned(stock.change_percent)}%</span></td>
-
-                      {/* 成交量 */}
                       <td style={tdStyle}>{formatNumber(stock.volume)}</td>
-
-                      {/* 訊號 */}
                       <td style={{ ...tdStyle, overflow: "hidden" }}>
                         <span title={stock.signal || "-"} style={{ display: "inline-block", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", background: "rgba(255,255,255,0.08)", padding: "3px 7px", borderRadius: "999px", fontSize: "11px", fontWeight: 800 }}>
                           {stock.signal || "-"}
                         </span>
                       </td>
-
-                      {/* 評級 */}
                       <td style={{ ...tdStyle, color: getRatingColor(stock.operation_rating), fontWeight: 900 }}>{stock.operation_rating || "-"}</td>
-
-                      {/* 分數 */}
                       <td style={tdStyle}>{stock.score ?? 0}</td>
-
-                      {/* 風報比 */}
                       <td style={tdStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
                   );
@@ -688,7 +690,6 @@ export default function Home() {
                 style={{ ...pageBtnStyle, opacity: currentPage === 1 ? 0.45 : 1, cursor: currentPage === 1 ? "not-allowed" : "pointer" }}>
                 上一頁
               </button>
-
               {pageNumbers.map((page, idx) => {
                 if (page < 0) return <span key={`e-${idx}`} style={{ color: "#d9e7ff", padding: "0 4px", fontWeight: 800 }}>...</span>;
                 const active = currentPage === page;
@@ -699,7 +700,6 @@ export default function Home() {
                   </button>
                 );
               })}
-
               <button type="button" onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
                 style={{ ...pageBtnStyle, opacity: currentPage === totalPages ? 0.45 : 1, cursor: currentPage === totalPages ? "not-allowed" : "pointer" }}>
                 下一頁
@@ -712,7 +712,7 @@ export default function Home() {
   );
 }
 
-// ── Shared styles ────────────────────────────────────────────
+// ── Shared styles ─────────────────────────────────────────────
 const activeActionBtn: React.CSSProperties = {
   border: "none", borderRadius: "14px", padding: "12px 16px",
   fontSize: "15px", fontWeight: 800, cursor: "pointer", color: "#fff",
