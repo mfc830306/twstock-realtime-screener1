@@ -95,6 +95,7 @@ type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
 
 const ITEMS_PER_PAGE = 20;
+const STOCK_TABLE_WIDTH = 1020;
 
 function formatNumber(num?: number) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
@@ -1084,21 +1085,21 @@ export default function Home() {
           <div style={{ overflowX: "auto", borderRadius: "18px" }}>
             <table
               style={{
-                width: "100%",
-                minWidth: "1180px",
+                width: `${STOCK_TABLE_WIDTH}px`,
+                minWidth: `${STOCK_TABLE_WIDTH}px`,
                 borderCollapse: "collapse",
                 tableLayout: "fixed",
               }}
             >
               <colgroup>
                 <col style={{ width: "72px" }} />
-                <col style={{ width: "78px" }} />
-                <col style={{ width: "120px" }} />
-                <col style={{ width: "86px" }} />
-                <col style={{ width: "86px" }} />
-                <col style={{ width: "86px" }} />
-                <col style={{ width: "108px" }} />
-                <col style={{ width: "108px" }} />
+                <col style={{ width: "82px" }} />
+                <col style={{ width: "110px" }} />
+                <col style={{ width: "82px" }} />
+                <col style={{ width: "82px" }} />
+                <col style={{ width: "82px" }} />
+                <col style={{ width: "110px" }} />
+                <col style={{ width: "100px" }} />
                 <col style={{ width: "64px" }} />
                 <col style={{ width: "78px" }} />
                 <col style={{ width: "78px" }} />
