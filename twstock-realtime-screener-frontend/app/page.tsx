@@ -264,8 +264,16 @@ function getRatingColor(rating?: string) {
 
 function getCategoryQuery(category: CategoryKey): {
   category?: string;
+  price_min?: string;
+  price_max?: string;
 } {
   if (category === "all") return {};
+  if (category === "0-50") {
+    return { price_min: "0", price_max: "50" };
+  }
+  if (category === "500+") {
+    return { price_min: "500" };
+  }
   return { category };
 }
 
@@ -390,8 +398,8 @@ export default function Home() {
       .filter((s) => s.market === "上市" || s.market === "上櫃")
       .sort(
         (a, b) =>
-          (b.recommendation_score || b.setup_score || b.score || 0) -
-          (a.recommendation_score || a.setup_score || a.score || 0)
+          (b.setup_score || b.recommendation_score || b.score || 0) -
+          (a.setup_score || a.recommendation_score || a.score || 0)
       )
       .slice(0, 10);
 
@@ -427,6 +435,12 @@ export default function Home() {
       if (keyword) params.set("q", keyword);
       if (categoryQuery.category) {
         params.set("category", categoryQuery.category);
+      }
+      if (categoryQuery.price_min) {
+        params.set("price_min", categoryQuery.price_min);
+      }
+      if (categoryQuery.price_max) {
+        params.set("price_max", categoryQuery.price_max);
       }
 
       const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
