@@ -566,6 +566,70 @@ def build_signal_and_reason(
     }
 
 
+def build_short_reason(signal: str, change_percent: float, volume: int, close_position: float) -> str:
+    vol_k = volume / 1000
+
+    if signal in ("強勢主升", "主升段延續"):
+        if close_position >= 0.9:
+            return f"放量上攻（{vol_k:.0f}K），收盤鎖高，多方續攻力強"
+        return f"強勢主升延續（{vol_k:.0f}K），買盤主導明確"
+
+    if signal == "放量突破":
+        if change_percent >= 6:
+            return f"帶量突破壓力（{vol_k:.0f}K），短線動能強勁"
+        return f"放量突破整理區（{vol_k:.0f}K），續攻空間可留意"
+
+    if signal == "多方控盤":
+        return "跳空上攻未回補，資金控盤偏多"
+
+    if signal == "趨勢續強":
+        return f"量價結構健康（{vol_k:.0f}K），趨勢續強"
+
+    if signal == "穩健走高":
+        return "重心穩步上移，屬溫和偏多結構"
+
+    if signal == "高檔換手":
+        return f"高檔震盪換手（{vol_k:.0f}K），觀察換手後續攻"
+
+    if signal == "區間盤整":
+        return "量價收斂，等待區間突破"
+
+    if signal == "籌碼換手":
+        return f"量大震盪換手（{vol_k:.0f}K），方向待表態"
+
+    if signal == "拉回整理":
+        return "回測支撐整理中，暫未見明顯出貨"
+
+    if signal == "放量修正":
+        return f"量增下跌（{vol_k:.0f}K），短線轉弱修正"
+
+    if signal == "弱勢破位":
+        return "跌破結構支撐，空方主導明顯"
+
+    if signal == "爆量震盪":
+        return f"爆量震盪（{vol_k:.0f}K），短線不宜追價"
+
+    if signal == "弱中透穩":
+        return "量縮回落但未失控，先看止穩訊號"
+
+    if signal == "小幅偏多":
+        return "小幅走強，觀察量能是否進一步放大"
+
+    if signal == "小幅偏空":
+        return "買盤動能偏弱，短線先保守看待"
+
+    if signal == "中性觀望":
+        return "結構中性，等待明確方向訊號"
+
+    if change_percent > 0:
+        return "短線偏多，留意續攻量能"
+
+    if change_percent < 0:
+        return "短線偏弱，觀察支撐是否守穩"
+
+    return "量價整理中，暫採觀望"
+
+
 def enrich_reason_with_context(
     base_reason: str,
     price: float,
@@ -1381,11 +1445,15 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         volume=volume, high_price=high_price, low_price=low_price,
         open_price=open_price, previous_close=previous_close,
     )
-    final_reason = enrich_reason_with_context(
-        base_reason=signal_info["reason"], price=price, open_price=open_price,
-        high_price=high_price, low_price=low_price, change_percent=change_percent,
-        volume=volume, previous_close=previous_close,
+
+    close_position = calc_position_ratio(price, high_price, low_price)
+    final_reason = build_short_reason(
+        signal=signal_info["signal"],
+        change_percent=change_percent,
+        volume=volume,
+        close_position=close_position,
     )
+
     plan         = build_trade_plan(price=price, high_price=high_price, low_price=low_price, signal=signal_info["signal"])
     strategy_info = build_strategy_and_risk(
         signal=signal_info["signal"], price=price, open_price=open_price,
