@@ -1085,23 +1085,38 @@ export default function Home() {
             <table
               style={{
                 width: "100%",
+                minWidth: "1180px",
                 borderCollapse: "collapse",
                 tableLayout: "fixed",
               }}
             >
+              <colgroup>
+                <col style={{ width: "72px" }} />
+                <col style={{ width: "78px" }} />
+                <col style={{ width: "120px" }} />
+                <col style={{ width: "86px" }} />
+                <col style={{ width: "86px" }} />
+                <col style={{ width: "86px" }} />
+                <col style={{ width: "108px" }} />
+                <col style={{ width: "108px" }} />
+                <col style={{ width: "64px" }} />
+                <col style={{ width: "78px" }} />
+                <col style={{ width: "78px" }} />
+              </colgroup>
+
               <thead>
                 <tr style={{ background: "linear-gradient(180deg, #3570bd 0%, #285d9f 100%)" }}>
-                  <th style={thStyle}>市場</th>
-                  <th style={thStyle}>代號</th>
-                  <th style={{ ...thStyle, textAlign: "left" }}>名稱</th>
-                  <th style={thStyle}>股價</th>
-                  <th style={thStyle}>漲跌</th>
-                  <th style={thStyle}>漲跌%</th>
-                  <th style={thStyle}>成交量</th>
-                  <th style={thStyle}>訊號</th>
-                  <th style={thStyle}>評級</th>
-                  <th style={thStyle}>分數</th>
-                  <th style={thStyle}>風報比</th>
+                  <th style={tableHeaderCenterStyle}>市場</th>
+                  <th style={tableHeaderCenterStyle}>代號</th>
+                  <th style={tableHeaderLeftStyle}>名稱</th>
+                  <th style={tableHeaderCenterStyle}>股價</th>
+                  <th style={tableHeaderCenterStyle}>漲跌</th>
+                  <th style={tableHeaderCenterStyle}>漲跌%</th>
+                  <th style={tableHeaderCenterStyle}>成交量</th>
+                  <th style={tableHeaderCenterStyle}>訊號</th>
+                  <th style={tableHeaderCenterStyle}>評級</th>
+                  <th style={tableHeaderCenterStyle}>分數</th>
+                  <th style={tableHeaderCenterStyle}>風報比</th>
                 </tr>
               </thead>
 
@@ -1129,9 +1144,9 @@ export default function Home() {
                         transition: "0.18s ease",
                       }}
                     >
-                      <td style={tdStyle}>{stock.market || "-"}</td>
+                      <td style={tableCellCenterStyle}>{stock.market || "-"}</td>
 
-                      <td style={tdStyle}>
+                      <td style={tableCellCenterStyle}>
                         <span
                           style={{
                             fontSize: "13px",
@@ -1143,17 +1158,11 @@ export default function Home() {
                         </span>
                       </td>
 
-                      <td
-                        style={{
-                          ...tdStyle,
-                          textAlign: "left",
-                          overflow: "hidden",
-                        }}
-                        title={stock.name}
-                      >
+                      <td style={tableCellLeftStyle} title={stock.name}>
                         <span
                           style={{
                             display: "block",
+                            width: "100%",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                             whiteSpace: "nowrap",
@@ -1164,25 +1173,25 @@ export default function Home() {
                         </span>
                       </td>
 
-                      <td style={tdStyle}>
+                      <td style={tableCellCenterStyle}>
                         <span style={{ fontWeight: 900 }}>{formatPrice(stock.price)}</span>
                       </td>
 
-                      <td style={tdStyle}>
+                      <td style={tableCellCenterStyle}>
                         <span style={{ color, fontWeight: 900 }}>
                           {formatSigned(stock.change)}
                         </span>
                       </td>
 
-                      <td style={tdStyle}>
+                      <td style={tableCellCenterStyle}>
                         <span style={{ color, fontWeight: 800 }}>
                           {formatSigned(stock.change_percent)}%
                         </span>
                       </td>
 
-                      <td style={tdStyle}>{formatNumber(stock.volume)}</td>
+                      <td style={tableCellCenterStyle}>{formatNumber(stock.volume)}</td>
 
-                      <td style={tdStyle}>
+                      <td style={tableCellCenterStyle}>
                         <span
                           style={{
                             display: "inline-block",
@@ -1195,6 +1204,7 @@ export default function Home() {
                             borderRadius: "999px",
                             fontSize: "10px",
                             fontWeight: 800,
+                            verticalAlign: "middle",
                           }}
                           title={stock.signal || "-"}
                         >
@@ -1204,7 +1214,7 @@ export default function Home() {
 
                       <td
                         style={{
-                          ...tdStyle,
+                          ...tableCellCenterStyle,
                           color: getRatingColor(stock.operation_rating),
                           fontWeight: 900,
                         }}
@@ -1212,9 +1222,9 @@ export default function Home() {
                         {stock.operation_rating || "-"}
                       </td>
 
-                      <td style={tdStyle}>{stock.score ?? 0}</td>
+                      <td style={tableCellCenterStyle}>{stock.score ?? 0}</td>
 
-                      <td style={tdStyle}>{stock.risk_reward || "-"}</td>
+                      <td style={tableCellCenterStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
                   );
                 })}
@@ -1329,24 +1339,47 @@ const pageBtnStyle: React.CSSProperties = {
   background: "#184889",
 };
 
-const thStyle: React.CSSProperties = {
-  padding: "8px 6px",
-  textAlign: "center",
+const tableHeaderBaseStyle: React.CSSProperties = {
+  padding: "8px 8px",
   color: "#ffffff",
   fontSize: "12px",
   fontWeight: 800,
   whiteSpace: "nowrap",
   lineHeight: 1.1,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
 };
 
-const tdStyle: React.CSSProperties = {
-  padding: "6px 6px",
+const tableHeaderCenterStyle: React.CSSProperties = {
+  ...tableHeaderBaseStyle,
   textAlign: "center",
+};
+
+const tableHeaderLeftStyle: React.CSSProperties = {
+  ...tableHeaderBaseStyle,
+  textAlign: "left",
+};
+
+const tableCellBaseStyle: React.CSSProperties = {
+  padding: "6px 8px",
   color: "#ffffff",
   fontSize: "12px",
   fontWeight: 700,
   verticalAlign: "middle",
   lineHeight: 1,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const tableCellCenterStyle: React.CSSProperties = {
+  ...tableCellBaseStyle,
+  textAlign: "center",
+};
+
+const tableCellLeftStyle: React.CSSProperties = {
+  ...tableCellBaseStyle,
+  textAlign: "left",
 };
 
 const analysisTagStyle: React.CSSProperties = {
