@@ -12,6 +12,7 @@ type Stock = {
   volume?: number;
   score?: number;
   recommendation_score?: number;
+  setup_score?: number;
   signal?: string;
   trend_type?: string;
   reason?: string;
@@ -207,6 +208,7 @@ function normalizeStock(s: Stock): Stock {
     volume: Number(s.volume ?? 0),
     score: Number(s.score ?? 0),
     recommendation_score: Number(s.recommendation_score ?? 0),
+    setup_score: Number(s.setup_score ?? 0),
   };
 }
 
@@ -261,24 +263,10 @@ function getRatingColor(rating?: string) {
 }
 
 function getCategoryQuery(category: CategoryKey): {
-  market?: string;
-  price_min?: number;
-  price_max?: number;
+  category?: string;
 } {
-  switch (category) {
-    case "0-50":
-      return { price_max: 50 };
-    case "50-100":
-      return { price_min: 50, price_max: 100 };
-    case "100-200":
-      return { price_min: 100, price_max: 200 };
-    case "200-500":
-      return { price_min: 200, price_max: 500 };
-    case "500+":
-      return { price_min: 500 };
-    default:
-      return {};
-  }
+  if (category === "all") return {};
+  return { category };
 }
 
 function getSortQuery(rankType: RankType): {
@@ -381,26 +369,29 @@ export default function Home() {
 
   async function fetchRecommendations() {
     const params = new URLSearchParams({
-      limit: "30",
+      limit: "20",
       offset: "0",
       sort_by: "recommendation_score",
       sort_dir: "desc",
     });
+
     const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
       cache: "no-store",
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
     const data: ApiResponse = await res.json();
     if (!data.success) {
       throw new Error(data.error || data.message || "取得推薦資料失敗");
     }
 
-    const source = (data.stocks || []).map(normalizeStock);
+    const source = (data.recommendations || []).map(normalizeStock);
     const safeRecommendations = source
       .filter((s) => s.market === "上市" || s.market === "上櫃")
       .sort(
         (a, b) =>
-          (b.recommendation_score || b.score || 0) -
-          (a.recommendation_score || a.score || 0)
+          (b.recommendation_score || b.setup_score || b.score || 0) -
+          (a.recommendation_score || a.setup_score || a.score || 0)
       )
       .slice(0, 10);
 
@@ -434,12 +425,8 @@ export default function Home() {
       });
 
       if (keyword) params.set("q", keyword);
-      if (categoryQuery.market) params.set("market", categoryQuery.market);
-      if (categoryQuery.price_min !== undefined) {
-        params.set("price_min", String(categoryQuery.price_min));
-      }
-      if (categoryQuery.price_max !== undefined) {
-        params.set("price_max", String(categoryQuery.price_max));
+      if (categoryQuery.category) {
+        params.set("category", categoryQuery.category);
       }
 
       const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, {
@@ -560,6 +547,7 @@ export default function Home() {
         rank: rankType,
         keyword: debouncedSearchTerm,
       });
+      fetchRecommendations().catch(() => undefined);
     }, 120000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1058,7 +1046,7 @@ export default function Home() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          分數 {stock.score ?? 0}
+                          分數 {stock.setup_score ?? stock.recommendation_score ?? stock.score ?? 0}
                         </div>
                       </div>
 
@@ -1828,7 +1816,9 @@ export default function Home() {
                       >
                         {stock.operation_rating || "-"}
                       </td>
-                      <td style={tdStyle}>{stock.score ?? 0}</td>
+                      <td style={tdStyle}>
+                        {stock.setup_score ?? stock.recommendation_score ?? stock.score ?? 0}
+                      </td>
                       <td style={tdStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
                   );
