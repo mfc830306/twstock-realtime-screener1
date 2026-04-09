@@ -1383,7 +1383,16 @@ def filter_stocks(stocks: List[Dict[str, Any]], market: str = "all", category: s
     elif ml in ("tse","上市"): result = [s for s in result if s.get("market") == "上市"]
     elif ml in ("otc","上櫃"): result = [s for s in result if s.get("market") == "上櫃"]
     else:                       result = [s for s in result if is_main_board_stock(s)]
-    if category != "all": result = [s for s in result if s.get("category") == category]
+
+    category_key = safe_str(category)
+    if category_key and category_key != "all":
+        if category_key == "0-50":
+            result = [s for s in result if 0 < safe_float(s.get("price")) < 50]
+        elif category_key == "500+":
+            result = [s for s in result if safe_float(s.get("price")) >= 500]
+        else:
+            result = [s for s in result if safe_str(s.get("category")) == category_key]
+
     if q.strip():
         qq = q.strip().lower()
         result = [s for s in result if qq in safe_str(s.get("symbol")).lower() or qq in safe_str(s.get("name")).lower()]
