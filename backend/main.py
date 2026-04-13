@@ -362,7 +362,7 @@ def build_signal_and_reason(
     close_position = calc_position_ratio(price, high_price, low_price)
     vol_k = volume / 1000
 
-    if 1.0 <= change_percent <= 4.2 and 0.48 <= close_position <= 0.82:
+    if 0.8 <= change_percent <= 4.2 and 0.48 <= close_position <= 0.82 and price >= open_price:
         return {
             "signal": "量增轉強",
             "reason": (
@@ -372,7 +372,7 @@ def build_signal_and_reason(
             ),
         }
 
-    if 0.5 <= change_percent <= 3.5 and close_position < 0.75 and amplitude_pct <= 5:
+    if 0.3 <= change_percent <= 3.2 and 0.42 <= close_position <= 0.74 and amplitude_pct <= 4.8:
         return {
             "signal": "整理待發",
             "reason": (
@@ -381,7 +381,7 @@ def build_signal_and_reason(
             ),
         }
 
-    if change_percent >= 4.5 and close_position >= 0.86:
+    if change_percent >= 4.8 and close_position >= 0.86:
         return {
             "signal": "短線過熱",
             "reason": (
@@ -390,7 +390,7 @@ def build_signal_and_reason(
             ),
         }
 
-    if price > open_price and change_percent > 0 and 0.45 <= close_position <= 0.8:
+    if price > open_price and 0.4 <= change_percent <= 3.8 and 0.45 <= close_position <= 0.8:
         return {
             "signal": "穩步走高",
             "reason": (
@@ -399,7 +399,7 @@ def build_signal_and_reason(
             ),
         }
 
-    if -1 <= change_percent <= 1 and amplitude_pct <= 3.5:
+    if -0.8 <= change_percent <= 0.8 and amplitude_pct <= 3.5:
         return {
             "signal": "區間整理",
             "reason": (
@@ -451,7 +451,7 @@ def enrich_reason_with_context(
 
     if change_percent >= 5:
         extra.append("單日漲幅過大，較不利 2~4 天低風險切入")
-    elif 1 <= change_percent <= 4:
+    elif 0.8 <= change_percent <= 4:
         extra.append("漲幅屬合理動能區，較符合潛力股模型")
 
     if volume >= 30000:
@@ -734,29 +734,80 @@ def classify_daily_pattern(
     macd_hist: float,
 ) -> Dict[str, str]:
     day_change_pct = ((close_now - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-    distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 999
+    distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 999.0
     above_ma20 = close_now > ma20
     ma5_turn_up = ma5 >= ma10
-    healthy_momentum = 0.8 <= day_change_pct <= 4.3
-    healthy_volume = 1.15 <= vol_ratio5 <= 2.8
-    healthy_rsi = 50 <= rsi14 <= 68
+    ma10_support = ma10 >= ma20
+    close_above_ma5 = close_now >= ma5
+    healthy_momentum = 0.6 <= day_change_pct <= 4.2
+    healthy_volume = 1.15 <= vol_ratio5 <= 2.7
+    healthy_rsi = 50 <= rsi14 <= 67
 
-    if above_ma20 and ma5_turn_up and healthy_momentum and healthy_volume and healthy_rsi and 0.5 <= distance_to_high20 <= 5.0 and macd_hist >= 0:
-        return {"signal": "突破前夕", "trend_type": "短線潛力最強", "pattern": "站上中期均線、量增靠近波段高點"}
+    if (
+        above_ma20
+        and ma5_turn_up
+        and ma10_support
+        and close_above_ma5
+        and healthy_momentum
+        and healthy_volume
+        and healthy_rsi
+        and 1.0 <= distance_to_high20 <= 4.5
+        and macd_hist >= 0
+    ):
+        return {
+            "signal": "突破前夕",
+            "trend_type": "短線潛力最強",
+            "pattern": "站上中期均線、量增靠近波段高點，且短均線結構完整",
+        }
 
-    if above_ma20 and ma5_turn_up and healthy_momentum and healthy_volume and macd_hist >= 0:
-        return {"signal": "量增轉強", "trend_type": "短線準備發動", "pattern": "價格轉強、量能溫和放大"}
+    if (
+        above_ma20
+        and ma5_turn_up
+        and close_above_ma5
+        and 0.5 <= day_change_pct <= 4.0
+        and 1.1 <= vol_ratio5 <= 2.6
+        and 48 <= rsi14 <= 68
+        and macd_hist >= -0.02
+    ):
+        return {
+            "signal": "量增轉強",
+            "trend_type": "短線準備發動",
+            "pattern": "價格轉強、量能溫和放大，短線結構開始成形",
+        }
 
-    if above_ma20 and 0 <= distance_to_high20 <= 7 and vol_ratio5 <= 1.3 and 48 <= rsi14 <= 62:
-        return {"signal": "整理待發", "trend_type": "整理後可攻", "pattern": "整理靠近壓力區，等待放量突破"}
+    if (
+        above_ma20
+        and ma5 >= ma20
+        and 1.2 <= distance_to_high20 <= 6.5
+        and 0.85 <= vol_ratio5 <= 1.35
+        and 48 <= rsi14 <= 61
+        and macd_hist >= -0.05
+    ):
+        return {
+            "signal": "整理待發",
+            "trend_type": "整理後可攻",
+            "pattern": "整理靠近壓力區，尚未過熱，等待放量突破",
+        }
 
-    if close_now > ma20 and ma5 >= ma20 and rsi14 >= 48 and macd_hist >= -0.05:
-        return {"signal": "溫和轉強", "trend_type": "趨勢改善", "pattern": "重回中期均線之上，結構改善"}
+    if close_now > ma20 and ma5 >= ma20 and close_now >= ma5 and rsi14 >= 48 and macd_hist >= -0.03:
+        return {
+            "signal": "溫和轉強",
+            "trend_type": "趨勢改善",
+            "pattern": "重回中期均線之上，結構改善但尚未進入最強型",
+        }
 
-    if close_now < ma20 or rsi14 < 45:
-        return {"signal": "偏弱觀察", "trend_type": "暫不列入主攻", "pattern": "仍未完成轉強，需觀察"}
+    if close_now < ma20 or (ma5 < ma10 < ma20) or rsi14 < 45:
+        return {
+            "signal": "偏弱觀察",
+            "trend_type": "暫不列入主攻",
+            "pattern": "仍未完成轉強，較接近弱勢反彈或空頭整理",
+        }
 
-    return {"signal": "中性觀察", "trend_type": "等待確認", "pattern": "方向尚未完全明朗"}
+    return {
+        "signal": "中性觀察",
+        "trend_type": "等待確認",
+        "pattern": "方向尚未完全明朗",
+    }
 
 
 def build_historical_reason(
@@ -900,27 +951,38 @@ def calc_potential_recommendation_score(
     distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 99.0
 
     score = 0.0
-    score += score_band(day_change_pct, 0.5, 5.0, 2.3, 22)
-    score += score_band(vol_ratio5, 0.9, 3.2, 1.7, 24)
-    score += score_band(rsi14, 45, 72, 58, 16)
-    score += score_band(distance_to_high20, 0.0, 8.0, 2.5, 18)
+    score += score_band(day_change_pct, 0.3, 5.0, 2.0, 22)
+    score += score_band(vol_ratio5, 0.95, 3.0, 1.6, 24)
+    score += score_band(rsi14, 46, 71, 57, 16)
+    score += score_band(distance_to_high20, 0.8, 8.0, 2.6, 22)
 
     if close_now > ma20:
-        score += 10
+        score += 12
     if ma5 >= ma10:
-        score += 6
+        score += 8
     if ma10 >= ma20:
+        score += 6
+    if close_now >= ma5:
         score += 4
     if macd_hist >= 0:
         score += 8
+
+    if close_now < ma20:
+        score -= 15
+    if close_now < ma5:
+        score -= 6
+    if ma5 < ma10 < ma20:
+        score -= 12
     if close_now < low20 * 1.03:
         score -= 10
-    if day_change_pct >= 5.5:
+    if day_change_pct >= 5.2:
         score -= 15
     if vol_ratio5 >= 3.0:
         score -= 12
     if rsi14 >= 72:
         score -= 10
+    if distance_to_high20 < 0.5:
+        score -= 6
 
     return round(max(score, 0.0), 2)
 
@@ -1102,11 +1164,26 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     close_position = calc_position_ratio(price, high_price, low_price)
     amplitude_pct = calc_amplitude_pct(high_price, low_price, previous_close)
 
-    # 改成偏 2~4 天潛力股評分：不要抓已經噴過頭
-    momentum_score = score_band(change_percent, -0.5, 5.5, 2.4, 20)
-    position_score = score_band(close_position, 0.25, 0.9, 0.62, 18)
-    amplitude_score = score_band(amplitude_pct, 0.8, 7.0, 3.5, 10)
-    liquidity_score = score_band(volume, 1000, 40000, 9000, 12)
+    momentum_score = score_band(change_percent, -0.3, 5.0, 2.1, 20)
+    position_score = score_band(close_position, 0.28, 0.88, 0.62, 18)
+    amplitude_score = score_band(amplitude_pct, 0.8, 6.8, 3.2, 10)
+    liquidity_score = score_band(volume, 1200, 40000, 9000, 12)
+
+    structure_bonus = 0.0
+    if price >= open_price:
+        structure_bonus += 5
+    if 0.48 <= close_position <= 0.8:
+        structure_bonus += 4
+    if 0.6 <= change_percent <= 4.2:
+        structure_bonus += 4
+
+    weakness_penalty = 0.0
+    if price < open_price:
+        weakness_penalty += 5
+    if close_position <= 0.22:
+        weakness_penalty += 6
+    if change_percent < -1.0:
+        weakness_penalty += 6
 
     overheat_penalty = 0.0
     if change_percent >= 5:
@@ -1116,7 +1193,10 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     if amplitude_pct >= 7:
         overheat_penalty += 6
 
-    score = round(max(momentum_score + position_score + amplitude_score + liquidity_score - overheat_penalty, 0), 2)
+    score = round(
+        max(momentum_score + position_score + amplitude_score + liquidity_score + structure_bonus - weakness_penalty - overheat_penalty, 0),
+        2
+    )
     base_recommendation_score = score
 
     signal_info = build_signal_and_reason(
@@ -1347,17 +1427,19 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
 
 
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
-    # 先用即時資料做初篩：排除太弱與太過熱
     candidates = [
         s for s in stocks
         if is_main_board_stock(s)
-        and safe_float(s.get("price")) > 0
-        and safe_int(s.get("volume")) >= 1000
-        and -0.5 <= safe_float(s.get("change_percent")) <= 5.5
-        and safe_float(s.get("recommendation_score")) >= 18
+        and safe_float(s.get("price")) >= 8
+        and safe_int(s.get("volume")) >= 1500
+        and 0.2 <= safe_float(s.get("change_percent")) <= 4.8
+        and safe_float(s.get("recommendation_score")) >= 22
+        and safe_float(s.get("price")) >= safe_float(s.get("open"))
+        and safe_float(s.get("price")) >= safe_float(s.get("low"))
+        and safe_float(s.get("change_percent")) >= -0.2
+        and safe_str(s.get("signal")) not in {"短線過熱", "偏弱整理"}
     ]
 
-    # 多抓一些進歷史K再精選，避免只看 snapshot
     candidates.sort(
         key=lambda x: (
             x.get("recommendation_score", 0),
@@ -1366,7 +1448,7 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
         ),
         reverse=True,
     )
-    seed_items = candidates[:40]
+    seed_items = candidates[:35]
 
     result_map: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=6) as executor:
@@ -1385,14 +1467,17 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
 
     analyzed = list(result_map.values())
 
-    # 最終以潛力分數排序，不抓過熱型
     analyzed = [
         s for s in analyzed
-        if s.get("signal") not in {"短線過熱", "偏弱觀察"}
+        if s.get("signal") in {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
+        and safe_float(s.get("recommendation_score")) >= 35
+        and safe_str(s.get("operation_rating")) in {"A", "B+"}
     ]
+
     analyzed.sort(
         key=lambda x: (
             x.get("recommendation_score", 0),
+            1 if x.get("signal") == "突破前夕" else 0,
             1 if x.get("operation_rating") == "A" else 0,
             x.get("volume", 0),
         ),
