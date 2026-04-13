@@ -1,3 +1,4 @@
+from typing import List, Dict, Any
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
     """
     🔥 正式版推薦引擎（升級版）
