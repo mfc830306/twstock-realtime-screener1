@@ -1016,9 +1016,9 @@ export default function Home() {
                       紀錄摘要
                     </div>
                     <div style={{ color: "#dce9ff", lineHeight: 1.8, fontSize: "13px", fontWeight: 700 }}>
-                      <div>資料日期：{formatDateString(validationRecord.dataDate)}</div>
-                      <div>最後更新：{validationRecord.lastUpdate || "-"}</div>
-                      <div>本次推薦：{validationRecord.recommendationCount} 檔</div>
+                      <div>資料日期：{formatDateString(validationRecord!.dataDate)}</div>
+                      <div>最後更新：{validationRecord!.lastUpdate || "-"}</div>
+                      <div>本次推薦：{validationRecord!.recommendationCount} 檔</div>
                       <div>累積紀錄：{validationHistory.length} 次</div>
                     </div>
                   </div>
@@ -1034,13 +1034,13 @@ export default function Home() {
                       規則驗證
                     </div>
                     <div style={{ color: "#dce9ff", lineHeight: 1.8, fontSize: "13px", fontWeight: 700 }}>
-                      <div>日 K 驗證：{validationRecord.historicalKCount}/{validationRecord.recommendationCount}</div>
-                      <div>強勢評級：{validationRecord.strongRatingCount}/{validationRecord.recommendationCount}</div>
-                      <div>平均分數：{validationRecord.averageScore.toFixed(2)}</div>
+                      <div>日 K 驗證：{validationRecord!.historicalKCount}/{validationRecord!.recommendationCount}</div>
+                      <div>強勢評級：{validationRecord!.strongRatingCount}/{validationRecord!.recommendationCount}</div>
+                      <div>平均分數：{validationRecord!.averageScore.toFixed(2)}</div>
                       <div>
                         平均風報比：
-                        {validationRecord.averageRiskReward > 0
-                          ? ` 1:${validationRecord.averageRiskReward.toFixed(2)}`
+                        {validationRecord!.averageRiskReward > 0
+                          ? ` 1:${validationRecord!.averageRiskReward.toFixed(2)}`
                           : " -"}
                       </div>
                     </div>
@@ -1059,7 +1059,7 @@ export default function Home() {
                 >
                   <div style={{ marginBottom: "6px" }}>本次股票：</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
-                    {validationRecord.stockLabels.map((label) => (
+                    {validationRecord!.stockLabels.map((label) => (
                       <span
                         key={label}
                         style={{
@@ -1079,7 +1079,7 @@ export default function Home() {
                   <div>
                     前次重複：{previousValidationRecord ? `${repeatedPickCount} 檔` : "尚無前次紀錄"}
                   </div>
-                  <div>主訊號：{validationRecord.signalSummary.join(" / ") || "-"}</div>
+                  <div>主訊號：{validationRecord!.signalSummary.join(" / ") || "-"}</div>
                 </div>
 
                 <div
@@ -1110,7 +1110,7 @@ export default function Home() {
                       paddingRight: "4px",
                     }}
                   >
-                    {validationRecord.stocks.map((stock) => (
+                    {validationRecord!.stocks.map((stock) => (
                       <div
                         key={`${stock.symbol}-${stock.signal}`}
                         style={{
@@ -1549,9 +1549,9 @@ export default function Home() {
                       紀錄摘要
                     </div>
                     <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
-                      <div>資料日期：{formatDateString(validationRecord.dataDate)}</div>
-                      <div>最後更新：{validationRecord.lastUpdate || "-"}</div>
-                      <div>本次推薦：{validationRecord.recommendationCount} 檔</div>
+                      <div>資料日期：{formatDateString(validationRecord!.dataDate)}</div>
+                      <div>最後更新：{validationRecord!.lastUpdate || "-"}</div>
+                      <div>本次推薦：{validationRecord!.recommendationCount} 檔</div>
                       <div>前次重複：{previousValidationRecord ? `${repeatedPickCount} 檔` : "尚無前次紀錄"}</div>
                     </div>
                   </div>
@@ -1568,16 +1568,16 @@ export default function Home() {
                       驗證結果
                     </div>
                     <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
-                      <div>日 K 驗證：{validationRecord.historicalKCount}/{validationRecord.recommendationCount}</div>
-                      <div>強勢評級：{validationRecord.strongRatingCount}/{validationRecord.recommendationCount}</div>
-                      <div>平均分數：{validationRecord.averageScore.toFixed(2)}</div>
+                      <div>日 K 驗證：{validationRecord!.historicalKCount}/{validationRecord!.recommendationCount}</div>
+                      <div>強勢評級：{validationRecord!.strongRatingCount}/{validationRecord!.recommendationCount}</div>
+                      <div>平均分數：{validationRecord!.averageScore.toFixed(2)}</div>
                       <div>
                         平均風報比：
-                        {validationRecord.averageRiskReward > 0
-                          ? ` 1:${validationRecord.averageRiskReward.toFixed(2)}`
+                        {validationRecord!.averageRiskReward > 0
+                          ? ` 1:${validationRecord!.averageRiskReward.toFixed(2)}`
                           : " -"}
                       </div>
-                      <div>主訊號：{validationRecord.signalSummary.join(" / ") || "-"}</div>
+                      <div>主訊號：{validationRecord!.signalSummary.join(" / ") || "-"}</div>
                     </div>
                   </div>
                 </div>
@@ -1596,7 +1596,7 @@ export default function Home() {
                     paddingRight: isMobile ? "0" : "4px",
                   }}
                 >
-                  {validationRecord.stocks.map((stock) => (
+                  {validationRecord!.stocks.map((stock) => (
                     <div
                       key={`${stock.symbol}-${stock.signal}`}
                       style={{
