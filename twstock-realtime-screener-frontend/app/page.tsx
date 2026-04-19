@@ -85,6 +85,18 @@ type ValidationRecord = {
   lastUpdate: string;
   symbols: string[];
   stockLabels: string[];
+  stocks: Array<{
+    symbol: string;
+    name: string;
+    signal: string;
+    operationRating: string;
+    recommendationScore: number;
+    reason: string;
+    entryPrice: string;
+    targetPrice: string;
+    stopLoss: string;
+    riskReward: string;
+  }>;
   recommendationCount: number;
   historicalKCount: number;
   strongRatingCount: number;
@@ -292,6 +304,18 @@ function buildValidationRecord(
     lastUpdate: lastUpdate || "",
     symbols: safeSource.map((stock) => stock.symbol),
     stockLabels: safeSource.map((stock) => `${stock.symbol} ${stock.name}`),
+    stocks: safeSource.map((stock) => ({
+      symbol: stock.symbol,
+      name: stock.name,
+      signal: stock.signal || "-",
+      operationRating: stock.operation_rating || "-",
+      recommendationScore: Number(stock.recommendation_score || stock.score || 0),
+      reason: stock.reason || stock.technical_comment || "-",
+      entryPrice: stock.entry_price || "-",
+      targetPrice: stock.target_price || "-",
+      stopLoss: stock.stop_loss || "-",
+      riskReward: stock.risk_reward || "-",
+    })),
     recommendationCount: safeSource.length,
     historicalKCount: safeSource.filter((stock) => stock.analysis_source === "historical_k").length,
     strongRatingCount: safeSource.filter(
@@ -336,6 +360,7 @@ export default function Home() {
   const [total, setTotal] = useState(0);
   const [allTotal, setAllTotal] = useState(0);
   const [showValidationPanel, setShowValidationPanel] = useState(false);
+  const [showRecommendationsPanel, setShowRecommendationsPanel] = useState(true);
   const [validationHistory, setValidationHistory] = useState<ValidationRecord[]>([]);
 
   const initialLoadedRef = useRef(false);
@@ -1035,6 +1060,129 @@ export default function Home() {
                   </div>
                   <div>主訊號：{validationRecord.signalSummary.join(" / ") || "-"}</div>
                 </div>
+
+                <div
+                  style={{
+                    marginTop: "12px",
+                    paddingTop: "12px",
+                    borderTop: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div
+                    style={{
+                      color: "#9cccf9",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                      marginBottom: "10px",
+                    }}
+                  >
+                    個股紀錄明細
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "10px",
+                      maxHeight: "380px",
+                      overflowY: "auto",
+                      paddingRight: "4px",
+                    }}
+                  >
+                    {validationRecord.stocks.map((stock) => (
+                      <div
+                        key={`${stock.symbol}-${stock.signal}`}
+                        style={{
+                          borderRadius: "14px",
+                          padding: "12px",
+                          background: "rgba(20, 58, 112, 0.46)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: "8px",
+                            marginBottom: "8px",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div style={{ color: "#ffffff", fontWeight: 900, fontSize: "14px" }}>
+                            {stock.symbol} {stock.name}
+                          </div>
+                          <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "13px" }}>
+                            分數 {stock.recommendationScore.toFixed(2)}
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "6px",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: "999px",
+                              background: "rgba(255,255,255,0.06)",
+                              color: "#dce9ff",
+                              fontSize: "12px",
+                              fontWeight: 800,
+                            }}
+                          >
+                            {stock.signal}
+                          </span>
+                          <span
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: "999px",
+                              background: "rgba(255,255,255,0.06)",
+                              color: "#dce9ff",
+                              fontSize: "12px",
+                              fontWeight: 800,
+                            }}
+                          >
+                            評級 {stock.operationRating}
+                          </span>
+                        </div>
+
+                        <div
+                          style={{
+                            color: "#dce9ff",
+                            fontSize: "12px",
+                            lineHeight: 1.7,
+                            fontWeight: 700,
+                            marginBottom: "8px",
+                          }}
+                        >
+                          {stock.reason}
+                        </div>
+
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                            gap: "6px 10px",
+                            color: "#cfe5ff",
+                            fontSize: "12px",
+                            fontWeight: 700,
+                            lineHeight: 1.6,
+                          }}
+                        >
+                          <div>進場：{stock.entryPrice}</div>
+                          <div>目標：{stock.targetPrice}</div>
+                          <div>停損：{stock.stopLoss}</div>
+                          <div>風報比：{stock.riskReward}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1145,15 +1293,45 @@ export default function Home() {
           </div>
 
           <div style={panelStyle}>
-            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "10px" }}>🔥 推薦10檔</h2>
-
             <div
               style={{
-                maxHeight: isMobile ? "none" : "470px",
-                overflowY: isMobile ? "visible" : "auto",
-                paddingRight: isMobile ? "0" : "6px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                marginBottom: showRecommendationsPanel ? "10px" : "0",
               }}
             >
+              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 推薦10檔</h2>
+              <button
+                type="button"
+                onClick={() => setShowRecommendationsPanel((prev) => !prev)}
+                style={{
+                  border: "1px solid rgba(120, 205, 255, 0.28)",
+                  borderRadius: "12px",
+                  padding: "8px 12px",
+                  background: showRecommendationsPanel
+                    ? "linear-gradient(180deg, rgba(106, 187, 255, 0.28) 0%, rgba(56, 116, 214, 0.38) 100%)"
+                    : "rgba(255,255,255,0.05)",
+                  color: "#e8f4ff",
+                  fontWeight: 800,
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {showRecommendationsPanel ? "收起" : "展開"}
+              </button>
+            </div>
+
+            {showRecommendationsPanel && (
+              <div
+                style={{
+                  maxHeight: isMobile ? "none" : "470px",
+                  overflowY: isMobile ? "visible" : "auto",
+                  paddingRight: isMobile ? "0" : "6px",
+                }}
+              >
               {recommendations.length === 0 ? (
                 <div style={{ color: "#cfe2ff", padding: "16px 4px", fontWeight: 700 }}>
                   目前沒有可顯示的推薦資料
@@ -1317,7 +1495,8 @@ export default function Home() {
                   );
                 })
               )}
-            </div>
+              </div>
+            )}
           </div>
         </section>
 
