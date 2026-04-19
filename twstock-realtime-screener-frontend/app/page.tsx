@@ -80,7 +80,24 @@ type ApiResponse = {
   };
 };
 
+type ValidationRecord = {
+  dataDate: string;
+  lastUpdate: string;
+  symbols: string[];
+  recommendationCount: number;
+  historicalKCount: number;
+  strongRatingCount: number;
+  validSignalCount: number;
+  excludedSignalCount: number;
+  averageScore: number;
+  averageRiskReward: number;
+  signalSummary: string[];
+};
+
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
+const VALIDATION_STORAGE_KEY = "twstock-validation-history-v1";
+const VALIDATION_SIGNALS = ["突破前夕", "量增轉強", "整理待發", "溫和轉強"];
+const EXCLUDED_VALIDATION_SIGNALS = ["短線過熱", "偏弱觀察", "偏弱整理"];
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -240,6 +257,63 @@ function buildCategoryCountsFromBackend(
   };
 }
 
+function roundTo(num: number, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round(num * factor) / factor;
+}
+
+function parseRiskRewardValue(text?: string) {
+  const match = String(text || "").match(/1\s*:\s*([0-9.]+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function buildValidationRecord(
+  source: Stock[],
+  dataDate?: string,
+  lastUpdate?: string
+): ValidationRecord | null {
+  if (!source.length) return null;
+
+  const safeSource = source.map(normalizeStock);
+  const signalCount = new Map<string, number>();
+  for (const stock of safeSource) {
+    const signal = stock.signal || "未分類";
+    signalCount.set(signal, (signalCount.get(signal) || 0) + 1);
+  }
+
+  const scoreValues = safeSource.map((stock) => Number(stock.recommendation_score || stock.score || 0));
+  const riskRewardValues = safeSource
+    .map((stock) => parseRiskRewardValue(stock.risk_reward))
+    .filter((value) => value > 0);
+
+  return {
+    dataDate: dataDate || "",
+    lastUpdate: lastUpdate || "",
+    symbols: safeSource.map((stock) => stock.symbol),
+    recommendationCount: safeSource.length,
+    historicalKCount: safeSource.filter((stock) => stock.analysis_source === "historical_k").length,
+    strongRatingCount: safeSource.filter(
+      (stock) => stock.operation_rating === "A" || stock.operation_rating === "B+"
+    ).length,
+    validSignalCount: safeSource.filter((stock) =>
+      VALIDATION_SIGNALS.includes(stock.signal || "")
+    ).length,
+    excludedSignalCount: safeSource.filter((stock) =>
+      EXCLUDED_VALIDATION_SIGNALS.includes(stock.signal || "")
+    ).length,
+    averageScore: roundTo(
+      scoreValues.reduce((sum, value) => sum + value, 0) / Math.max(scoreValues.length, 1)
+    ),
+    averageRiskReward: roundTo(
+      riskRewardValues.reduce((sum, value) => sum + value, 0) / Math.max(riskRewardValues.length, 1)
+    ),
+    signalSummary: Array.from(signalCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([signal, count]) => `${signal} ${count}檔`),
+  };
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [recommendations, setRecommendations] = useState<Stock[]>([]);
@@ -259,6 +333,8 @@ export default function Home() {
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
   const [total, setTotal] = useState(0);
   const [allTotal, setAllTotal] = useState(0);
+  const [showValidationPanel, setShowValidationPanel] = useState(false);
+  const [validationHistory, setValidationHistory] = useState<ValidationRecord[]>([]);
 
   const initialLoadedRef = useRef(false);
   const pagedRequestIdRef = useRef(0);
@@ -629,6 +705,52 @@ export default function Home() {
     return null;
   }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
 
+  const validationRecord = useMemo(
+    () => buildValidationRecord(recommendations, dataDate, lastUpdate),
+    [recommendations, dataDate, lastUpdate]
+  );
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(VALIDATION_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setValidationHistory(parsed);
+      }
+    } catch {
+      setValidationHistory([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!validationRecord) return;
+
+    setValidationHistory((prev) => {
+      const next = [
+        validationRecord,
+        ...prev.filter((item) => item.dataDate !== validationRecord.dataDate),
+      ].slice(0, 12);
+
+      try {
+        window.localStorage.setItem(VALIDATION_STORAGE_KEY, JSON.stringify(next));
+      } catch {}
+
+      return next;
+    });
+  }, [validationRecord]);
+
+  const previousValidationRecord = useMemo(() => {
+    if (!validationRecord) return null;
+    return validationHistory.find((item) => item.dataDate !== validationRecord.dataDate) || null;
+  }, [validationHistory, validationRecord]);
+
+  const repeatedPickCount = useMemo(() => {
+    if (!validationRecord || !previousValidationRecord) return 0;
+    const previousSymbols = new Set(previousValidationRecord.symbols);
+    return validationRecord.symbols.filter((symbol) => previousSymbols.has(symbol)).length;
+  }, [previousValidationRecord, validationRecord]);
+
   const panelStyle: React.CSSProperties = {
     background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
     border: "1px solid rgba(80, 140, 220, 0.22)",
@@ -786,7 +908,207 @@ export default function Home() {
           }}
         >
           <div style={panelStyle}>
-            <h2 style={{ fontSize: "24px", fontWeight: 900, marginBottom: "18px" }}>價格分類</h2>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                marginBottom: "18px",
+              }}
+            >
+              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>價格分類</h2>
+              <button
+                type="button"
+                onClick={() => setShowValidationPanel((prev) => !prev)}
+                style={{
+                  border: "1px solid rgba(120, 205, 255, 0.28)",
+                  borderRadius: "12px",
+                  padding: "8px 12px",
+                  background: showValidationPanel
+                    ? "linear-gradient(180deg, rgba(106, 187, 255, 0.28) 0%, rgba(56, 116, 214, 0.38) 100%)"
+                    : "rgba(255,255,255,0.05)",
+                  color: "#e8f4ff",
+                  fontWeight: 800,
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {showValidationPanel ? "收起驗證" : "驗證紀錄"}
+              </button>
+            </div>
+
+            {showValidationPanel && validationRecord && (
+              <div
+                style={{
+                  marginBottom: "18px",
+                  padding: "14px 14px 12px",
+                  borderRadius: "16px",
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(130, 185, 255, 0.16)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                    gap: "12px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      borderRadius: "14px",
+                      padding: "12px",
+                      background: "rgba(20, 58, 112, 0.58)",
+                    }}
+                  >
+                    <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
+                      紀錄摘要
+                    </div>
+                    <div style={{ color: "#dce9ff", lineHeight: 1.8, fontSize: "13px", fontWeight: 700 }}>
+                      <div>資料日期：{formatDateString(validationRecord.dataDate)}</div>
+                      <div>最後更新：{validationRecord.lastUpdate || "-"}</div>
+                      <div>本次推薦：{validationRecord.recommendationCount} 檔</div>
+                      <div>累積紀錄：{validationHistory.length} 次</div>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: "14px",
+                      padding: "12px",
+                      background: "rgba(20, 58, 112, 0.58)",
+                    }}
+                  >
+                    <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
+                      規則驗證
+                    </div>
+                    <div style={{ color: "#dce9ff", lineHeight: 1.8, fontSize: "13px", fontWeight: 700 }}>
+                      <div>
+                        歷史 K 驗證：{validationRecord.historicalKCount}/{validationRecord.recommendationCount}
+                      </div>
+                      <div>
+                        強勢評級：{validationRecord.strongRatingCount}/{validationRecord.recommendationCount}
+                      </div>
+                      <div>
+                        潛力訊號：{validationRecord.validSignalCount}/{validationRecord.recommendationCount}
+                      </div>
+                      <div>
+                        過熱/偏弱排除：
+                        {validationRecord.excludedSignalCount === 0
+                          ? " 通過"
+                          : ` ${validationRecord.excludedSignalCount} 檔需留意`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "repeat(3, minmax(0,1fr))",
+                    gap: "10px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      borderRadius: "12px",
+                      padding: "10px 12px",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    <div style={{ color: "#93c8ff", fontSize: "12px", marginBottom: "6px", fontWeight: 700 }}>
+                      平均分數
+                    </div>
+                    <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "18px" }}>
+                      {validationRecord.averageScore.toFixed(2)}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: "12px",
+                      padding: "10px 12px",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    <div style={{ color: "#93c8ff", fontSize: "12px", marginBottom: "6px", fontWeight: 700 }}>
+                      平均風報比
+                    </div>
+                    <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "18px" }}>
+                      {validationRecord.averageRiskReward > 0
+                        ? `1:${validationRecord.averageRiskReward.toFixed(2)}`
+                        : "-"}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: "12px",
+                      padding: "10px 12px",
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    <div style={{ color: "#93c8ff", fontSize: "12px", marginBottom: "6px", fontWeight: 700 }}>
+                      與前次重複
+                    </div>
+                    <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "18px" }}>
+                      {previousValidationRecord ? `${repeatedPickCount} 檔` : "尚無前次"}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginBottom: "8px" }}>
+                  本次主訊號
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
+                  {validationRecord.signalSummary.map((item) => (
+                    <span
+                      key={item}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: "999px",
+                        background: "rgba(98, 169, 255, 0.16)",
+                        border: "1px solid rgba(98, 169, 255, 0.18)",
+                        color: "#dbe9ff",
+                        fontSize: "12px",
+                        fontWeight: 800,
+                      }}
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+
+                <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginBottom: "8px" }}>
+                  最近紀錄
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  {validationHistory.slice(0, 4).map((item) => (
+                    <span
+                      key={`${item.dataDate}-${item.lastUpdate}`}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: "999px",
+                        background: "rgba(255,255,255,0.05)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        color: "#dbe9ff",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {formatDateString(item.dataDate)} / {item.recommendationCount} 檔
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={{ marginBottom: "20px" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
