@@ -84,6 +84,7 @@ type ValidationRecord = {
   dataDate: string;
   lastUpdate: string;
   symbols: string[];
+  stockLabels: string[];
   recommendationCount: number;
   historicalKCount: number;
   strongRatingCount: number;
@@ -290,6 +291,7 @@ function buildValidationRecord(
     dataDate: dataDate || "",
     lastUpdate: lastUpdate || "",
     symbols: safeSource.map((stock) => stock.symbol),
+    stockLabels: safeSource.map((stock) => `${stock.symbol} ${stock.name}`),
     recommendationCount: safeSource.length,
     historicalKCount: safeSource.filter((stock) => stock.analysis_source === "historical_k").length,
     strongRatingCount: safeSource.filter(
@@ -943,7 +945,7 @@ export default function Home() {
               <div
                 style={{
                   marginBottom: "18px",
-                  padding: "14px 14px 12px",
+                  padding: "14px",
                   borderRadius: "16px",
                   background: "rgba(255,255,255,0.05)",
                   border: "1px solid rgba(130, 185, 255, 0.16)",
@@ -986,20 +988,14 @@ export default function Home() {
                       規則驗證
                     </div>
                     <div style={{ color: "#dce9ff", lineHeight: 1.8, fontSize: "13px", fontWeight: 700 }}>
+                      <div>日 K 驗證：{validationRecord.historicalKCount}/{validationRecord.recommendationCount}</div>
+                      <div>強勢評級：{validationRecord.strongRatingCount}/{validationRecord.recommendationCount}</div>
+                      <div>平均分數：{validationRecord.averageScore.toFixed(2)}</div>
                       <div>
-                        歷史 K 驗證：{validationRecord.historicalKCount}/{validationRecord.recommendationCount}
-                      </div>
-                      <div>
-                        強勢評級：{validationRecord.strongRatingCount}/{validationRecord.recommendationCount}
-                      </div>
-                      <div>
-                        潛力訊號：{validationRecord.validSignalCount}/{validationRecord.recommendationCount}
-                      </div>
-                      <div>
-                        過熱/偏弱排除：
-                        {validationRecord.excludedSignalCount === 0
-                          ? " 通過"
-                          : ` ${validationRecord.excludedSignalCount} 檔需留意`}
+                        平均風報比：
+                        {validationRecord.averageRiskReward > 0
+                          ? ` 1:${validationRecord.averageRiskReward.toFixed(2)}`
+                          : " -"}
                       </div>
                     </div>
                   </div>
@@ -1007,105 +1003,37 @@ export default function Home() {
 
                 <div
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: isMobile ? "1fr" : "repeat(3, minmax(0,1fr))",
-                    gap: "10px",
-                    marginBottom: "12px",
+                    paddingTop: "10px",
+                    borderTop: "1px solid rgba(255,255,255,0.08)",
+                    color: "#dce9ff",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    lineHeight: 1.7,
                   }}
                 >
-                  <div
-                    style={{
-                      borderRadius: "12px",
-                      padding: "10px 12px",
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                    }}
-                  >
-                    <div style={{ color: "#93c8ff", fontSize: "12px", marginBottom: "6px", fontWeight: 700 }}>
-                      平均分數
-                    </div>
-                    <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "18px" }}>
-                      {validationRecord.averageScore.toFixed(2)}
-                    </div>
+                  <div style={{ marginBottom: "6px" }}>本次股票：</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+                    {validationRecord.stockLabels.map((label) => (
+                      <span
+                        key={label}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: "999px",
+                          background: "rgba(255,255,255,0.06)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          color: "#e8f2ff",
+                          fontSize: "12px",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {label}
+                      </span>
+                    ))}
                   </div>
-
-                  <div
-                    style={{
-                      borderRadius: "12px",
-                      padding: "10px 12px",
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                    }}
-                  >
-                    <div style={{ color: "#93c8ff", fontSize: "12px", marginBottom: "6px", fontWeight: 700 }}>
-                      平均風報比
-                    </div>
-                    <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "18px" }}>
-                      {validationRecord.averageRiskReward > 0
-                        ? `1:${validationRecord.averageRiskReward.toFixed(2)}`
-                        : "-"}
-                    </div>
+                  <div>
+                    前次重複：{previousValidationRecord ? `${repeatedPickCount} 檔` : "尚無前次紀錄"}
                   </div>
-
-                  <div
-                    style={{
-                      borderRadius: "12px",
-                      padding: "10px 12px",
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                    }}
-                  >
-                    <div style={{ color: "#93c8ff", fontSize: "12px", marginBottom: "6px", fontWeight: 700 }}>
-                      與前次重複
-                    </div>
-                    <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "18px" }}>
-                      {previousValidationRecord ? `${repeatedPickCount} 檔` : "尚無前次"}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginBottom: "8px" }}>
-                  本次主訊號
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
-                  {validationRecord.signalSummary.map((item) => (
-                    <span
-                      key={item}
-                      style={{
-                        padding: "5px 10px",
-                        borderRadius: "999px",
-                        background: "rgba(98, 169, 255, 0.16)",
-                        border: "1px solid rgba(98, 169, 255, 0.18)",
-                        color: "#dbe9ff",
-                        fontSize: "12px",
-                        fontWeight: 800,
-                      }}
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-
-                <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginBottom: "8px" }}>
-                  最近紀錄
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                  {validationHistory.slice(0, 4).map((item) => (
-                    <span
-                      key={`${item.dataDate}-${item.lastUpdate}`}
-                      style={{
-                        padding: "5px 10px",
-                        borderRadius: "999px",
-                        background: "rgba(255,255,255,0.05)",
-                        border: "1px solid rgba(255,255,255,0.08)",
-                        color: "#dbe9ff",
-                        fontSize: "12px",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {formatDateString(item.dataDate)} / {item.recommendationCount} 檔
-                    </span>
-                  ))}
+                  <div>主訊號：{validationRecord.signalSummary.join(" / ") || "-"}</div>
                 </div>
               </div>
             )}
