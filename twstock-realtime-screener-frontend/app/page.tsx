@@ -412,14 +412,167 @@ export default function Home() {
     }
   }
 
+  async function fetchRecommendationsSafe(options?: { forceRefresh?: boolean }) {
+    const requestId = ++recommendationsRequestIdRef.current;
+
+    try {
+      const params = new URLSearchParams({
+        limit: "30",
+        offset: "0",
+        sort_by: "recommendation_score",
+        sort_dir: "desc",
+      });
+      if (options?.forceRefresh) params.set("force_refresh", "true");
+
+      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data: ApiResponse = await res.json();
+      if (!data.success) throw new Error(data.error || data.message || "載入失敗");
+
+      const source = (data.recommendations?.length ? data.recommendations : data.stocks || []).map(
+        normalizeStock
+      );
+      const safeRecommendations = source
+        .filter((stock) => stock.market === "上市" || stock.market === "上櫃")
+        .sort(
+          (a, b) =>
+            (b.recommendation_score || b.score || 0) - (a.recommendation_score || a.score || 0)
+        )
+        .slice(0, 10);
+
+      if (requestId !== recommendationsRequestIdRef.current) return null;
+      setRecommendations(safeRecommendations);
+      return data;
+    } catch (err) {
+      if (requestId !== recommendationsRequestIdRef.current) return null;
+      setError(err instanceof Error ? err.message : "載入失敗");
+      return null;
+    }
+  }
+
+  async function fetchPagedStocksSafe(
+    override?: Partial<{
+      category: CategoryKey;
+      page: number;
+      rank: RankType;
+      keyword: string;
+    }>,
+    options?: {
+      forceRefresh?: boolean;
+      manageLoading?: boolean;
+    }
+  ) {
+    const requestId = ++pagedRequestIdRef.current;
+    const manageLoading = options?.manageLoading ?? true;
+
+    if (manageLoading) setLoading(true);
+    setError("");
+
+    try {
+      const category = override?.category ?? selectedCategory;
+      const page = override?.page ?? currentPage;
+      const rank = override?.rank ?? rankType;
+      const keyword = override?.keyword ?? debouncedSearchTerm;
+
+      const categoryQuery = getCategoryQuery(category);
+      const sortQuery = getSortQuery(rank);
+
+      const params = new URLSearchParams({
+        limit: String(ITEMS_PER_PAGE),
+        offset: String((page - 1) * ITEMS_PER_PAGE),
+        sort_by: sortQuery.sort_by,
+        sort_dir: sortQuery.sort_dir,
+      });
+
+      if (keyword) params.set("q", keyword);
+      if (options?.forceRefresh) params.set("force_refresh", "true");
+      if (categoryQuery.market) params.set("market", categoryQuery.market);
+      if (categoryQuery.price_min !== undefined) {
+        params.set("price_min", String(categoryQuery.price_min));
+      }
+      if (categoryQuery.price_max !== undefined) {
+        params.set("price_max", String(categoryQuery.price_max));
+      }
+
+      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data: ApiResponse = await res.json();
+      if (requestId !== pagedRequestIdRef.current) return null;
+      if (!data.success) throw new Error(data.error || data.message || "載入失敗");
+
+      const safeStocks = (data.stocks || []).map(normalizeStock);
+      setStocks(safeStocks);
+      setTotal(Number(data.total || 0));
+
+      if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
+      if (data.categories) setBackendCategories(data.categories);
+      if (data.recommendations?.length) {
+        recommendationsRequestIdRef.current += 1;
+        setRecommendations((data.recommendations || []).map(normalizeStock).slice(0, 10));
+      }
+
+      setMarketStatus(data.market_status || "-");
+      setDataDate(
+        data.data_date ||
+          data.source_summary?.twse_data_date ||
+          data.source_summary?.tpex_data_date ||
+          "-"
+      );
+      setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
+
+      if (data.focused_stock) {
+        setFocusedStock(data.focused_stock);
+      } else if (!manualSelectedSymbol && !keyword) {
+        setFocusedStock(null);
+      }
+
+      return data;
+    } catch (err) {
+      if (requestId !== pagedRequestIdRef.current) return null;
+      setError(err instanceof Error ? err.message : "載入失敗");
+      return null;
+    } finally {
+      if (manageLoading && requestId === pagedRequestIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function fetchAllDataSafe(options?: { forceRefresh?: boolean }) {
+    setLoading(true);
+    setError("");
+
+    const data = await fetchPagedStocksSafe(
+      {
+        category: selectedCategory,
+        page: currentPage,
+        rank: rankType,
+        keyword: debouncedSearchTerm,
+      },
+      {
+        forceRefresh: options?.forceRefresh,
+        manageLoading: false,
+      }
+    );
+
+    if (!data?.recommendations?.length) {
+      await fetchRecommendationsSafe({ forceRefresh: options?.forceRefresh });
+    }
+
+    initialLoadedRef.current = true;
+    setLoading(false);
+  }
+
   useEffect(() => {
-    fetchAllData();
+    fetchAllDataSafe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
-    fetchPagedStocks({
+    fetchPagedStocksSafe({
       category: selectedCategory,
       page: currentPage,
       rank: rankType,
@@ -430,14 +583,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
-    fetchRecommendations();
+    fetchRecommendationsSafe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategory]);
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
     const timer = setInterval(() => {
-      fetchPagedStocks({
+      fetchPagedStocksSafe({
         category: selectedCategory,
         page: currentPage,
         rank: rankType,
@@ -580,7 +733,7 @@ export default function Home() {
 
             <button
               type="button"
-              onClick={() => fetchAllData({ forceRefresh: true })}
+              onClick={() => fetchAllDataSafe({ forceRefresh: true })}
               disabled={loading}
               style={{
                 border: "none",
@@ -647,7 +800,7 @@ export default function Home() {
                         setSelectedCategory(item.key);
                         setManualSelectedSymbol("");
                         setCurrentPage(1);
-                        fetchPagedStocks({
+                        fetchPagedStocksSafe({
                           category: item.key,
                           page: 1,
                           rank: rankType,
@@ -707,7 +860,7 @@ export default function Home() {
                     onClick={() => {
                       setRankType(r);
                       setCurrentPage(1);
-                      fetchPagedStocks({
+                      fetchPagedStocksSafe({
                         category: selectedCategory,
                         page: 1,
                         rank: r,
