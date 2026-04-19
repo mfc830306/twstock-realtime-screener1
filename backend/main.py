@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 app = FastAPI(title="TW Stock Realtime Screener")
 
@@ -1003,6 +1004,8 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         close_now = closes[-1]
         prev_close = closes[-2]
         vol_now = volumes[-1]
+        snapshot_price = safe_float(base_stock.get("price"))
+        snapshot_volume = safe_int(base_stock.get("volume"))
 
         ma5 = avg(closes[-5:])
         ma10 = avg(closes[-10:])
@@ -1088,7 +1091,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
 
         merged = dict(base_stock)
         merged.update({
-            "price": round(close_now, 2),
             "signal": pattern_info["signal"],
             "trend_type": pattern_info["trend_type"],
             "reason": reason,
@@ -1106,6 +1108,12 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "score": recommendation_score,
             "analysis_source": "historical_k",
         })
+        if snapshot_price <= 0:
+            merged["price"] = round(close_now, 2)
+        if snapshot_volume <= 0:
+            merged["volume"] = vol_now
+        if safe_float(merged.get("prev_close")) <= 0 and prev_close > 0:
+            merged["prev_close"] = round(prev_close, 2)
         return merged
 
     except Exception:
@@ -1657,12 +1665,15 @@ def get_stocks(
             "stocks": [clean_stock_output(x) for x in paged],
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "trace": traceback.format_exc(),
-            "stocks": [],
-            "recommendations": [],
-            "categories": [],
-            "focused_stock": None,
-        }
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "stocks": [],
+                "recommendations": [],
+                "categories": [],
+                "focused_stock": None,
+            },
+        )
