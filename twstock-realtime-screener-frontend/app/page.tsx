@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -1129,21 +1129,30 @@ export default function Home() {
     let summary = "";
     if (strategyValidation && historicalValidationTone) {
       if (structureGood && historyGood) {
-        summary = "今天名單有照規則選，歷史驗證也偏正向，這套邏輯目前可以繼續追蹤。";
+        summary = "今天結構與歷史驗證都站得住，這套邏輯目前可以繼續追蹤。";
       } else if (structureGood && !historyGood) {
-        summary = "今天名單很乾淨，但歷史驗證偏弱，代表今天選得像樣，不等於方法本身已被證明有效。";
+        summary = "目前歷史覆蓋不足，且已驗證樣本績效偏弱，因此暫不建議直接依賴。";
       } else if (!structureGood && historyGood) {
-        summary = "這套邏輯歷史上不差，但今天這批名單沒有完全照規則長出來，今天不能直接照單全收。";
+        summary = "歷史表現不差，但今天這批名單沒有完全照規則長出來，因此今天不能直接照單全收。";
       } else {
-        summary = "今天結構與歷史驗證都不夠強，這套邏輯目前不適合提高信任度。";
+        summary = "目前歷史覆蓋不足，且今日結構也不夠整齊，因此暫時只能觀察。";
       }
     } else {
-      summary = `今天結構分數 ${validationHealth.score}/100，但目前沒有足夠歷史資料可交叉驗證。`;
+      summary = `今天結構分數 ${validationHealth.score}/100，但歷史覆蓋仍不足，今天資訊還不完整。`;
     }
+
+    const directRiskMessage =
+      strategyValidation &&
+      ((strategyValidation.coverage_rate ?? 0) < 0.7 ||
+        (strategyValidation.summary.avg_return_5d ?? 0) <= 0 ||
+        (strategyValidation.summary.win_rate_5d ?? 0) < 0.5)
+        ? "目前歷史覆蓋不足，且已驗證樣本績效偏弱，因此暫不建議直接依賴。"
+        : null;
 
     return {
       summary,
       risk:
+        directRiskMessage ||
         strategyValidation?.risk_flags?.[0] ||
         validationHighlights[0] ||
         "目前沒有額外風險提醒。",
@@ -2748,3 +2757,4 @@ const tradePlanValueStyle: React.CSSProperties = {
   fontWeight: 900,
   lineHeight: 1.6,
 };
+
