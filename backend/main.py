@@ -3,6 +3,7 @@ import math
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
+from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Query
@@ -39,12 +40,21 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "last_update": "",
     "top_n": 0,
 }
+_VALIDATION_CACHE: Dict[str, Any] = {
+    "payload": None,
+    "data_date": "",
+    "last_update": "",
+    "signature": "",
+}
 CACHE_SECONDS = 60
 
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 HISTORY_CACHE_HOURS = 6
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
+VALIDATION_FORWARD_DAYS = [1, 2, 3, 5]
+VALIDATION_ALLOWED_SIGNALS = {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
+VALIDATION_ALLOWED_RATINGS = {"A", "B+"}
 
 
 # =========================
@@ -214,6 +224,25 @@ def parse_range_mid(text: str, fallback: float = 0.0) -> float:
     return sum(nums) / len(nums)
 
 
+def parse_range_bounds(text: str, fallback: float = 0.0) -> Tuple[float, float]:
+    txt = safe_str(text)
+    if not txt:
+        return fallback, fallback
+    txt = txt.replace("突破", "").replace("後再評估", "").strip()
+    parts = [p.strip() for p in txt.split("~")]
+    nums: List[float] = []
+    for p in parts:
+        try:
+            nums.append(float(p))
+        except Exception:
+            pass
+    if not nums:
+        return fallback, fallback
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return min(nums), max(nums)
+
+
 def avg(values: List[float]) -> float:
     if not values:
         return 0.0
@@ -233,6 +262,40 @@ def format_number(num: float) -> str:
 
 def clamp(v: float, low: float, high: float) -> float:
     return max(low, min(v, high))
+
+
+def calc_return_pct(entry_price: float, exit_price: float) -> float:
+    if entry_price <= 0 or exit_price <= 0:
+        return 0.0
+    return ((exit_price - entry_price) / entry_price) * 100
+
+
+def calc_win_rate(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(1 for v in values if v > 0) / len(values)
+
+
+def median_value(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return float(median(values))
+
+
+def calc_payoff_ratio(values: List[float]) -> float:
+    positive_values = [v for v in values if v > 0]
+    negative_values = [abs(v) for v in values if v < 0]
+
+    if not positive_values:
+        return 0.0
+    if not negative_values:
+        return avg(positive_values)
+
+    avg_positive = avg(positive_values)
+    avg_negative = avg(negative_values)
+    if avg_negative <= 0:
+        return 0.0
+    return avg_positive / avg_negative
 
 
 def score_band(value: float, low: float, high: float, peak: float, full_score: float) -> float:
@@ -1126,6 +1189,472 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         return base_stock
 
 
+def summarize_validation_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    returns_map: Dict[int, List[float]] = {day: [] for day in VALIDATION_FORWARD_DAYS}
+    mfe_5d_values: List[float] = []
+    mae_5d_values: List[float] = []
+    target_hits = 0
+    stop_hits = 0
+
+    for sample in samples:
+        forward_returns = sample.get("forward_returns", {})
+        for day in VALIDATION_FORWARD_DAYS:
+            value = forward_returns.get(day)
+            if value is not None:
+                returns_map[day].append(float(value))
+        max_favorable_return_5d = sample.get("max_favorable_return_5d")
+        if max_favorable_return_5d is not None:
+            mfe_5d_values.append(float(max_favorable_return_5d))
+        max_adverse_return_5d = sample.get("max_adverse_return_5d")
+        if max_adverse_return_5d is not None:
+            mae_5d_values.append(float(max_adverse_return_5d))
+        if sample.get("target_hit_5d"):
+            target_hits += 1
+        if sample.get("stop_hit_5d"):
+            stop_hits += 1
+
+    returns_5d = returns_map[5]
+    sample_count = len(samples)
+    avg_return_3d = round(avg(returns_map[3]), 2)
+    avg_return_5d = round(avg(returns_5d), 2)
+    win_rate_5d = round(calc_win_rate(returns_5d), 4)
+    target_hit_rate_5d = round((target_hits / sample_count) if sample_count else 0.0, 4)
+    stop_hit_rate_5d = round((stop_hits / sample_count) if sample_count else 0.0, 4)
+
+    positive_edge = (
+        sample_count >= 8
+        and avg_return_3d > 0
+        and avg_return_5d > 0
+        and win_rate_5d >= 0.55
+    )
+
+    if sample_count >= 30:
+        confidence = "高"
+    elif sample_count >= 15:
+        confidence = "中"
+    else:
+        confidence = "低"
+
+    return {
+        "sample_count": sample_count,
+        "avg_return_1d": round(avg(returns_map[1]), 2),
+        "avg_return_2d": round(avg(returns_map[2]), 2),
+        "avg_return_3d": avg_return_3d,
+        "avg_return_5d": avg_return_5d,
+        "median_return_5d": round(median_value(returns_5d), 2),
+        "best_return_5d": round(max(returns_5d), 2) if returns_5d else 0.0,
+        "worst_return_5d": round(min(returns_5d), 2) if returns_5d else 0.0,
+        "win_rate_1d": round(calc_win_rate(returns_map[1]), 4),
+        "win_rate_2d": round(calc_win_rate(returns_map[2]), 4),
+        "win_rate_3d": round(calc_win_rate(returns_map[3]), 4),
+        "win_rate_5d": win_rate_5d,
+        "target_hit_rate_5d": target_hit_rate_5d,
+        "stop_hit_rate_5d": stop_hit_rate_5d,
+        "avg_mfe_5d": round(avg(mfe_5d_values), 2),
+        "avg_mae_5d": round(avg(mae_5d_values), 2),
+        "payoff_ratio_5d": round(calc_payoff_ratio(returns_5d), 2),
+        "positive_edge": positive_edge,
+        "confidence": confidence,
+    }
+
+
+def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
+    symbol = safe_str(base_stock.get("symbol"))
+    name = safe_str(base_stock.get("name"))
+    current_signal = safe_str(base_stock.get("signal"))
+    current_rating = safe_str(base_stock.get("operation_rating"))
+    current_score = safe_float(base_stock.get("recommendation_score") or base_stock.get("score"))
+
+    stock_item = {
+        "symbol": symbol,
+        "name": name,
+        "current_signal": current_signal,
+        "current_rating": current_rating,
+        "current_score": round(current_score, 2),
+        "sample_count": 0,
+        "avg_return_5d": 0.0,
+        "win_rate_5d": 0.0,
+        "target_hit_rate_5d": 0.0,
+        "stop_hit_rate_5d": 0.0,
+        "last_signal_date": "",
+        "confidence": "低",
+    }
+
+    if (
+        current_signal not in VALIDATION_ALLOWED_SIGNALS
+        or current_rating not in VALIDATION_ALLOWED_RATINGS
+        or not symbol
+    ):
+        return {"stock_item": stock_item, "samples": []}
+
+    data = fetch_symbol_daily_candles(symbol)
+    candles = data.get("candles", [])
+    max_forward = max(VALIDATION_FORWARD_DAYS)
+    if len(candles) < 35 + max_forward:
+        return {"stock_item": stock_item, "samples": []}
+
+    closes = [safe_float(x.get("close")) for x in candles]
+    volumes = [safe_int(x.get("volume")) for x in candles]
+    samples: List[Dict[str, Any]] = []
+    last_signal_date = ""
+
+    for idx in range(34, len(candles) - max_forward):
+        close_now = closes[idx]
+        prev_close = closes[idx - 1]
+        vol_now = volumes[idx]
+        history_closes = closes[: idx + 1]
+        history_volumes = volumes[: idx + 1]
+        history_candles = candles[: idx + 1]
+
+        ma5 = avg(history_closes[-5:])
+        ma10 = avg(history_closes[-10:])
+        ma20 = avg(history_closes[-20:])
+        avg_vol5 = avg(history_volumes[-5:])
+        high20 = max(safe_float(x.get("high")) for x in history_candles[-20:])
+        low20 = min(safe_float(x.get("low")) for x in history_candles[-20:])
+        rsi14 = calc_rsi(history_closes, 14)
+        macd_line, signal_line, macd_hist = calc_macd(history_closes)
+        atr14 = calc_atr(history_candles, 14)
+        vol_ratio5 = (vol_now / avg_vol5) if avg_vol5 > 0 else 1.0
+
+        pattern_info = classify_daily_pattern(
+            close_now=close_now,
+            prev_close=prev_close,
+            ma5=ma5,
+            ma10=ma10,
+            ma20=ma20,
+            high20=high20,
+            low20=low20,
+            vol_ratio5=vol_ratio5,
+            rsi14=rsi14,
+            macd_hist=macd_hist,
+        )
+        if pattern_info["signal"] != current_signal:
+            continue
+
+        strategy = build_historical_strategy(pattern_info["signal"])
+        if strategy["operation_rating"] != current_rating:
+            continue
+
+        recommendation_score = calc_potential_recommendation_score(
+            close_now=close_now,
+            prev_close=prev_close,
+            ma5=ma5,
+            ma10=ma10,
+            ma20=ma20,
+            high20=high20,
+            low20=low20,
+            vol_now=vol_now,
+            avg_vol5=avg_vol5,
+            rsi14=rsi14,
+            macd_hist=macd_hist,
+        )
+        if recommendation_score < 35:
+            continue
+
+        plan = build_historical_trade_plan(
+            price=close_now,
+            ma5=ma5,
+            ma20=ma20,
+            high20=high20,
+            low20=low20,
+            atr14=atr14,
+            signal=pattern_info["signal"],
+        )
+
+        future_candles = candles[idx + 1: idx + 1 + max_forward]
+        if len(future_candles) < max_forward:
+            continue
+
+        forward_returns: Dict[int, float] = {}
+        for day in VALIDATION_FORWARD_DAYS:
+            future_close = safe_float(candles[idx + day].get("close"))
+            forward_returns[day] = round(calc_return_pct(close_now, future_close), 2)
+
+        target_low, _ = parse_range_bounds(plan["target_price"], 0.0)
+        stop_price = safe_float(plan["stop_loss"])
+        future_high_5d = max(safe_float(c.get("high")) for c in future_candles)
+        future_low_5d = min(safe_float(c.get("low")) for c in future_candles)
+
+        samples.append({
+            "symbol": symbol,
+            "signal": current_signal,
+            "date": safe_str(candles[idx].get("date")),
+            "forward_returns": forward_returns,
+            "max_favorable_return_5d": round(calc_return_pct(close_now, future_high_5d), 2),
+            "max_adverse_return_5d": round(calc_return_pct(close_now, future_low_5d), 2),
+            "target_hit_5d": target_low > 0 and future_high_5d >= target_low,
+            "stop_hit_5d": stop_price > 0 and future_low_5d <= stop_price,
+        })
+        last_signal_date = safe_str(candles[idx].get("date"))
+
+    summary = summarize_validation_samples(samples)
+    stock_item.update({
+        "sample_count": summary["sample_count"],
+        "avg_return_5d": summary["avg_return_5d"],
+        "win_rate_5d": summary["win_rate_5d"],
+        "target_hit_rate_5d": summary["target_hit_rate_5d"],
+        "stop_hit_rate_5d": summary["stop_hit_rate_5d"],
+        "last_signal_date": last_signal_date,
+        "confidence": summary["confidence"],
+    })
+    return {"stock_item": stock_item, "samples": samples}
+
+
+def build_validation_notes(
+    summary: Dict[str, Any],
+    signal_breakdown: List[Dict[str, Any]],
+    stock_breakdown: List[Dict[str, Any]],
+) -> List[str]:
+    notes: List[str] = []
+    sample_count = safe_int(summary.get("sample_count"))
+    avg_return_5d = safe_float(summary.get("avg_return_5d"))
+    win_rate_5d = safe_float(summary.get("win_rate_5d"))
+    target_hit_rate_5d = safe_float(summary.get("target_hit_rate_5d"))
+    stop_hit_rate_5d = safe_float(summary.get("stop_hit_rate_5d"))
+
+    if sample_count < 10:
+        notes.append("歷史樣本偏少，這份驗證可以參考方向，但還不適合當成高信心定論。")
+    elif avg_return_5d > 0 and win_rate_5d >= 0.55:
+        notes.append("整體 5 日平均報酬與勝率都偏正向，代表這套邏輯在歷史上有一定延續性。")
+    else:
+        notes.append("整體 5 日平均報酬或勝率沒有拉開，代表這套邏輯目前優勢不夠明顯。")
+
+    if target_hit_rate_5d > stop_hit_rate_5d:
+        notes.append("5 日內目標命中率高於停損命中率，代表順勢延續性比失敗回檔更常出現。")
+    else:
+        notes.append("5 日內停損命中率不低，代表即使訊號成立，也要嚴格控制部位與停損。")
+
+    if signal_breakdown:
+        best_signal = sorted(
+            signal_breakdown,
+            key=lambda x: (safe_float(x.get("avg_return_5d")), safe_float(x.get("win_rate_5d"))),
+            reverse=True,
+        )[0]
+        notes.append(
+            f"目前表現較好的訊號是 {best_signal.get('signal', '-')}"
+            f"，5 日平均報酬 {safe_float(best_signal.get('avg_return_5d')):.2f}% 。"
+        )
+
+    if stock_breakdown:
+        strongest_stock = sorted(
+            [x for x in stock_breakdown if safe_int(x.get("sample_count")) > 0],
+            key=lambda x: (safe_float(x.get("avg_return_5d")), safe_float(x.get("win_rate_5d"))),
+            reverse=True,
+        )
+        if strongest_stock:
+            top = strongest_stock[0]
+            notes.append(
+                f"{top.get('symbol', '')} {top.get('name', '')} 的同訊號歷史表現相對較穩，"
+                f"可優先列入觀察核心。"
+            )
+
+    return notes[:4]
+
+
+def build_validation_score(
+    summary: Dict[str, Any],
+    coverage_rate: float,
+    average_samples_per_stock: float,
+) -> int:
+    sample_count = safe_int(summary.get("sample_count"))
+    avg_return_5d = safe_float(summary.get("avg_return_5d"))
+    win_rate_5d = safe_float(summary.get("win_rate_5d"))
+    target_hit_rate_5d = safe_float(summary.get("target_hit_rate_5d"))
+    stop_hit_rate_5d = safe_float(summary.get("stop_hit_rate_5d"))
+    payoff_ratio_5d = safe_float(summary.get("payoff_ratio_5d"))
+
+    score = (
+        clamp(sample_count / 60, 0.0, 1.0) * 20
+        + clamp(coverage_rate / 0.8, 0.0, 1.0) * 20
+        + clamp(average_samples_per_stock / 15, 0.0, 1.0) * 10
+        + clamp((avg_return_5d + 1.5) / 4.5, 0.0, 1.0) * 20
+        + clamp((win_rate_5d - 0.45) / 0.2, 0.0, 1.0) * 15
+        + clamp((target_hit_rate_5d - stop_hit_rate_5d + 0.15) / 0.3, 0.0, 1.0) * 10
+        + clamp(payoff_ratio_5d / 2.0, 0.0, 1.0) * 5
+    )
+    return int(round(score))
+
+
+def build_validation_verdict(
+    validation_score: int,
+    summary: Dict[str, Any],
+    coverage_rate: float,
+) -> str:
+    if validation_score >= 80 and summary.get("positive_edge") and coverage_rate >= 0.7:
+        return "可採信"
+    if validation_score >= 65:
+        return "可用但保守"
+    if validation_score >= 50:
+        return "觀察中"
+    return "不建議依賴"
+
+
+def build_validation_risk_flags(
+    summary: Dict[str, Any],
+    coverage_rate: float,
+    average_samples_per_stock: float,
+    stocks_without_history: List[str],
+) -> List[str]:
+    sample_count = safe_int(summary.get("sample_count"))
+    avg_return_5d = safe_float(summary.get("avg_return_5d"))
+    win_rate_5d = safe_float(summary.get("win_rate_5d"))
+    target_hit_rate_5d = safe_float(summary.get("target_hit_rate_5d"))
+    stop_hit_rate_5d = safe_float(summary.get("stop_hit_rate_5d"))
+    payoff_ratio_5d = safe_float(summary.get("payoff_ratio_5d"))
+
+    flags: List[str] = []
+    if coverage_rate < 0.6:
+        flags.append("今日推薦中可對照的歷史樣本覆蓋率偏低。")
+    if sample_count < 20:
+        flags.append("整體歷史樣本偏少，驗證結論容易受個別案例影響。")
+    if average_samples_per_stock < 8:
+        flags.append("每檔可參考的歷史案例不多，訊號穩定度還要保留。")
+    if avg_return_5d <= 0:
+        flags.append("5 日平均報酬沒有轉正，代表延續性尚未確認。")
+    if win_rate_5d < 0.55:
+        flags.append("5 日勝率沒有明顯高於五五波，優勢不足。")
+    if stop_hit_rate_5d >= target_hit_rate_5d:
+        flags.append("停損命中率不低於目標命中率，代表失敗情境不少。")
+    if sample_count >= 10 and payoff_ratio_5d < 1.1:
+        flags.append("賺賠比沒有明顯拉開，報酬品質還不夠漂亮。")
+    if stocks_without_history:
+        flags.append("部分今日推薦股票找不到足夠歷史對照。")
+    return flags[:5]
+
+
+def build_strategy_validation(recommendations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not recommendations:
+        return {}
+
+    all_samples: List[Dict[str, Any]] = []
+    signal_samples: Dict[str, List[Dict[str, Any]]] = {}
+    stock_breakdown: List[Dict[str, Any]] = []
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_map = {
+            executor.submit(build_stock_signal_validation, stock): safe_str(stock.get("symbol"))
+            for stock in recommendations
+        }
+        for future in as_completed(future_map):
+            try:
+                result = future.result()
+            except Exception:
+                continue
+            stock_item = result.get("stock_item", {})
+            samples = result.get("samples", [])
+            stock_breakdown.append(stock_item)
+            all_samples.extend(samples)
+            for sample in samples:
+                signal = safe_str(sample.get("signal"))
+                signal_samples.setdefault(signal, []).append(sample)
+
+    summary = summarize_validation_samples(all_samples)
+
+    signal_breakdown: List[Dict[str, Any]] = []
+    for signal, samples in signal_samples.items():
+        signal_summary = summarize_validation_samples(samples)
+        signal_breakdown.append({
+            "signal": signal,
+            "sample_count": signal_summary["sample_count"],
+            "avg_return_3d": signal_summary["avg_return_3d"],
+            "avg_return_5d": signal_summary["avg_return_5d"],
+            "win_rate_5d": signal_summary["win_rate_5d"],
+            "target_hit_rate_5d": signal_summary["target_hit_rate_5d"],
+            "stop_hit_rate_5d": signal_summary["stop_hit_rate_5d"],
+            "confidence": signal_summary["confidence"],
+        })
+
+    signal_breakdown.sort(
+        key=lambda x: (
+            safe_int(x.get("sample_count")),
+            safe_float(x.get("avg_return_5d")),
+            safe_float(x.get("win_rate_5d")),
+        ),
+        reverse=True,
+    )
+
+    stock_breakdown.sort(
+        key=lambda x: (
+            safe_int(x.get("sample_count")),
+            safe_float(x.get("avg_return_5d")),
+            safe_float(x.get("win_rate_5d")),
+            safe_float(x.get("current_score")),
+        ),
+        reverse=True,
+    )
+
+    validated_stock_count = len([x for x in stock_breakdown if safe_int(x.get("sample_count")) > 0])
+    coverage_rate = round((validated_stock_count / len(recommendations)) if recommendations else 0.0, 4)
+    average_samples_per_stock = round(
+        (summary["sample_count"] / validated_stock_count) if validated_stock_count else 0.0,
+        2,
+    )
+    stocks_without_history = [
+        f"{x.get('symbol', '')} {x.get('name', '')}".strip()
+        for x in stock_breakdown
+        if safe_int(x.get("sample_count")) <= 0
+    ]
+    validation_score = build_validation_score(summary, coverage_rate, average_samples_per_stock)
+    verdict = build_validation_verdict(validation_score, summary, coverage_rate)
+    risk_flags = build_validation_risk_flags(
+        summary,
+        coverage_rate,
+        average_samples_per_stock,
+        stocks_without_history,
+    )
+    notes = build_validation_notes(summary, signal_breakdown, stock_breakdown)
+    strongest_signal = signal_breakdown[0]["signal"] if signal_breakdown else ""
+    weakest_signal = signal_breakdown[-1]["signal"] if signal_breakdown else ""
+
+    return {
+        "lookback_candles": 120,
+        "holding_days": VALIDATION_FORWARD_DAYS,
+        "recommendation_count": len(recommendations),
+        "validated_stock_count": validated_stock_count,
+        "coverage_rate": coverage_rate,
+        "average_samples_per_stock": average_samples_per_stock,
+        "validation_score": validation_score,
+        "verdict": verdict,
+        "sample_count": summary["sample_count"],
+        "summary": summary,
+        "signal_breakdown": signal_breakdown,
+        "stock_breakdown": stock_breakdown,
+        "notes": notes,
+        "risk_flags": risk_flags,
+        "stocks_without_history": stocks_without_history,
+        "strongest_signal": strongest_signal,
+        "weakest_signal": weakest_signal,
+    }
+
+
+def get_cached_validation(
+    recommendations: List[Dict[str, Any]],
+    data_date: str,
+    last_update: str,
+) -> Dict[str, Any]:
+    signature = "|".join(
+        f"{safe_str(x.get('symbol'))}:{safe_str(x.get('signal'))}:{safe_str(x.get('operation_rating'))}:{safe_float(x.get('recommendation_score')):.2f}"
+        for x in recommendations
+    )
+
+    cached_payload = _VALIDATION_CACHE.get("payload")
+    if (
+        isinstance(cached_payload, dict)
+        and _VALIDATION_CACHE.get("data_date") == data_date
+        and _VALIDATION_CACHE.get("last_update") == last_update
+        and _VALIDATION_CACHE.get("signature") == signature
+    ):
+        return cached_payload
+
+    payload = build_strategy_validation(recommendations)
+    _VALIDATION_CACHE["payload"] = payload
+    _VALIDATION_CACHE["data_date"] = data_date
+    _VALIDATION_CACHE["last_update"] = last_update
+    _VALIDATION_CACHE["signature"] = signature
+    return payload
+
+
 def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[Dict[str, Any]]:
     if not isinstance(row, dict):
         return None
@@ -1662,6 +2191,7 @@ def get_stocks(
         paged = filtered[offset: offset + limit]
 
         recs = []
+        validation = None
         if (
             offset == 0
             and safe_str(market).lower() == "all"
@@ -1676,6 +2206,12 @@ def get_stocks(
                 last_update=result["last_update"],
                 top_n=10,
             )
+            if recs:
+                validation = get_cached_validation(
+                    recs,
+                    data_date=result["data_date"],
+                    last_update=result["last_update"],
+                )
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
@@ -1702,6 +2238,7 @@ def get_stocks(
             "all_total": twse_total + otc_total,
             "categories": cats,
             "recommendations": [clean_stock_output(x) for x in recs],
+            "validation": validation,
             "focused_stock": build_focused_analysis(focused) if focused else None,
             "stocks": [clean_stock_output(x) for x in paged],
         }
@@ -1714,6 +2251,7 @@ def get_stocks(
                 "trace": traceback.format_exc(),
                 "stocks": [],
                 "recommendations": [],
+                "validation": None,
                 "categories": [],
                 "focused_stock": None,
             },
