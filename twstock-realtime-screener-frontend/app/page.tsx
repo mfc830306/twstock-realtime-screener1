@@ -70,6 +70,7 @@ type ApiResponse = {
   otc_total?: number;
   stocks: Stock[];
   recommendations?: Stock[];
+  validation?: StrategyValidation | null;
   categories?: BackendCategory[];
   focused_stock?: FocusedStock | null;
   message?: string;
@@ -107,6 +108,95 @@ type ValidationRecord = {
   signalSummary: string[];
 };
 
+type ValidationHealth = {
+  score: number;
+  label: string;
+  summary: string;
+  accent: string;
+  surface: string;
+};
+
+type ValidationHistoryStats = {
+  totalRecords: number;
+  passCount: number;
+  averageRecommendationCount: number;
+  averageHistoricalRate: number;
+  averageStrongRate: number;
+  averageValidRate: number;
+  averageExcludedRate: number;
+  averageScore: number;
+  averageRiskReward: number;
+  topSignals: string[];
+};
+
+type StrategyValidationSummary = {
+  sample_count: number;
+  avg_return_1d: number;
+  avg_return_2d: number;
+  avg_return_3d: number;
+  avg_return_5d: number;
+  median_return_5d: number;
+  best_return_5d: number;
+  worst_return_5d: number;
+  win_rate_1d: number;
+  win_rate_2d: number;
+  win_rate_3d: number;
+  win_rate_5d: number;
+  target_hit_rate_5d: number;
+  stop_hit_rate_5d: number;
+  avg_mfe_5d: number;
+  avg_mae_5d: number;
+  payoff_ratio_5d: number;
+  positive_edge: boolean;
+  confidence: string;
+};
+
+type StrategyValidationSignal = {
+  signal: string;
+  sample_count: number;
+  avg_return_3d: number;
+  avg_return_5d: number;
+  win_rate_5d: number;
+  target_hit_rate_5d: number;
+  stop_hit_rate_5d: number;
+  confidence: string;
+};
+
+type StrategyValidationStock = {
+  symbol: string;
+  name: string;
+  current_signal: string;
+  current_rating: string;
+  current_score: number;
+  sample_count: number;
+  avg_return_5d: number;
+  win_rate_5d: number;
+  target_hit_rate_5d: number;
+  stop_hit_rate_5d: number;
+  last_signal_date: string;
+  confidence: string;
+};
+
+type StrategyValidation = {
+  lookback_candles: number;
+  holding_days: number[];
+  recommendation_count: number;
+  validated_stock_count: number;
+  coverage_rate: number;
+  average_samples_per_stock: number;
+  validation_score: number;
+  verdict: string;
+  sample_count: number;
+  summary: StrategyValidationSummary;
+  signal_breakdown: StrategyValidationSignal[];
+  stock_breakdown: StrategyValidationStock[];
+  notes: string[];
+  risk_flags: string[];
+  stocks_without_history: string[];
+  strongest_signal?: string;
+  weakest_signal?: string;
+};
+
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 const VALIDATION_STORAGE_KEY = "twstock-validation-history-v1";
 const VALIDATION_SIGNALS = ["突破前夕", "量增轉強", "整理待發", "溫和轉強"];
@@ -139,6 +229,11 @@ function formatPrice(num?: number) {
 function formatSigned(num?: number, digits = 2) {
   if (num === undefined || num === null || Number.isNaN(num)) return "-";
   return `${num > 0 ? "+" : num < 0 ? "" : ""}${num.toFixed(digits)}`;
+}
+
+function formatRatioPercent(value?: number, digits = 1) {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
+  return `${(value * 100).toFixed(digits)}%`;
 }
 
 function formatDateString(dateText?: string) {
@@ -219,6 +314,37 @@ function getRatingColor(rating?: string) {
   return "#dbe8ff";
 }
 
+function getConfidenceColor(confidence?: string) {
+  if (confidence === "高") return "#7ee787";
+  if (confidence === "中") return "#ffd95f";
+  return "#ffb4b4";
+}
+
+function getValidationVerdictStyle(verdict?: string) {
+  if (verdict === "可採信") {
+    return {
+      accent: "#7ee787",
+      surface: "rgba(58, 168, 89, 0.18)",
+    };
+  }
+  if (verdict === "可用但保守") {
+    return {
+      accent: "#ffd95f",
+      surface: "rgba(255, 217, 95, 0.16)",
+    };
+  }
+  if (verdict === "觀察中") {
+    return {
+      accent: "#7fb6ff",
+      surface: "rgba(96, 165, 250, 0.16)",
+    };
+  }
+  return {
+    accent: "#ff9c9c",
+    surface: "rgba(255, 130, 130, 0.16)",
+  };
+}
+
 function getCategoryQuery(category: CategoryKey): {
   market?: string;
   price_min?: number;
@@ -278,6 +404,128 @@ function roundTo(num: number, digits = 2) {
 function parseRiskRewardValue(text?: string) {
   const match = String(text || "").match(/1\s*:\s*([0-9.]+)/);
   return match ? Number(match[1]) : 0;
+}
+
+function safeDivide(numerator: number, denominator: number) {
+  if (!denominator) return 0;
+  return numerator / denominator;
+}
+
+function clampValue(value: number, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatPercent(value: number, digits = 0) {
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function isValidationPass(record: ValidationRecord) {
+  const base = Math.max(record.recommendationCount, 1);
+  const validRate = safeDivide(record.validSignalCount, base);
+  const strongRate = safeDivide(record.strongRatingCount, base);
+  const excludedRate = safeDivide(record.excludedSignalCount, base);
+  const historicalRate = safeDivide(record.historicalKCount, base);
+
+  return validRate >= 0.8 && strongRate >= 0.7 && excludedRate === 0 && historicalRate >= 0.8;
+}
+
+function buildValidationHealth(record: ValidationRecord): ValidationHealth {
+  const base = Math.max(record.recommendationCount, 1);
+  const validRate = safeDivide(record.validSignalCount, base);
+  const strongRate = safeDivide(record.strongRatingCount, base);
+  const excludedRate = safeDivide(record.excludedSignalCount, base);
+  const historicalRate = safeDivide(record.historicalKCount, base);
+  const scoreRatio = clampValue(record.averageScore / 100);
+  const riskRewardRatio = clampValue(record.averageRiskReward / 2.5);
+
+  const score = Math.round(
+    historicalRate * 30 +
+      validRate * 25 +
+      strongRate * 20 +
+      (1 - excludedRate) * 15 +
+      scoreRatio * 5 +
+      riskRewardRatio * 5
+  );
+
+  if (score >= 85) {
+    return {
+      score,
+      label: "邏輯通過",
+      summary: "有效訊號、強勢評級與日 K 覆蓋率都維持高檔，這批輸出有符合原本的偏多選股邏輯。",
+      accent: "#7ee787",
+      surface: "rgba(58, 168, 89, 0.18)",
+    };
+  }
+
+  if (score >= 70) {
+    return {
+      score,
+      label: "大致可用",
+      summary: "整體結構仍在可接受範圍，但有部分訊號或評級比例需要再觀察，信任度不宜拉滿。",
+      accent: "#ffd95f",
+      surface: "rgba(255, 217, 95, 0.16)",
+    };
+  }
+
+  return {
+    score,
+    label: "需要留意",
+    summary: "今天的輸出結構偏鬆，代表選股邏輯沒有完整落實在名單上，建議降低主觀信任度。",
+    accent: "#ff9c9c",
+    surface: "rgba(255, 130, 130, 0.16)",
+  };
+}
+
+function buildValidationHistoryStats(records: ValidationRecord[]): ValidationHistoryStats | null {
+  if (!records.length) return null;
+
+  const signalCount = new Map<string, number>();
+  let passCount = 0;
+  let recommendationCountSum = 0;
+  let historicalRateSum = 0;
+  let strongRateSum = 0;
+  let validRateSum = 0;
+  let excludedRateSum = 0;
+  let scoreSum = 0;
+  let riskRewardSum = 0;
+
+  for (const record of records) {
+    const base = Math.max(record.recommendationCount, 1);
+    recommendationCountSum += record.recommendationCount;
+    historicalRateSum += safeDivide(record.historicalKCount, base);
+    strongRateSum += safeDivide(record.strongRatingCount, base);
+    validRateSum += safeDivide(record.validSignalCount, base);
+    excludedRateSum += safeDivide(record.excludedSignalCount, base);
+    scoreSum += record.averageScore;
+    riskRewardSum += record.averageRiskReward;
+
+    if (isValidationPass(record)) {
+      passCount += 1;
+    }
+
+    for (const stock of record.stocks || []) {
+      const signal = stock.signal || "未分類";
+      signalCount.set(signal, (signalCount.get(signal) || 0) + 1);
+    }
+  }
+
+  const totalRecords = records.length;
+
+  return {
+    totalRecords,
+    passCount,
+    averageRecommendationCount: roundTo(recommendationCountSum / totalRecords, 1),
+    averageHistoricalRate: roundTo(historicalRateSum / totalRecords, 4),
+    averageStrongRate: roundTo(strongRateSum / totalRecords, 4),
+    averageValidRate: roundTo(validRateSum / totalRecords, 4),
+    averageExcludedRate: roundTo(excludedRateSum / totalRecords, 4),
+    averageScore: roundTo(scoreSum / totalRecords),
+    averageRiskReward: roundTo(riskRewardSum / totalRecords),
+    topSignals: Array.from(signalCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([signal, count]) => `${signal} ${count}次`),
+  };
 }
 
 function buildValidationRecord(
@@ -361,6 +609,8 @@ export default function Home() {
   const [allTotal, setAllTotal] = useState(0);
   const [showValidationPanel, setShowValidationPanel] = useState(false);
   const [showRecommendationsPanel, setShowRecommendationsPanel] = useState(true);
+  const [showValidationDetails, setShowValidationDetails] = useState(false);
+  const [strategyValidation, setStrategyValidation] = useState<StrategyValidation | null>(null);
   const [validationHistory, setValidationHistory] = useState<ValidationRecord[]>([]);
 
   const initialLoadedRef = useRef(false);
@@ -406,6 +656,7 @@ export default function Home() {
       .slice(0, 10);
     if (requestId !== recommendationsRequestIdRef.current) return;
     setRecommendations(safeRecommendations);
+    setStrategyValidation(data.validation || null);
   }
 
   async function fetchPagedStocks(
@@ -465,6 +716,10 @@ export default function Home() {
 
       if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
       if (data.categories) setBackendCategories(data.categories);
+      if (data.recommendations?.length) {
+        setRecommendations((data.recommendations || []).map(normalizeStock).slice(0, 10));
+        setStrategyValidation(data.validation || null);
+      }
 
       setMarketStatus(data.market_status || "-");
       setDataDate(
@@ -546,6 +801,7 @@ export default function Home() {
 
       if (requestId !== recommendationsRequestIdRef.current) return null;
       setRecommendations(safeRecommendations);
+      setStrategyValidation(data.validation || null);
       return data;
     } catch (err) {
       if (requestId !== recommendationsRequestIdRef.current) return null;
@@ -614,6 +870,7 @@ export default function Home() {
       if (data.recommendations?.length) {
         recommendationsRequestIdRef.current += 1;
         setRecommendations((data.recommendations || []).map(normalizeStock).slice(0, 10));
+        setStrategyValidation(data.validation || null);
       }
 
       setMarketStatus(data.market_status || "-");
@@ -772,10 +1029,103 @@ export default function Home() {
     return validationRecord.symbols.filter((symbol) => previousSymbols.has(symbol)).length;
   }, [previousValidationRecord, validationRecord]);
 
+  const validationHealth = useMemo(() => {
+    if (!validationRecord) return null;
+    return buildValidationHealth(validationRecord);
+  }, [validationRecord]);
+
+  const validationHistoryStats = useMemo(() => {
+    const records =
+      validationHistory.length > 0
+        ? validationHistory
+        : validationRecord
+          ? [validationRecord]
+          : [];
+
+    return buildValidationHistoryStats(records);
+  }, [validationHistory, validationRecord]);
+
+  const validationHighlights = useMemo(() => {
+    if (!validationRecord) return [];
+
+    const base = Math.max(validationRecord.recommendationCount, 1);
+    const validRate = safeDivide(validationRecord.validSignalCount, base);
+    const strongRate = safeDivide(validationRecord.strongRatingCount, base);
+    const excludedRate = safeDivide(validationRecord.excludedSignalCount, base);
+    const historicalRate = safeDivide(validationRecord.historicalKCount, base);
+
+    return [
+      `有效訊號覆蓋 ${formatPercent(validRate)}，主軸集中在 ${validationRecord.signalSummary.join(" / ") || "未分類"}。`,
+      `A / B+ 評級占比 ${formatPercent(strongRate)}，日 K 驗證率 ${formatPercent(historicalRate)}，${
+        excludedRate === 0 ? "目前沒有落入排除訊號。" : `排除訊號占比 ${formatPercent(excludedRate)}。`
+      }`,
+      previousValidationRecord
+        ? `和前一次紀錄相比重複入選 ${repeatedPickCount} 檔，這代表邏輯輸出有${repeatedPickCount > 0 ? "延續性" : "明顯換股"}。`
+        : "這是目前第一筆驗證紀錄，後續累積幾天後會更容易判斷邏輯穩定度。",
+    ];
+  }, [previousValidationRecord, repeatedPickCount, validationRecord]);
+
+  const validationSamplePreview = useMemo(() => {
+    if (!validationRecord) return "-";
+
+    const labels = validationRecord.stockLabels.slice(0, 3);
+    const extra = validationRecord.stockLabels.length - labels.length;
+    return `${labels.join(" / ")}${extra > 0 ? ` / +${extra}檔` : ""}`;
+  }, [validationRecord]);
+
+  const historicalValidationTone = useMemo(() => {
+    if (!strategyValidation) return null;
+
+    const sampleCount = Number(strategyValidation.summary?.sample_count || 0);
+    const avgReturn5d = Number(strategyValidation.summary?.avg_return_5d || 0);
+    const winRate5d = Number(strategyValidation.summary?.win_rate_5d || 0);
+    const verdictStyle = getValidationVerdictStyle(strategyValidation.verdict);
+
+    if (strategyValidation.validation_score >= 80) {
+      return {
+        label: strategyValidation.verdict || "歷史優勢成立",
+        summary: "歷史樣本、覆蓋率和報酬勝率都站得住，這代表邏輯不只是今天看起來漂亮。",
+        accent: verdictStyle.accent,
+        surface: verdictStyle.surface,
+      };
+    }
+
+    if (strategyValidation.validation_score >= 65) {
+      return {
+        label: strategyValidation.verdict || "略有優勢",
+        summary: "歷史結果偏正向，但還沒有漂亮到可以完全放大部位，適合保守採信。",
+        accent: verdictStyle.accent,
+        surface: verdictStyle.surface,
+      };
+    }
+
+    if (sampleCount < 10) {
+      return {
+        label: "樣本偏少",
+        summary: "目前有參考價值，但還不足以單靠這份驗證就完全確認邏輯優勢。",
+        accent: verdictStyle.accent,
+        surface: verdictStyle.surface,
+      };
+    }
+
+    return {
+      label: strategyValidation.verdict || "優勢未明",
+      summary:
+        avgReturn5d > 0 || winRate5d >= 0.55
+          ? "雖然有局部亮點，但整體驗證分數還不夠高，這套邏輯仍需要保守看待。"
+          : "歷史上這套訊號沒有穩定拉開報酬與勝率，代表邏輯可能還需要再調整。",
+      accent: verdictStyle.accent,
+      surface: verdictStyle.surface,
+    };
+  }, [strategyValidation]);
+
   const toggleValidationPanel = () => {
     setShowValidationPanel((prev) => {
       const next = !prev;
-      if (next) setShowRecommendationsPanel(false);
+      if (next) {
+        setShowRecommendationsPanel(false);
+        setShowValidationDetails(false);
+      }
       return next;
     });
   };
@@ -1501,178 +1851,823 @@ export default function Home() {
               </div>
             )}
 
-            {!showRecommendationsPanel && showValidationPanel && validationRecord && (
-              <div
-                style={{
-                  marginTop: "12px",
-                  borderRadius: "18px",
-                  background: "rgba(20, 58, 112, 0.42)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  padding: isMobile ? "14px" : "18px",
-                }}
-              >
+            {!showRecommendationsPanel &&
+              showValidationPanel &&
+              validationRecord &&
+              validationHealth &&
+              validationHistoryStats && (
                 <div
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
-                    gap: "12px",
-                    marginBottom: "14px",
+                    marginTop: "12px",
+                    borderRadius: "18px",
+                    background: "rgba(20, 58, 112, 0.42)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    padding: isMobile ? "14px" : "18px",
                   }}
                 >
                   <div
                     style={{
-                      borderRadius: "14px",
-                      padding: "12px",
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      gap: "12px",
+                      flexDirection: isMobile ? "column" : "row",
+                      marginBottom: "16px",
                     }}
                   >
-                    <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
-                      紀錄摘要
-                    </div>
-                    <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
-                      <div>資料日期：{formatDateString(validationRecord!.dataDate)}</div>
-                      <div>最後更新：{validationRecord!.lastUpdate || "-"}</div>
-                      <div>本次推薦：{validationRecord!.recommendationCount} 檔</div>
-                      <div>前次重複：{previousValidationRecord ? `${repeatedPickCount} 檔` : "尚無前次紀錄"}</div>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: "14px",
-                      padding: "12px",
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                    }}
-                  >
-                    <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
-                      驗證結果
-                    </div>
-                    <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
-                      <div>日 K 驗證：{validationRecord!.historicalKCount}/{validationRecord!.recommendationCount}</div>
-                      <div>強勢評級：{validationRecord!.strongRatingCount}/{validationRecord!.recommendationCount}</div>
-                      <div>平均分數：{validationRecord!.averageScore.toFixed(2)}</div>
-                      <div>
-                        平均風報比：
-                        {validationRecord!.averageRiskReward > 0
-                          ? ` 1:${validationRecord!.averageRiskReward.toFixed(2)}`
-                          : " -"}
+                    <div>
+                      <div style={{ color: "#dff1ff", fontSize: "20px", fontWeight: 900, marginBottom: "6px" }}>
+                        邏輯驗證總覽
                       </div>
-                      <div>主訊號：{validationRecord!.signalSummary.join(" / ") || "-"}</div>
+                      <div style={{ color: "#9cccf9", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
+                        上半部是這套策略在歷史上的實績驗證，下半部是今天這批輸出的結構檢查。兩個一起看，才知道邏輯能不能信。
+                      </div>
                     </div>
-                  </div>
-                </div>
 
-                <div style={{ color: "#9cccf9", fontSize: "13px", fontWeight: 900, marginBottom: "10px" }}>
-                  個股紀錄明細
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px",
-                    maxHeight: isMobile ? "none" : "560px",
-                    overflowY: isMobile ? "visible" : "auto",
-                    paddingRight: isMobile ? "0" : "4px",
-                  }}
-                >
-                  {validationRecord!.stocks.map((stock) => (
                     <div
-                      key={`${stock.symbol}-${stock.signal}`}
                       style={{
-                        borderRadius: "16px",
-                        padding: "14px 16px",
-                        background: "rgba(255,255,255,0.04)",
-                        border: "1px solid rgba(255,255,255,0.08)",
+                        padding: "8px 12px",
+                        borderRadius: "999px",
+                        background: validationHealth.surface,
+                        color: validationHealth.accent,
+                        fontWeight: 900,
+                        fontSize: "13px",
+                        border: `1px solid ${validationHealth.accent}33`,
+                        whiteSpace: "nowrap",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: "10px",
-                          flexWrap: "wrap",
-                          marginBottom: "8px",
-                        }}
-                      >
-                        <div style={{ color: "#ffffff", fontSize: "18px", fontWeight: 900 }}>
-                          {stock.symbol} {stock.name}
-                        </div>
-                        <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "14px" }}>
-                          分數 {stock.recommendationScore.toFixed(2)}
-                        </div>
-                      </div>
+                      今日結構一致性 {validationHealth.score}/100
+                    </div>
+                  </div>
 
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: "8px",
-                          marginBottom: "10px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            padding: "4px 9px",
-                            borderRadius: "999px",
-                            background: "rgba(255,255,255,0.06)",
-                            color: "#dce9ff",
-                            fontSize: "12px",
-                            fontWeight: 800,
-                          }}
-                        >
-                          {stock.signal}
-                        </span>
-                        <span
-                          style={{
-                            padding: "4px 9px",
-                            borderRadius: "999px",
-                            background: "rgba(255,255,255,0.06)",
-                            color: "#dce9ff",
-                            fontSize: "12px",
-                            fontWeight: 800,
-                          }}
-                        >
-                          評級 {stock.operationRating}
-                        </span>
-                      </div>
-
-                      <div
-                        style={{
-                          color: "#dce9ff",
-                          fontSize: "13px",
-                          lineHeight: 1.8,
-                          fontWeight: 700,
-                          marginBottom: "10px",
-                        }}
-                      >
-                        {stock.reason}
+                  {strategyValidation && historicalValidationTone ? (
+                    <>
+                      <div style={{ color: "#dff1ff", fontSize: "16px", fontWeight: 900, marginBottom: "10px" }}>
+                        歷史實績驗證
                       </div>
 
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
-                          gap: "8px",
-                          color: "#cfe5ff",
-                          fontSize: "12px",
-                          fontWeight: 700,
-                          lineHeight: 1.6,
+                          gridTemplateColumns: isMobile ? "1fr" : "1.1fr 0.9fr",
+                          gap: "12px",
+                          marginBottom: "14px",
                         }}
                       >
-                        <div>進場：{stock.entryPrice}</div>
-                        <div>目標：{stock.targetPrice}</div>
-                        <div>停損：{stock.stopLoss}</div>
-                        <div>風報比：{stock.riskReward}</div>
+                        <div
+                          style={{
+                            borderRadius: "16px",
+                            padding: isMobile ? "14px" : "16px",
+                            background: historicalValidationTone.surface,
+                            border: `1px solid ${historicalValidationTone.accent}33`,
+                          }}
+                        >
+                          <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>
+                            策略結論
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "baseline",
+                              gap: "10px",
+                              flexWrap: "wrap",
+                              marginBottom: "10px",
+                            }}
+                          >
+                            <div style={{ color: historicalValidationTone.accent, fontSize: "26px", fontWeight: 900 }}>
+                              {historicalValidationTone.label}
+                            </div>
+                            <div style={{ color: "#ffffff", fontSize: "16px", fontWeight: 900 }}>
+                              驗證分數 {strategyValidation.validation_score}/100
+                            </div>
+                          </div>
+                          <div style={{ color: "#e6f0ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                            {historicalValidationTone.summary}
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            borderRadius: "16px",
+                            padding: isMobile ? "14px" : "16px",
+                            background: "rgba(255,255,255,0.04)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>
+                            驗證範圍
+                          </div>
+                          <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                            <div>推薦股票：{strategyValidation.recommendation_count} 檔</div>
+                            <div>
+                              有歷史樣本：{strategyValidation.validated_stock_count} 檔
+                              {" / "}
+                              覆蓋率 {formatRatioPercent(strategyValidation.coverage_rate)}
+                            </div>
+                            <div>持有觀察：{strategyValidation.holding_days.join(" / ")} 日</div>
+                            <div>回看區間：最近 {strategyValidation.lookback_candles} 根日 K</div>
+                            <div>平均每檔樣本：{strategyValidation.average_samples_per_stock.toFixed(1)} 筆</div>
+                            <div>
+                              強訊號 / 弱訊號：{strategyValidation.strongest_signal || "-"}
+                              {" / "}
+                              {strategyValidation.weakest_signal || "-"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(4, minmax(0,1fr))",
+                          gap: "10px",
+                          marginBottom: "14px",
+                        }}
+                      >
+                        {[ 
+                          {
+                            label: "驗證結論",
+                            value: strategyValidation.verdict,
+                            hint: `信心 ${strategyValidation.summary.confidence}`,
+                          },
+                          {
+                            label: "歷史覆蓋率",
+                            value: formatRatioPercent(strategyValidation.coverage_rate),
+                            hint: `${strategyValidation.validated_stock_count}/${strategyValidation.recommendation_count} 檔有對照`,
+                          },
+                          {
+                            label: "每檔平均樣本",
+                            value: `${strategyValidation.average_samples_per_stock.toFixed(1)} 筆`,
+                            hint: "每檔越多，訊號越有代表性",
+                          },
+                          {
+                            label: "1日平均報酬",
+                            value: `${formatSigned(strategyValidation.summary.avg_return_1d)}%`,
+                            hint: `勝率 ${formatRatioPercent(strategyValidation.summary.win_rate_1d)}`,
+                          },
+                          {
+                            label: "3日平均報酬",
+                            value: `${formatSigned(strategyValidation.summary.avg_return_3d)}%`,
+                            hint: `勝率 ${formatRatioPercent(strategyValidation.summary.win_rate_3d)}`,
+                          },
+                          {
+                            label: "5日平均報酬",
+                            value: `${formatSigned(strategyValidation.summary.avg_return_5d)}%`,
+                            hint: `勝率 ${formatRatioPercent(strategyValidation.summary.win_rate_5d)}`,
+                          },
+                          {
+                            label: "5日賺賠比",
+                            value:
+                              strategyValidation.summary.payoff_ratio_5d > 0
+                                ? strategyValidation.summary.payoff_ratio_5d.toFixed(2)
+                                : "-",
+                            hint: "平均獲利 / 平均虧損",
+                          },
+                          {
+                            label: "5日順逆向",
+                            value: `${formatSigned(strategyValidation.summary.avg_mfe_5d)}% / ${formatSigned(
+                              strategyValidation.summary.avg_mae_5d
+                            )}%`,
+                            hint: "順向空間 / 逆向風險",
+                          },
+                        ].map((metric) => (
+                          <div
+                            key={metric.label}
+                            style={{
+                              borderRadius: "14px",
+                              padding: "12px",
+                              background: "rgba(255,255,255,0.04)",
+                              border: "1px solid rgba(255,255,255,0.08)",
+                            }}
+                          >
+                            <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
+                              {metric.label}
+                            </div>
+                            <div style={{ color: "#ffffff", fontSize: "20px", fontWeight: 900, marginBottom: "4px" }}>
+                              {metric.value}
+                            </div>
+                            <div style={{ color: "#b9d7ff", fontSize: "12px", lineHeight: 1.6, fontWeight: 700 }}>
+                              {metric.hint}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isMobile ? "1fr" : "0.9fr 1.1fr",
+                          gap: "12px",
+                          marginBottom: "14px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            borderRadius: "14px",
+                            padding: "14px",
+                            background: "rgba(255,255,255,0.04)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
+                            驗證判讀
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {strategyValidation.notes.map((item) => (
+                              <div
+                                key={item}
+                                style={{
+                                  color: "#dce9ff",
+                                  fontSize: "13px",
+                                  lineHeight: 1.8,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {item}
+                              </div>
+                            ))}
+                          </div>
+                          <div
+                            style={{
+                              marginTop: "12px",
+                              paddingTop: "12px",
+                              borderTop: "1px solid rgba(255,255,255,0.08)",
+                            }}
+                          >
+                            <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>
+                              風險旗標
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                              {strategyValidation.risk_flags.length > 0 ? (
+                                strategyValidation.risk_flags.map((item) => (
+                                  <div
+                                    key={item}
+                                    style={{
+                                      color: "#ffd4d4",
+                                      fontSize: "12px",
+                                      lineHeight: 1.7,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    {item}
+                                  </div>
+                                ))
+                              ) : (
+                                <div
+                                  style={{
+                                    color: "#dce9ff",
+                                    fontSize: "12px",
+                                    lineHeight: 1.7,
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  目前沒有明顯的歷史驗證風險旗標。
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            borderRadius: "14px",
+                            padding: "14px",
+                            background: "rgba(255,255,255,0.04)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "10px" }}>
+                            Signal 驗證拆解
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                            {strategyValidation.signal_breakdown.length > 0 ? (
+                              strategyValidation.signal_breakdown.map((item) => (
+                                <div
+                                  key={item.signal}
+                                  style={{
+                                    borderRadius: "12px",
+                                    padding: "10px 12px",
+                                    background: "rgba(255,255,255,0.04)",
+                                    border: "1px solid rgba(255,255,255,0.08)",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      alignItems: "center",
+                                      gap: "8px",
+                                      flexWrap: "wrap",
+                                      marginBottom: "6px",
+                                    }}
+                                  >
+                                    <div style={{ color: "#ffffff", fontSize: "15px", fontWeight: 900 }}>
+                                      {item.signal}
+                                    </div>
+                                    <div style={{ color: getConfidenceColor(item.confidence), fontSize: "12px", fontWeight: 900 }}>
+                                      {item.confidence}信心
+                                    </div>
+                                  </div>
+                                  <div style={{ color: "#dce9ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
+                                    <div>樣本 {item.sample_count} 筆</div>
+                                    <div>3日 {formatSigned(item.avg_return_3d)}% / 5日 {formatSigned(item.avg_return_5d)}%</div>
+                                    <div>
+                                      勝率 {formatRatioPercent(item.win_rate_5d)} / 目標 {formatRatioPercent(item.target_hit_rate_5d)} / 停損 {formatRatioPercent(item.stop_hit_rate_5d)}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div
+                                style={{
+                                  color: "#dce9ff",
+                                  fontSize: "12px",
+                                  lineHeight: 1.7,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                目前沒有足夠的 signal 歷史樣本可拆解。
+                              </div>
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              marginTop: "12px",
+                              paddingTop: "12px",
+                              borderTop: "1px solid rgba(255,255,255,0.08)",
+                            }}
+                          >
+                            <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>
+                              無歷史對照
+                            </div>
+                            <div style={{ color: "#dce9ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
+                              {strategyValidation.stocks_without_history.length > 0
+                                ? strategyValidation.stocks_without_history.join(" / ")
+                                : "今天所有推薦股票都找得到歷史對照。"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          borderRadius: "14px",
+                          padding: "14px",
+                          background: "rgba(255,255,255,0.04)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          marginBottom: "16px",
+                        }}
+                      >
+                        <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "10px" }}>
+                          個股歷史驗證
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0,1fr))",
+                            gap: "10px",
+                          }}
+                        >
+                          {strategyValidation.stock_breakdown.length > 0 ? (
+                            strategyValidation.stock_breakdown.map((item) => (
+                              <div
+                                key={item.symbol}
+                                style={{
+                                  borderRadius: "12px",
+                                  padding: "12px",
+                                  background: "rgba(255,255,255,0.04)",
+                                  border: "1px solid rgba(255,255,255,0.08)",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    flexWrap: "wrap",
+                                    marginBottom: "8px",
+                                  }}
+                                >
+                                  <div style={{ color: "#ffffff", fontSize: "15px", fontWeight: 900 }}>
+                                    {item.symbol} {item.name}
+                                  </div>
+                                  <div style={{ color: getConfidenceColor(item.confidence), fontSize: "12px", fontWeight: 900 }}>
+                                    {item.confidence}信心
+                                  </div>
+                                </div>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    flexWrap: "wrap",
+                                    gap: "8px",
+                                    marginBottom: "8px",
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      padding: "4px 8px",
+                                      borderRadius: "999px",
+                                      background: "rgba(255,255,255,0.06)",
+                                      color: "#dce9ff",
+                                      fontSize: "12px",
+                                      fontWeight: 800,
+                                    }}
+                                  >
+                                    {item.current_signal}
+                                  </span>
+                                  <span
+                                    style={{
+                                      padding: "4px 8px",
+                                      borderRadius: "999px",
+                                      background: "rgba(255,255,255,0.06)",
+                                      color: getRatingColor(item.current_rating),
+                                      fontSize: "12px",
+                                      fontWeight: 800,
+                                    }}
+                                  >
+                                    評級 {item.current_rating}
+                                  </span>
+                                </div>
+                                <div style={{ color: "#dce9ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
+                                  <div>樣本 {item.sample_count} 筆 / 當前分數 {item.current_score.toFixed(2)}</div>
+                                  <div>5日平均 {formatSigned(item.avg_return_5d)}% / 勝率 {formatRatioPercent(item.win_rate_5d)}</div>
+                                  <div>
+                                    目標 {formatRatioPercent(item.target_hit_rate_5d)} / 停損 {formatRatioPercent(item.stop_hit_rate_5d)}
+                                  </div>
+                                  <div>最近相同訊號：{formatDateString(item.last_signal_date)}</div>
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div
+                              style={{
+                                color: "#dce9ff",
+                                fontSize: "12px",
+                                lineHeight: 1.7,
+                                fontWeight: 700,
+                              }}
+                            >
+                              目前沒有可顯示的個股歷史驗證結果。
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div
+                      style={{
+                        borderRadius: "16px",
+                        padding: isMobile ? "14px" : "16px",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        marginBottom: "16px",
+                      }}
+                    >
+                      <div style={{ color: "#dff1ff", fontSize: "16px", fontWeight: 900, marginBottom: "8px" }}>
+                        歷史實績驗證
+                      </div>
+                      <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                        這次推薦尚未取得可用的歷史驗證資料，所以目前只能做今日結構檢查，還不能直接判斷這套邏輯是否有歷史優勢。
                       </div>
                     </div>
-                  ))}
+                  )}
+
+                  <div style={{ color: "#dff1ff", fontSize: "16px", fontWeight: 900, marginBottom: "10px" }}>
+                    今日結構檢查
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: isMobile ? "1fr" : "1.2fr 0.8fr",
+                      gap: "12px",
+                      marginBottom: "14px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        borderRadius: "16px",
+                        padding: isMobile ? "14px" : "16px",
+                        background: validationHealth.surface,
+                        border: `1px solid ${validationHealth.accent}33`,
+                      }}
+                    >
+                      <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>
+                        今日輸出結構
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "baseline",
+                          gap: "10px",
+                          flexWrap: "wrap",
+                          marginBottom: "10px",
+                        }}
+                      >
+                        <div style={{ color: validationHealth.accent, fontSize: "26px", fontWeight: 900 }}>
+                          {validationHealth.label}
+                        </div>
+                        <div style={{ color: "#ffffff", fontSize: "18px", fontWeight: 900 }}>
+                          {validationHealth.score}/100
+                        </div>
+                      </div>
+                      <div style={{ color: "#e6f0ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                        {validationHealth.summary}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        borderRadius: "16px",
+                        padding: isMobile ? "14px" : "16px",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>
+                        最近 {validationHistoryStats.totalRecords} 次輸出穩定度
+                      </div>
+                      <div style={{ color: "#ffffff", fontSize: "24px", fontWeight: 900, marginBottom: "8px" }}>
+                        {validationHistoryStats.passCount}/{validationHistoryStats.totalRecords}
+                      </div>
+                      <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                        <div>平均有效訊號率：{formatPercent(validationHistoryStats.averageValidRate)}</div>
+                        <div>平均 A / B+ 率：{formatPercent(validationHistoryStats.averageStrongRate)}</div>
+                        <div>平均排除訊號率：{formatPercent(validationHistoryStats.averageExcludedRate)}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(3, minmax(0,1fr))",
+                      gap: "10px",
+                      marginBottom: "14px",
+                    }}
+                  >
+                    {[
+                      {
+                        label: "有效訊號占比",
+                        value: formatPercent(safeDivide(validationRecord.validSignalCount, validationRecord.recommendationCount)),
+                        hint: `${validationRecord.validSignalCount}/${validationRecord.recommendationCount} 檔`,
+                      },
+                      {
+                        label: "A / B+ 覆蓋率",
+                        value: formatPercent(safeDivide(validationRecord.strongRatingCount, validationRecord.recommendationCount)),
+                        hint: `${validationRecord.strongRatingCount}/${validationRecord.recommendationCount} 檔`,
+                      },
+                      {
+                        label: "排除訊號",
+                        value: `${validationRecord.excludedSignalCount} 檔`,
+                        hint:
+                          validationRecord.excludedSignalCount === 0
+                            ? "今天沒有偏弱/過熱訊號"
+                            : "名單中有不符合邏輯的訊號",
+                      },
+                      {
+                        label: "日 K 驗證率",
+                        value: formatPercent(safeDivide(validationRecord.historicalKCount, validationRecord.recommendationCount)),
+                        hint: `${validationRecord.historicalKCount}/${validationRecord.recommendationCount} 檔`,
+                      },
+                      {
+                        label: "平均分數",
+                        value: validationRecord.averageScore.toFixed(2),
+                        hint: "分數越穩定，邏輯輸出越集中",
+                      },
+                      {
+                        label: "平均風報比",
+                        value:
+                          validationRecord.averageRiskReward > 0
+                            ? `1:${validationRecord.averageRiskReward.toFixed(2)}`
+                            : "-",
+                        hint: "這是今日輸出的結構風報比",
+                      },
+                    ].map((metric) => (
+                      <div
+                        key={metric.label}
+                        style={{
+                          borderRadius: "14px",
+                          padding: "12px",
+                          background: "rgba(255,255,255,0.04)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                        }}
+                      >
+                        <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
+                          {metric.label}
+                        </div>
+                        <div style={{ color: "#ffffff", fontSize: "20px", fontWeight: 900, marginBottom: "4px" }}>
+                          {metric.value}
+                        </div>
+                        <div style={{ color: "#b9d7ff", fontSize: "12px", lineHeight: 1.6, fontWeight: 700 }}>
+                          {metric.hint}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                      gap: "12px",
+                      marginBottom: "14px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        borderRadius: "14px",
+                        padding: "14px",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
+                        今日判讀
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        {validationHighlights.map((item) => (
+                          <div
+                            key={item}
+                            style={{
+                              color: "#dce9ff",
+                              fontSize: "13px",
+                              lineHeight: 1.8,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        borderRadius: "14px",
+                        padding: "14px",
+                        background: "rgba(255,255,255,0.04)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
+                        結構輪廓
+                      </div>
+                      <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                        <div>資料日期：{formatDateString(validationRecord.dataDate)}</div>
+                        <div>最後更新：{validationRecord.lastUpdate || "-"}</div>
+                        <div>最近平均推薦數：{validationHistoryStats.averageRecommendationCount} 檔</div>
+                        <div>最近平均分數：{validationHistoryStats.averageScore.toFixed(2)}</div>
+                        <div>
+                          最近平均風報比：
+                          {validationHistoryStats.averageRiskReward > 0
+                            ? ` 1:${validationHistoryStats.averageRiskReward.toFixed(2)}`
+                            : " -"}
+                        </div>
+                        <div>常見主訊號：{validationHistoryStats.topSignals.join(" / ") || "-"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "12px",
+                      flexDirection: isMobile ? "column" : "row",
+                      marginBottom: showValidationDetails ? "12px" : "0",
+                    }}
+                  >
+                    <div style={{ color: "#b9d7ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
+                      今日樣本：{validationSamplePreview}
+                    </div>
+
+                    <button
+                      onClick={() => setShowValidationDetails((prev) => !prev)}
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        background: "rgba(255,255,255,0.06)",
+                        color: "#eaf4ff",
+                        borderRadius: "999px",
+                        padding: "8px 14px",
+                        fontWeight: 900,
+                        fontSize: "12px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {showValidationDetails ? "收起今日樣本" : "展開今日樣本"}
+                    </button>
+                  </div>
+
+                  {showValidationDetails && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "12px",
+                        maxHeight: isMobile ? "none" : "560px",
+                        overflowY: isMobile ? "visible" : "auto",
+                        paddingRight: isMobile ? "0" : "4px",
+                      }}
+                    >
+                      {validationRecord.stocks.map((stock) => (
+                        <div
+                          key={`${stock.symbol}-${stock.signal}`}
+                          style={{
+                            borderRadius: "16px",
+                            padding: "14px 16px",
+                            background: "rgba(255,255,255,0.04)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: "10px",
+                              flexWrap: "wrap",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            <div style={{ color: "#ffffff", fontSize: "18px", fontWeight: 900 }}>
+                              {stock.symbol} {stock.name}
+                            </div>
+                            <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "14px" }}>
+                              分數 {stock.recommendationScore.toFixed(2)}
+                            </div>
+                          </div>
+
+                          <div
+                            style={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "8px",
+                              marginBottom: "10px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                padding: "4px 9px",
+                                borderRadius: "999px",
+                                background: "rgba(255,255,255,0.06)",
+                                color: "#dce9ff",
+                                fontSize: "12px",
+                                fontWeight: 800,
+                              }}
+                            >
+                              {stock.signal}
+                            </span>
+                            <span
+                              style={{
+                                padding: "4px 9px",
+                                borderRadius: "999px",
+                                background: "rgba(255,255,255,0.06)",
+                                color: "#dce9ff",
+                                fontSize: "12px",
+                                fontWeight: 800,
+                              }}
+                            >
+                              評級 {stock.operationRating}
+                            </span>
+                          </div>
+
+                          <div
+                            style={{
+                              color: "#dce9ff",
+                              fontSize: "13px",
+                              lineHeight: 1.8,
+                              fontWeight: 700,
+                              marginBottom: "10px",
+                            }}
+                          >
+                            {stock.reason}
+                          </div>
+
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
+                              gap: "8px",
+                              color: "#cfe5ff",
+                              fontSize: "12px",
+                              fontWeight: 700,
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            <div>進場：{stock.entryPrice}</div>
+                            <div>目標：{stock.targetPrice}</div>
+                            <div>停損：{stock.stopLoss}</div>
+                            <div>風報比：{stock.riskReward}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )}
           </div>
         </section>
 
