@@ -55,6 +55,7 @@ TZ_TAIPEI = timezone(timedelta(hours=8))
 VALIDATION_FORWARD_DAYS = [1, 2, 3, 5]
 VALIDATION_ALLOWED_SIGNALS = {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
 VALIDATION_ALLOWED_RATINGS = {"A", "B+"}
+VALIDATION_RECENT_WINDOWS = [20, 60]
 
 
 # =========================
@@ -1380,6 +1381,7 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
             "symbol": symbol,
             "signal": current_signal,
             "date": safe_str(candles[idx].get("date")),
+            "trading_days_ago": len(candles) - 1 - idx,
             "forward_returns": forward_returns,
             "max_favorable_return_5d": round(calc_return_pct(close_now, future_high_5d), 2),
             "max_adverse_return_5d": round(calc_return_pct(close_now, future_low_5d), 2),
@@ -1399,6 +1401,73 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
         "confidence": summary["confidence"],
     })
     return {"stock_item": stock_item, "samples": samples}
+
+
+def filter_validation_samples_by_days(
+    samples: List[Dict[str, Any]],
+    lookback_days: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    if lookback_days is None:
+        return list(samples)
+    return [
+        sample
+        for sample in samples
+        if safe_int(sample.get("trading_days_ago"), 10**9) <= lookback_days
+    ]
+
+
+def build_validation_period_snapshot(
+    label: str,
+    recommendation_count: int,
+    stock_samples_map: Dict[str, Dict[str, Any]],
+    lookback_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    filtered_samples: List[Dict[str, Any]] = []
+    stocks_without_history: List[str] = []
+    validated_stock_count = 0
+
+    for stock_info in stock_samples_map.values():
+        filtered_stock_samples = filter_validation_samples_by_days(
+            stock_info.get("samples", []),
+            lookback_days,
+        )
+        filtered_samples.extend(filtered_stock_samples)
+        if filtered_stock_samples:
+            validated_stock_count += 1
+        else:
+            stocks_without_history.append(
+                f"{stock_info.get('symbol', '')} {stock_info.get('name', '')}".strip()
+            )
+
+    summary = summarize_validation_samples(filtered_samples)
+    coverage_rate = round((validated_stock_count / recommendation_count) if recommendation_count else 0.0, 4)
+    average_samples_per_stock = round(
+        (summary["sample_count"] / validated_stock_count) if validated_stock_count else 0.0,
+        2,
+    )
+    validation_score = build_validation_score(summary, coverage_rate, average_samples_per_stock)
+    verdict = build_validation_verdict(validation_score, summary, coverage_rate)
+    risk_flags = build_validation_risk_flags(
+        summary,
+        coverage_rate,
+        average_samples_per_stock,
+        stocks_without_history,
+    )
+
+    return {
+        "label": label,
+        "lookback_days": lookback_days,
+        "recommendation_count": recommendation_count,
+        "validated_stock_count": validated_stock_count,
+        "coverage_rate": coverage_rate,
+        "average_samples_per_stock": average_samples_per_stock,
+        "validation_score": validation_score,
+        "verdict": verdict,
+        "sample_count": summary["sample_count"],
+        "summary": summary,
+        "risk_flags": risk_flags,
+        "stocks_without_history": stocks_without_history,
+    }
 
 
 def build_validation_notes(
@@ -1530,6 +1599,7 @@ def build_strategy_validation(recommendations: List[Dict[str, Any]]) -> Dict[str
     all_samples: List[Dict[str, Any]] = []
     signal_samples: Dict[str, List[Dict[str, Any]]] = {}
     stock_breakdown: List[Dict[str, Any]] = []
+    stock_samples_map: Dict[str, Dict[str, Any]] = {}
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_map = {
@@ -1543,13 +1613,18 @@ def build_strategy_validation(recommendations: List[Dict[str, Any]]) -> Dict[str
                 continue
             stock_item = result.get("stock_item", {})
             samples = result.get("samples", [])
+            symbol = safe_str(stock_item.get("symbol"))
             stock_breakdown.append(stock_item)
+            if symbol:
+                stock_samples_map[symbol] = {
+                    "symbol": symbol,
+                    "name": safe_str(stock_item.get("name")),
+                    "samples": samples,
+                }
             all_samples.extend(samples)
             for sample in samples:
                 signal = safe_str(sample.get("signal"))
                 signal_samples.setdefault(signal, []).append(sample)
-
-    summary = summarize_validation_samples(all_samples)
 
     signal_breakdown: List[Dict[str, Any]] = []
     for signal, samples in signal_samples.items():
@@ -1584,25 +1659,33 @@ def build_strategy_validation(recommendations: List[Dict[str, Any]]) -> Dict[str
         reverse=True,
     )
 
-    validated_stock_count = len([x for x in stock_breakdown if safe_int(x.get("sample_count")) > 0])
-    coverage_rate = round((validated_stock_count / len(recommendations)) if recommendations else 0.0, 4)
-    average_samples_per_stock = round(
-        (summary["sample_count"] / validated_stock_count) if validated_stock_count else 0.0,
-        2,
+    full_period = build_validation_period_snapshot(
+        label="全樣本",
+        recommendation_count=len(recommendations),
+        stock_samples_map=stock_samples_map,
+        lookback_days=None,
     )
-    stocks_without_history = [
-        f"{x.get('symbol', '')} {x.get('name', '')}".strip()
-        for x in stock_breakdown
-        if safe_int(x.get("sample_count")) <= 0
-    ]
-    validation_score = build_validation_score(summary, coverage_rate, average_samples_per_stock)
-    verdict = build_validation_verdict(validation_score, summary, coverage_rate)
-    risk_flags = build_validation_risk_flags(
-        summary,
-        coverage_rate,
-        average_samples_per_stock,
-        stocks_without_history,
+    recent_20d = build_validation_period_snapshot(
+        label="近20日",
+        recommendation_count=len(recommendations),
+        stock_samples_map=stock_samples_map,
+        lookback_days=20,
     )
+    recent_60d = build_validation_period_snapshot(
+        label="近60日",
+        recommendation_count=len(recommendations),
+        stock_samples_map=stock_samples_map,
+        lookback_days=60,
+    )
+
+    summary = full_period["summary"]
+    validated_stock_count = full_period["validated_stock_count"]
+    coverage_rate = full_period["coverage_rate"]
+    average_samples_per_stock = full_period["average_samples_per_stock"]
+    stocks_without_history = full_period["stocks_without_history"]
+    validation_score = full_period["validation_score"]
+    verdict = full_period["verdict"]
+    risk_flags = full_period["risk_flags"]
     notes = build_validation_notes(summary, signal_breakdown, stock_breakdown)
     strongest_signal = signal_breakdown[0]["signal"] if signal_breakdown else ""
     weakest_signal = signal_breakdown[-1]["signal"] if signal_breakdown else ""
@@ -1625,6 +1708,9 @@ def build_strategy_validation(recommendations: List[Dict[str, Any]]) -> Dict[str
         "stocks_without_history": stocks_without_history,
         "strongest_signal": strongest_signal,
         "weakest_signal": weakest_signal,
+        "recent_20d": recent_20d,
+        "recent_60d": recent_60d,
+        "full_period": full_period,
     }
 
 
