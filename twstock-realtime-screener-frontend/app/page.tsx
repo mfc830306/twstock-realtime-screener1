@@ -682,13 +682,7 @@ export default function Home() {
       keyword: debouncedSearchTerm,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, debouncedSearchTerm]);
-
-  useEffect(() => {
-    if (!initialLoadedRef.current) return;
-    fetchRecommendationsSafe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory]);
+  }, [currentPage, debouncedSearchTerm, selectedCategory, rankType]);
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
@@ -1219,12 +1213,6 @@ export default function Home() {
                         setSelectedCategory(item.key);
                         setManualSelectedSymbol("");
                         setCurrentPage(1);
-                        fetchPagedStocksSafe({
-                          category: item.key,
-                          page: 1,
-                          rank: rankType,
-                          keyword: debouncedSearchTerm,
-                        });
                       }}
                       style={{
                         minWidth: isMobile ? "calc(50% - 6px)" : "118px",
@@ -1279,12 +1267,6 @@ export default function Home() {
                     onClick={() => {
                       setRankType(r);
                       setCurrentPage(1);
-                      fetchPagedStocksSafe({
-                        category: selectedCategory,
-                        page: 1,
-                        rank: r,
-                        keyword: debouncedSearchTerm,
-                      });
                     }}
                     style={rankType === r ? activeActionBtn : normalActionBtn}
                   >
