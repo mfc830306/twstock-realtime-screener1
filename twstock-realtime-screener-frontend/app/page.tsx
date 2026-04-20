@@ -177,6 +177,21 @@ type StrategyValidationStock = {
   confidence: string;
 };
 
+type StrategyValidationPeriod = {
+  label: string;
+  lookback_days?: number | null;
+  recommendation_count: number;
+  validated_stock_count: number;
+  coverage_rate: number;
+  average_samples_per_stock: number;
+  validation_score: number;
+  verdict: string;
+  sample_count: number;
+  summary: StrategyValidationSummary;
+  risk_flags: string[];
+  stocks_without_history: string[];
+};
+
 type StrategyValidation = {
   lookback_candles: number;
   holding_days: number[];
@@ -195,6 +210,9 @@ type StrategyValidation = {
   stocks_without_history: string[];
   strongest_signal?: string;
   weakest_signal?: string;
+  recent_20d?: StrategyValidationPeriod;
+  recent_60d?: StrategyValidationPeriod;
+  full_period?: StrategyValidationPeriod;
 };
 
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
@@ -342,6 +360,71 @@ function getValidationVerdictStyle(verdict?: string) {
   return {
     accent: "#ff9c9c",
     surface: "rgba(255, 130, 130, 0.16)",
+  };
+}
+
+function getFallbackValidationPeriod(validation: StrategyValidation): StrategyValidationPeriod {
+  return {
+    label: "全樣本",
+    lookback_days: null,
+    recommendation_count: validation.recommendation_count,
+    validated_stock_count: validation.validated_stock_count,
+    coverage_rate: validation.coverage_rate,
+    average_samples_per_stock: validation.average_samples_per_stock,
+    validation_score: validation.validation_score,
+    verdict: validation.verdict,
+    sample_count: validation.sample_count,
+    summary: validation.summary,
+    risk_flags: validation.risk_flags,
+    stocks_without_history: validation.stocks_without_history,
+  };
+}
+
+function isValidationPeriodPositive(period?: StrategyValidationPeriod | null) {
+  return Boolean(
+    period &&
+      period.sample_count >= 8 &&
+      period.validation_score >= 65 &&
+      period.summary.avg_return_5d > 0 &&
+      period.summary.win_rate_5d >= 0.55
+  );
+}
+
+function isValidationPeriodWeak(period?: StrategyValidationPeriod | null) {
+  if (!period) return true;
+  return (
+    period.sample_count < 8 ||
+    period.validation_score < 50 ||
+    period.summary.avg_return_5d <= 0 ||
+    period.summary.win_rate_5d < 0.55
+  );
+}
+
+function getValidationPeriodSnapshot(period?: StrategyValidationPeriod | null) {
+  if (!period || period.sample_count <= 0) {
+    return {
+      status: "樣本不足",
+      accent: "#8fa9c9",
+      surface: "rgba(143, 169, 201, 0.12)",
+      border: "rgba(143, 169, 201, 0.24)",
+    };
+  }
+
+  const verdictStyle = getValidationVerdictStyle(period.verdict);
+  if (isValidationPeriodPositive(period)) {
+    return { status: "可追蹤", accent: "#7ee787", surface: "rgba(58, 168, 89, 0.14)", border: "rgba(126, 231, 135, 0.26)" };
+  }
+  if (period.summary.avg_return_5d > 0 && period.summary.win_rate_5d >= 0.5) {
+    return { status: "改善中", accent: "#ffd95f", surface: "rgba(255, 217, 95, 0.14)", border: "rgba(255, 217, 95, 0.24)" };
+  }
+  if (period.validation_score >= 50) {
+    return { status: "觀察", accent: "#7fb6ff", surface: "rgba(96, 165, 250, 0.14)", border: "rgba(127, 182, 255, 0.24)" };
+  }
+  return {
+    status: "偏弱",
+    accent: verdictStyle.accent,
+    surface: verdictStyle.surface,
+    border: `${verdictStyle.accent}33`,
   };
 }
 
@@ -1119,35 +1202,58 @@ export default function Home() {
     };
   }, [strategyValidation]);
 
+  const validationPeriods = useMemo(() => {
+    if (!strategyValidation) return [];
+
+    const fullPeriod = strategyValidation.full_period || getFallbackValidationPeriod(strategyValidation);
+    return [
+      { key: "recent_20d", label: "近20日", period: strategyValidation.recent_20d || null },
+      { key: "recent_60d", label: "近60日", period: strategyValidation.recent_60d || null },
+      { key: "full_period", label: "全樣本", period: fullPeriod },
+    ];
+  }, [strategyValidation]);
+
   const combinedValidationSummary = useMemo(() => {
     if (!validationRecord || !validationHealth || !validationHistoryStats) return null;
 
     const structureGood = validationHealth.score >= 85;
-    const historicalScore = strategyValidation?.validation_score ?? 0;
-    const historyGood = Boolean(strategyValidation) && historicalScore >= 65;
+    const positivePeriods = validationPeriods.filter(({ period }) => isValidationPeriodPositive(period));
+    const recent20 = validationPeriods.find((item) => item.key === "recent_20d")?.period || null;
+    const recent60 = validationPeriods.find((item) => item.key === "recent_60d")?.period || null;
+    const fullPeriod = validationPeriods.find((item) => item.key === "full_period")?.period || null;
 
     let summary = "";
     if (strategyValidation && historicalValidationTone) {
-      if (structureGood && historyGood) {
-        summary = "今天結構與歷史驗證都站得住，這套邏輯目前可以繼續追蹤。";
-      } else if (structureGood && !historyGood) {
-        summary = "目前歷史覆蓋不足，且已驗證樣本績效偏弱，因此暫不建議直接依賴。";
-      } else if (!structureGood && historyGood) {
-        summary = "歷史表現不差，但今天這批名單沒有完全照規則長出來，因此今天不能直接照單全收。";
+      if (structureGood && positivePeriods.length === validationPeriods.length) {
+        summary = "今天結構、近20日、近60日與全樣本驗證都站得住，這套邏輯目前可以繼續追蹤。";
+      } else if (structureGood && isValidationPeriodPositive(recent20) && !isValidationPeriodPositive(recent60)) {
+        summary = "今天結構很乾淨，近20日開始改善，但近60日與全樣本還沒完全跟上，因此先觀察不要直接放大。";
+      } else if (structureGood) {
+        summary = "今天結構很乾淨，但近20日、近60日與全樣本驗證還沒一致轉強，因此暫不建議直接依賴。";
+      } else if (positivePeriods.length >= 2) {
+        summary = "近期驗證不差，但今天這批名單沒有完全照規則長出來，因此今天不能直接照單全收。";
       } else {
-        summary = "目前歷史覆蓋不足，且今日結構也不夠整齊，因此暫時只能觀察。";
+        summary = "目前近20日、近60日與全樣本驗證都沒有一致拉開，因此這套邏輯暫時只能觀察。";
       }
     } else {
       summary = `今天結構分數 ${validationHealth.score}/100，但歷史覆蓋仍不足，今天資訊還不完整。`;
     }
 
-    const directRiskMessage =
-      strategyValidation &&
-      ((strategyValidation.coverage_rate ?? 0) < 0.7 ||
-        (strategyValidation.summary.avg_return_5d ?? 0) <= 0 ||
-        (strategyValidation.summary.win_rate_5d ?? 0) < 0.5)
-        ? "目前歷史覆蓋不足，且已驗證樣本績效偏弱，因此暫不建議直接依賴。"
-        : null;
+    const missingPeriodLabel =
+      validationPeriods.find(({ period }) => !period || period.sample_count <= 0)?.label || "";
+    const weakestPeriod =
+      validationPeriods.find(({ period }) => period && isValidationPeriodWeak(period))?.period || null;
+
+    let directRiskMessage: string | null = null;
+    if (missingPeriodLabel) {
+      directRiskMessage = `${missingPeriodLabel} 幾乎沒有可用歷史樣本，近期判讀還不完整。`;
+    } else if (weakestPeriod) {
+      directRiskMessage = `${weakestPeriod.label} 的 5 日平均報酬 ${formatSigned(
+        weakestPeriod.summary.avg_return_5d
+      )}% 、勝率 ${formatRatioPercent(weakestPeriod.summary.win_rate_5d)}，優勢還沒拉開。`;
+    } else if (fullPeriod?.risk_flags?.length) {
+      directRiskMessage = fullPeriod.risk_flags[0];
+    }
 
     return {
       summary,
@@ -1164,7 +1270,89 @@ export default function Home() {
     validationHighlights,
     validationHistoryStats,
     validationRecord,
+    validationPeriods,
   ]);
+
+  const validationQuickState = useMemo(() => {
+    if (!validationHealth) return null;
+
+    const recent20 = validationPeriods.find((item) => item.key === "recent_20d")?.period || null;
+    const recent60 = validationPeriods.find((item) => item.key === "recent_60d")?.period || null;
+    const fullPeriod = validationPeriods.find((item) => item.key === "full_period")?.period || null;
+
+    if (validationHealth.score >= 85 && validationPeriods.length > 0 && validationPeriods.every(({ period }) => isValidationPeriodPositive(period))) {
+      return {
+        label: "長短期一致",
+        detail: "今天結構和歷史驗證同步站上來。",
+        accent: "#7ee787",
+        surface: "rgba(58, 168, 89, 0.14)",
+      };
+    }
+
+    if (validationHealth.score >= 85 && isValidationPeriodPositive(recent20) && !isValidationPeriodPositive(recent60)) {
+      return {
+        label: "近期改善中",
+        detail: "近20日轉強，但近60日和全樣本還沒完全跟上。",
+        accent: "#ffd95f",
+        surface: "rgba(255, 217, 95, 0.14)",
+      };
+    }
+
+    if (validationHealth.score >= 85 && !isValidationPeriodPositive(fullPeriod)) {
+      return {
+        label: "今天漂亮，歷史未跟上",
+        detail: "今天名單乾淨，但驗證還不足以直接照做。",
+        accent: "#ff9c9c",
+        surface: "rgba(255, 130, 130, 0.16)",
+      };
+    }
+
+    return {
+      label: "先觀察",
+      detail: "先看近20日和近60日有沒有持續改善。",
+      accent: "#7fb6ff",
+      surface: "rgba(96, 165, 250, 0.14)",
+    };
+  }, [validationHealth, validationPeriods]);
+
+  const validationPeriodCards = useMemo(
+    () =>
+      [
+        {
+          key: "today_structure",
+          label: "今日結構",
+          score: `${validationHealth?.score ?? 0}/100`,
+          status: validationHealth?.label || "-",
+          accent: validationHealth?.accent || "#8fa9c9",
+          surface: validationHealth?.surface || "rgba(143, 169, 201, 0.12)",
+          border: `${validationHealth?.accent || "#8fa9c9"}33`,
+          metrics: [
+            `穩定度 ${validationHistoryStats?.passCount ?? 0}/${validationHistoryStats?.totalRecords ?? 0}`,
+            `主訊號 ${validationRecord?.signalSummary.join(" / ") || "-"}`,
+          ],
+        },
+        ...validationPeriods.map(({ key, label, period }) => {
+          const tone = getValidationPeriodSnapshot(period);
+          return {
+            key,
+            label,
+            score: period ? `${period.validation_score}/100` : "-",
+            status: tone.status,
+            accent: tone.accent,
+            surface: tone.surface,
+            border: tone.border,
+            metrics:
+              !period || period.sample_count <= 0
+                ? ["尚無足夠樣本", "先累積資料"]
+                : [
+                    `5日 ${formatSigned(period.summary.avg_return_5d)}% / 勝率 ${formatRatioPercent(period.summary.win_rate_5d)}`,
+                    `覆蓋 ${formatRatioPercent(period.coverage_rate)} / ${period.sample_count} 筆`,
+                  ],
+          };
+        }),
+      ],
+    [validationHealth, validationHistoryStats, validationPeriods, validationRecord]
+  );
 
   const toggleValidationPanel = () => {
     setShowValidationPanel((prev) => {
@@ -1927,7 +2115,7 @@ export default function Home() {
                         邏輯驗證總覽
                       </div>
                       <div style={{ color: "#9cccf9", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
-                        上半部是這套策略在歷史上的實績驗證，下半部是今天這批輸出的結構檢查。兩個一起看，才知道邏輯能不能信。
+                        先看目前狀態，再比較近20日、近60日和全樣本，就知道這套邏輯是最近變好，還是一直都有效。
                       </div>
                     </div>
 
@@ -1954,112 +2142,109 @@ export default function Home() {
                       background: historicalValidationTone?.surface || validationHealth.surface,
                       border: `1px solid ${(historicalValidationTone?.accent || validationHealth.accent)}33`,
                       marginBottom: "16px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        gap: "12px",
-                        flexDirection: isMobile ? "column" : "row",
-                        marginBottom: "14px",
                       }}
                     >
-                      <div>
-                        <div style={{ color: "#dff1ff", fontSize: "16px", fontWeight: 900, marginBottom: "6px" }}>
-                          驗證摘要
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: "12px",
+                          flexDirection: isMobile ? "column" : "row",
+                          marginBottom: "14px",
+                        }}
+                      >
+                        <div>
+                          <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
+                            目前狀態
+                          </div>
+                          <div style={{ color: validationQuickState?.accent || "#dff1ff", fontSize: "24px", fontWeight: 900, marginBottom: "6px" }}>
+                            {validationQuickState?.label || "先觀察"}
+                          </div>
+                          <div style={{ color: "#e6f0ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                            {validationQuickState?.detail || combinedValidationSummary?.summary || "目前尚無可整合的驗證摘要。"}
+                          </div>
                         </div>
-                        <div style={{ color: "#e6f0ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
-                          {combinedValidationSummary?.summary || "目前尚無可整合的驗證摘要。"}
+
+                        <div
+                          style={{
+                            minWidth: isMobile ? "100%" : "260px",
+                            padding: "12px 14px",
+                            borderRadius: "14px",
+                            background: validationQuickState?.surface || "rgba(255,255,255,0.08)",
+                            border: `1px solid ${(validationQuickState?.accent || historicalValidationTone?.accent || validationHealth.accent)}33`,
+                          }}
+                        >
+                          <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
+                            核心結論
+                          </div>
+                          <div
+                            style={{
+                              color: validationQuickState?.accent || historicalValidationTone?.accent || validationHealth.accent,
+                              fontWeight: 900,
+                              fontSize: "18px",
+                              marginBottom: "4px",
+                            }}
+                          >
+                            {strategyValidation?.full_period?.verdict || strategyValidation?.verdict || validationHealth.label}
+                          </div>
+                          <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
+                            {combinedValidationSummary?.summary || "目前尚無摘要。"}
+                          </div>
                         </div>
                       </div>
 
                       <div
                         style={{
-                          padding: "8px 12px",
-                          borderRadius: "999px",
-                          background: "rgba(255,255,255,0.08)",
-                          color: historicalValidationTone?.accent || validationHealth.accent,
-                          fontWeight: 900,
-                          fontSize: "13px",
-                          border: `1px solid ${(historicalValidationTone?.accent || validationHealth.accent)}33`,
-                          whiteSpace: "nowrap",
+                          display: "grid",
+                          gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(4, minmax(0,1fr))",
+                          gap: "10px",
+                          marginBottom: "12px",
                         }}
                       >
-                        {strategyValidation?.verdict || validationHealth.label}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(3, minmax(0,1fr))",
-                        gap: "10px",
-                        marginBottom: "12px",
-                      }}
-                    >
-                      {[
-                        {
-                          label: "今日結構",
-                          value: `${validationHealth.score}/100`,
-                          hint: validationHealth.label,
-                        },
-                        {
-                          label: "歷史驗證",
-                          value: strategyValidation ? `${strategyValidation.validation_score}/100` : "-",
-                          hint: strategyValidation?.verdict || "尚無資料",
-                        },
-                        {
-                          label: "歷史覆蓋率",
-                          value: strategyValidation ? formatRatioPercent(strategyValidation.coverage_rate) : "-",
-                          hint: strategyValidation
-                            ? `${strategyValidation.validated_stock_count}/${strategyValidation.recommendation_count} 檔`
-                            : "尚無資料",
-                        },
-                        {
-                          label: "5日平均報酬",
-                          value: strategyValidation ? `${formatSigned(strategyValidation.summary.avg_return_5d)}%` : "-",
-                          hint: strategyValidation
-                            ? `1日 ${formatSigned(strategyValidation.summary.avg_return_1d)}% / 3日 ${formatSigned(
-                                strategyValidation.summary.avg_return_3d
-                              )}%`
-                            : "尚無資料",
-                        },
-                        {
-                          label: "5日勝率",
-                          value: strategyValidation ? formatRatioPercent(strategyValidation.summary.win_rate_5d) : "-",
-                          hint: strategyValidation
-                            ? `賺賠比 ${
-                                strategyValidation.summary.payoff_ratio_5d > 0
-                                  ? strategyValidation.summary.payoff_ratio_5d.toFixed(2)
-                                  : "-"
-                              }`
-                            : "尚無資料",
-                        },
-                        {
-                          label: "最近穩定度",
-                          value: `${validationHistoryStats.passCount}/${validationHistoryStats.totalRecords}`,
-                          hint: `常見訊號 ${validationHistoryStats.topSignals.join(" / ") || "-"}`,
-                        },
-                      ].map((metric) => (
+                      {validationPeriodCards.map((metric) => (
                         <div
-                          key={metric.label}
+                          key={metric.key}
                           style={{
                             borderRadius: "14px",
                             padding: "12px",
-                            background: "rgba(255,255,255,0.04)",
-                            border: "1px solid rgba(255,255,255,0.08)",
+                            background: metric.surface,
+                            border: `1px solid ${metric.border}`,
                           }}
                         >
-                          <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
-                            {metric.label}
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: "8px",
+                              marginBottom: "8px",
+                            }}
+                          >
+                            <div style={{ color: "#dff1ff", fontSize: "12px", fontWeight: 900 }}>{metric.label}</div>
+                            <div
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                fontSize: "11px",
+                                fontWeight: 900,
+                                color: metric.accent,
+                                background: "rgba(255,255,255,0.08)",
+                                border: `1px solid ${metric.border}`,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {metric.status}
+                            </div>
                           </div>
-                          <div style={{ color: "#ffffff", fontSize: "20px", fontWeight: 900, marginBottom: "4px" }}>
-                            {metric.value}
+                          <div style={{ color: "#ffffff", fontSize: "24px", fontWeight: 900, marginBottom: "8px" }}>
+                            {metric.score}
                           </div>
-                          <div style={{ color: "#b9d7ff", fontSize: "12px", lineHeight: 1.6, fontWeight: 700 }}>
-                            {metric.hint}
+                          <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.65, fontWeight: 700 }}>
+                            {metric.metrics[0]}
+                          </div>
+                          <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.65, fontWeight: 700, marginTop: "4px" }}>
+                            {metric.metrics[1]}
                           </div>
                         </div>
                       ))}
@@ -2068,18 +2253,20 @@ export default function Home() {
                     <div
                       style={{
                         borderRadius: "14px",
-                        padding: "12px 14px",
+                        padding: "10px 12px",
                         background: "rgba(255,255,255,0.04)",
                         border: "1px solid rgba(255,255,255,0.08)",
+                        display: "grid",
+                        gap: "8px",
                       }}
                     >
-                      <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
-                        風險提醒
+                      <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900 }}>
+                        重點提醒
                       </div>
-                      <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 700 }}>
+                      <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
                         {combinedValidationSummary?.risk || "目前沒有額外提醒。"}
                       </div>
-                      <div style={{ color: "#b9d7ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "8px" }}>
+                      <div style={{ color: "#b9d7ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
                         今日主訊號：{validationRecord.signalSummary.join(" / ") || "-"}
                         {strategyValidation
                           ? ` / 強訊號：${strategyValidation.strongest_signal || "-"} / 弱訊號：${
