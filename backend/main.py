@@ -33,6 +33,12 @@ _CACHE: Dict[str, Any] = {
     "last_update": "",
     "message": "",
 }
+_RECOMMENDATION_CACHE: Dict[str, Any] = {
+    "items": None,
+    "data_date": "",
+    "last_update": "",
+    "top_n": 0,
+}
 CACHE_SECONDS = 60
 
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -1360,6 +1366,29 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
     return result
 
 
+def get_cached_recommendations(
+    stocks: List[Dict[str, Any]],
+    data_date: str,
+    last_update: str,
+    top_n: int = 10,
+) -> List[Dict[str, Any]]:
+    cached_items = _RECOMMENDATION_CACHE.get("items")
+    if (
+        isinstance(cached_items, list)
+        and _RECOMMENDATION_CACHE.get("data_date") == data_date
+        and _RECOMMENDATION_CACHE.get("last_update") == last_update
+        and _RECOMMENDATION_CACHE.get("top_n") == top_n
+    ):
+        return cached_items
+
+    items = build_recommendations(stocks, top_n=top_n)
+    _RECOMMENDATION_CACHE["items"] = items
+    _RECOMMENDATION_CACHE["data_date"] = data_date
+    _RECOMMENDATION_CACHE["last_update"] = last_update
+    _RECOMMENDATION_CACHE["top_n"] = top_n
+    return items
+
+
 # =========================
 # Business Logic
 # =========================
@@ -1633,8 +1662,20 @@ def get_stocks(
         paged = filtered[offset: offset + limit]
 
         recs = []
-        if offset == 0 and market == "all" and not q.strip():
-            recs = build_recommendations(all_stocks, top_n=10)
+        if (
+            offset == 0
+            and safe_str(market).lower() == "all"
+            and safe_str(category).lower() == "all"
+            and not q.strip()
+            and price_min <= 0
+            and price_max <= 0
+        ):
+            recs = get_cached_recommendations(
+                all_stocks,
+                data_date=result["data_date"],
+                last_update=result["last_update"],
+                top_n=10,
+            )
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
