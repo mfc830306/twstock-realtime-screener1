@@ -1119,6 +1119,44 @@ export default function Home() {
     };
   }, [strategyValidation]);
 
+  const combinedValidationSummary = useMemo(() => {
+    if (!validationRecord || !validationHealth || !validationHistoryStats) return null;
+
+    const structureGood = validationHealth.score >= 85;
+    const historicalScore = strategyValidation?.validation_score ?? 0;
+    const historyGood = Boolean(strategyValidation) && historicalScore >= 65;
+
+    let summary = "";
+    if (strategyValidation && historicalValidationTone) {
+      if (structureGood && historyGood) {
+        summary = "今天名單有照規則選，歷史驗證也偏正向，這套邏輯目前可以繼續追蹤。";
+      } else if (structureGood && !historyGood) {
+        summary = "今天名單很乾淨，但歷史驗證偏弱，代表今天選得像樣，不等於方法本身已被證明有效。";
+      } else if (!structureGood && historyGood) {
+        summary = "這套邏輯歷史上不差，但今天這批名單沒有完全照規則長出來，今天不能直接照單全收。";
+      } else {
+        summary = "今天結構與歷史驗證都不夠強，這套邏輯目前不適合提高信任度。";
+      }
+    } else {
+      summary = `今天結構分數 ${validationHealth.score}/100，但目前沒有足夠歷史資料可交叉驗證。`;
+    }
+
+    return {
+      summary,
+      risk:
+        strategyValidation?.risk_flags?.[0] ||
+        validationHighlights[0] ||
+        "目前沒有額外風險提醒。",
+    };
+  }, [
+    historicalValidationTone,
+    strategyValidation,
+    validationHealth,
+    validationHighlights,
+    validationHistoryStats,
+    validationRecord,
+  ]);
+
   const toggleValidationPanel = () => {
     setShowValidationPanel((prev) => {
       const next = !prev;
