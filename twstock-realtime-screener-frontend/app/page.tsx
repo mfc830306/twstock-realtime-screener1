@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -135,6 +135,8 @@ type StrategyValidationSummary = {
   avg_return_2d: number;
   avg_return_3d: number;
   avg_return_5d: number;
+  avg_return_10d: number;
+  avg_return_20d: number;
   median_return_5d: number;
   best_return_5d: number;
   worst_return_5d: number;
@@ -142,11 +144,23 @@ type StrategyValidationSummary = {
   win_rate_2d: number;
   win_rate_3d: number;
   win_rate_5d: number;
+  win_rate_10d: number;
+  win_rate_20d: number;
   target_hit_rate_5d: number;
   stop_hit_rate_5d: number;
+  sprint_hit_rate_5d: number;
+  trend_hit_rate_10d: number;
   avg_mfe_5d: number;
   avg_mae_5d: number;
+  avg_mfe_10d: number;
+  avg_mae_10d: number;
+  avg_mfe_20d: number;
+  avg_mae_20d: number;
+  rocket_hit_rate_20d: number;
+  strong_rocket_hit_rate_20d: number;
+  breakout_runway_20d: number;
   payoff_ratio_5d: number;
+  payoff_ratio_20d: number;
   positive_edge: boolean;
   confidence: string;
 };
@@ -156,7 +170,15 @@ type StrategyValidationSignal = {
   sample_count: number;
   avg_return_3d: number;
   avg_return_5d: number;
+  avg_return_10d: number;
+  avg_return_20d: number;
   win_rate_5d: number;
+  win_rate_10d: number;
+  win_rate_20d: number;
+  sprint_hit_rate_5d: number;
+  trend_hit_rate_10d: number;
+  rocket_hit_rate_20d: number;
+  strong_rocket_hit_rate_20d: number;
   target_hit_rate_5d: number;
   stop_hit_rate_5d: number;
   confidence: string;
@@ -171,10 +193,24 @@ type StrategyValidationStock = {
   sample_count: number;
   avg_return_5d: number;
   win_rate_5d: number;
+  avg_return_10d: number;
+  win_rate_10d: number;
+  avg_return_20d: number;
+  win_rate_20d: number;
+  sprint_hit_rate_5d: number;
+  trend_hit_rate_10d: number;
+  rocket_hit_rate_20d: number;
+  strong_rocket_hit_rate_20d: number;
+  avg_mfe_10d: number;
+  avg_mae_10d: number;
+  avg_mfe_20d: number;
+  avg_mae_20d: number;
   target_hit_rate_5d: number;
   stop_hit_rate_5d: number;
   last_signal_date: string;
   confidence: string;
+  validation_scope?: string;
+  validation_symbol_count?: number;
 };
 
 type StrategyValidationPeriod = {
@@ -190,6 +226,7 @@ type StrategyValidationPeriod = {
   summary: StrategyValidationSummary;
   risk_flags: string[];
   stocks_without_history: string[];
+  signal_pool_count?: number;
 };
 
 type StrategyValidation = {
@@ -339,7 +376,7 @@ function getConfidenceColor(confidence?: string) {
 }
 
 function getValidationVerdictStyle(verdict?: string) {
-  if (verdict === "可採信") {
+  if (verdict === "可追蹤飆股" || verdict === "可採信") {
     return {
       accent: "#7ee787",
       surface: "rgba(58, 168, 89, 0.18)",
@@ -357,6 +394,12 @@ function getValidationVerdictStyle(verdict?: string) {
       surface: "rgba(96, 165, 250, 0.16)",
     };
   }
+  if (verdict === "樣本不足") {
+    return {
+      accent: "#8fa9c9",
+      surface: "rgba(143, 169, 201, 0.16)",
+    };
+  }
   return {
     accent: "#ff9c9c",
     surface: "rgba(255, 130, 130, 0.16)",
@@ -365,7 +408,7 @@ function getValidationVerdictStyle(verdict?: string) {
 
 function getFallbackValidationPeriod(validation: StrategyValidation): StrategyValidationPeriod {
   return {
-    label: "全樣本",
+    label: `近${validation.lookback_candles}日K樣本`,
     lookback_days: null,
     recommendation_count: validation.recommendation_count,
     validated_stock_count: validation.validated_stock_count,
@@ -383,20 +426,28 @@ function getFallbackValidationPeriod(validation: StrategyValidation): StrategyVa
 function isValidationPeriodPositive(period?: StrategyValidationPeriod | null) {
   return Boolean(
     period &&
-      period.sample_count >= 8 &&
-      period.validation_score >= 65 &&
+      period.sample_count >= 12 &&
+      period.validation_score >= 63 &&
       period.summary.avg_return_5d > 0 &&
-      period.summary.win_rate_5d >= 0.55
+      period.summary.avg_return_10d > 0 &&
+      period.summary.avg_return_20d > 0 &&
+      period.summary.sprint_hit_rate_5d >= 0.15 &&
+      period.summary.trend_hit_rate_10d >= 0.12 &&
+      period.summary.rocket_hit_rate_20d >= 0.18 &&
+      period.summary.breakout_runway_20d > 0
   );
 }
 
 function isValidationPeriodWeak(period?: StrategyValidationPeriod | null) {
   if (!period) return true;
   return (
-    period.sample_count < 8 ||
+    period.sample_count < 12 ||
     period.validation_score < 50 ||
-    period.summary.avg_return_5d <= 0 ||
-    period.summary.win_rate_5d < 0.55
+    period.summary.avg_return_10d <= 0 ||
+    period.summary.sprint_hit_rate_5d < 0.1 ||
+    period.summary.trend_hit_rate_10d < 0.08 ||
+    period.summary.avg_return_20d <= 0 ||
+    period.summary.rocket_hit_rate_20d < 0.1
   );
 }
 
@@ -411,17 +462,29 @@ function getValidationPeriodSnapshot(period?: StrategyValidationPeriod | null) {
   }
 
   const verdictStyle = getValidationVerdictStyle(period.verdict);
+  if (period.verdict === "樣本不足") {
+    return {
+      status: "樣本待累積",
+      accent: "#8fa9c9",
+      surface: "rgba(143, 169, 201, 0.12)",
+      border: "rgba(143, 169, 201, 0.24)",
+    };
+  }
   if (isValidationPeriodPositive(period)) {
     return { status: "可追蹤", accent: "#7ee787", surface: "rgba(58, 168, 89, 0.14)", border: "rgba(126, 231, 135, 0.26)" };
   }
-  if (period.summary.avg_return_5d > 0 && period.summary.win_rate_5d >= 0.5) {
+  if (
+    period.summary.avg_return_10d > 0 &&
+    period.summary.trend_hit_rate_10d >= 0.1 &&
+    period.summary.rocket_hit_rate_20d >= 0.12
+  ) {
     return { status: "改善中", accent: "#ffd95f", surface: "rgba(255, 217, 95, 0.14)", border: "rgba(255, 217, 95, 0.24)" };
   }
   if (period.validation_score >= 50) {
     return { status: "觀察", accent: "#7fb6ff", surface: "rgba(96, 165, 250, 0.14)", border: "rgba(127, 182, 255, 0.24)" };
   }
   return {
-    status: "偏弱",
+    status: "飆股弱",
     accent: verdictStyle.accent,
     surface: verdictStyle.surface,
     border: `${verdictStyle.accent}33`,
@@ -1160,43 +1223,54 @@ export default function Home() {
     if (!strategyValidation) return null;
 
     const sampleCount = Number(strategyValidation.summary?.sample_count || 0);
-    const avgReturn5d = Number(strategyValidation.summary?.avg_return_5d || 0);
-    const winRate5d = Number(strategyValidation.summary?.win_rate_5d || 0);
+    const sprintHitRate5d = Number(strategyValidation.summary?.sprint_hit_rate_5d || 0);
+    const trendHitRate10d = Number(strategyValidation.summary?.trend_hit_rate_10d || 0);
+    const avgReturn20d = Number(strategyValidation.summary?.avg_return_20d || 0);
+    const rocketHitRate20d = Number(strategyValidation.summary?.rocket_hit_rate_20d || 0);
     const verdictStyle = getValidationVerdictStyle(strategyValidation.verdict);
 
-    if (strategyValidation.validation_score >= 80) {
+    if (strategyValidation.verdict === "樣本不足") {
       return {
-        label: strategyValidation.verdict || "歷史優勢成立",
-        summary: "歷史樣本、覆蓋率和報酬勝率都站得住，這代表邏輯不只是今天看起來漂亮。",
+        label: "樣本不足",
+        summary: "歷史對照還不夠厚，先把這份結果當成方向參考，不要急著當成實單系統。",
         accent: verdictStyle.accent,
         surface: verdictStyle.surface,
       };
     }
 
-    if (strategyValidation.validation_score >= 65) {
+    if (strategyValidation.validation_score >= 78) {
       return {
-        label: strategyValidation.verdict || "略有優勢",
-        summary: "歷史結果偏正向，但還沒有漂亮到可以完全放大部位，適合保守採信。",
+        label: strategyValidation.verdict || "飆股優勢成立",
+        summary: "5日急拉、10日主升、20日延續三段命中率都站得住，這套邏輯已開始具備抓波段股能力。",
         accent: verdictStyle.accent,
         surface: verdictStyle.surface,
       };
     }
 
-    if (sampleCount < 10) {
+    if (strategyValidation.validation_score >= 63) {
+      return {
+        label: strategyValidation.verdict || "略有飆股優勢",
+        summary: `5日急拉 ${formatRatioPercent(sprintHitRate5d)}、10日主升 ${formatRatioPercent(trendHitRate10d)}、20日延續 ${formatRatioPercent(rocketHitRate20d)}，已有打底但還不到可以完全放大部位的程度。`,
+        accent: verdictStyle.accent,
+        surface: verdictStyle.surface,
+      };
+    }
+
+    if (sampleCount < 12) {
       return {
         label: "樣本偏少",
-        summary: "目前有參考價值，但還不足以單靠這份驗證就完全確認邏輯優勢。",
+        summary: "目前有一些參考價值，但還不足以只靠這份飆股驗證就確認邏輯優勢。",
         accent: verdictStyle.accent,
         surface: verdictStyle.surface,
       };
     }
 
     return {
-      label: strategyValidation.verdict || "優勢未明",
+      label: strategyValidation.verdict || "飆股優勢未明",
       summary:
-        avgReturn5d > 0 || winRate5d >= 0.55
-          ? "雖然有局部亮點，但整體驗證分數還不夠高，這套邏輯仍需要保守看待。"
-          : "歷史上這套訊號沒有穩定拉開報酬與勝率，代表邏輯可能還需要再調整。",
+        avgReturn20d > 0 || trendHitRate10d >= 0.12 || rocketHitRate20d >= 0.15
+          ? "雖然有局部亮點，但整體抓飆股的驗證分數還不夠高，這套邏輯仍要保守看待。"
+          : "歷史上這套訊號沒有穩定拉開5日急拉、10日主升與20日延續的命中率，代表邏輯還需要再調整。",
       accent: verdictStyle.accent,
       surface: verdictStyle.surface,
     };
@@ -1209,7 +1283,7 @@ export default function Home() {
     return [
       { key: "recent_20d", label: "近20日", period: strategyValidation.recent_20d || null },
       { key: "recent_60d", label: "近60日", period: strategyValidation.recent_60d || null },
-      { key: "full_period", label: "全樣本", period: fullPeriod },
+      { key: "full_period", label: fullPeriod.label, period: fullPeriod },
     ];
   }, [strategyValidation]);
 
@@ -1221,36 +1295,41 @@ export default function Home() {
     const recent20 = validationPeriods.find((item) => item.key === "recent_20d")?.period || null;
     const recent60 = validationPeriods.find((item) => item.key === "recent_60d")?.period || null;
     const fullPeriod = validationPeriods.find((item) => item.key === "full_period")?.period || null;
+    const hasSampleIssue = validationPeriods.some(({ period }) => !period || period.verdict === "樣本不足" || period.sample_count <= 0);
 
     let summary = "";
     if (strategyValidation && historicalValidationTone) {
       if (structureGood && positivePeriods.length === validationPeriods.length) {
-        summary = "今天結構、近20日、近60日與全樣本驗證都站得住，這套邏輯目前可以繼續追蹤。";
+        summary = "今天結構、近20日、近60日與較長樣本的跨股票同訊號 5日急拉、10日主升、20日延續驗證都站得住，這套邏輯已接近可實戰的飆股模式。";
       } else if (structureGood && isValidationPeriodPositive(recent20) && !isValidationPeriodPositive(recent60)) {
-        summary = "今天結構很乾淨，近20日開始改善，但近60日與全樣本還沒完全跟上，因此先觀察不要直接放大。";
+        summary = "今天結構很乾淨，近20日的三段驗證已開始改善，但近60日與較長樣本還沒完全跟上，因此先觀察不要直接放大。";
+      } else if (structureGood && hasSampleIssue) {
+        summary = "今天結構很乾淨，但跨股票同訊號的歷史飆股樣本還在累積，先不要因為今天型態漂亮就直接當成可實單系統。";
       } else if (structureGood) {
-        summary = "今天結構很乾淨，但近20日、近60日與全樣本驗證還沒一致轉強，因此暫不建議直接依賴。";
+        summary = "今天結構很乾淨，但 5 / 10 / 20 日三段驗證還沒一致轉強，因此暫不建議直接依賴。";
       } else if (positivePeriods.length >= 2) {
-        summary = "近期驗證不差，但今天這批名單沒有完全照規則長出來，因此今天不能直接照單全收。";
+        summary = "歷史飆股驗證不差，但今天這批名單沒有完全照規則長出來，因此今天不能直接照單全收。";
       } else {
-        summary = "目前近20日、近60日與全樣本驗證都沒有一致拉開，因此這套邏輯暫時只能觀察。";
+        summary = "目前近20日、近60日與較長樣本的跨股票同訊號 5 / 10 / 20 日驗證都沒有一致拉開，因此這套邏輯暫時只能觀察。";
       }
     } else {
-      summary = `今天結構分數 ${validationHealth.score}/100，但歷史覆蓋仍不足，今天資訊還不完整。`;
+      summary = `今天結構分數 ${validationHealth.score}/100，但歷史飆股覆蓋仍不足，今天資訊還不完整。`;
     }
 
     const missingPeriodLabel =
-      validationPeriods.find(({ period }) => !period || period.sample_count <= 0)?.label || "";
+      validationPeriods.find(({ period }) => !period || period.sample_count <= 0 || period.verdict === "樣本不足")?.label || "";
     const weakestPeriod =
       validationPeriods.find(({ period }) => period && isValidationPeriodWeak(period))?.period || null;
 
     let directRiskMessage: string | null = null;
     if (missingPeriodLabel) {
-      directRiskMessage = `${missingPeriodLabel} 幾乎沒有可用歷史樣本，近期判讀還不完整。`;
+      directRiskMessage = `${missingPeriodLabel} 的跨股票同訊號飆股歷史樣本還不夠，先累積資料再判斷是否真的有 edge。`;
     } else if (weakestPeriod) {
-      directRiskMessage = `${weakestPeriod.label} 的 5 日平均報酬 ${formatSigned(
-        weakestPeriod.summary.avg_return_5d
-      )}% 、勝率 ${formatRatioPercent(weakestPeriod.summary.win_rate_5d)}，優勢還沒拉開。`;
+      directRiskMessage = `${weakestPeriod.label} 的 5 / 10 / 20 日命中率為 ${formatRatioPercent(
+        weakestPeriod.summary.sprint_hit_rate_5d
+      )} / ${formatRatioPercent(weakestPeriod.summary.trend_hit_rate_10d)} / ${formatRatioPercent(
+        weakestPeriod.summary.rocket_hit_rate_20d
+      )}，抓波段的優勢還沒拉開。`;
     } else if (fullPeriod?.risk_flags?.length) {
       directRiskMessage = fullPeriod.risk_flags[0];
     }
@@ -1279,20 +1358,30 @@ export default function Home() {
     const recent20 = validationPeriods.find((item) => item.key === "recent_20d")?.period || null;
     const recent60 = validationPeriods.find((item) => item.key === "recent_60d")?.period || null;
     const fullPeriod = validationPeriods.find((item) => item.key === "full_period")?.period || null;
+    const hasSampleIssue = validationPeriods.some(({ period }) => !period || period.verdict === "樣本不足" || period.sample_count <= 0);
 
     if (validationHealth.score >= 85 && validationPeriods.length > 0 && validationPeriods.every(({ period }) => isValidationPeriodPositive(period))) {
       return {
-        label: "長短期一致",
-        detail: "今天結構和歷史驗證同步站上來。",
+        label: "飆股模式成立",
+        detail: "今天結構和 5 / 10 / 20 日三段驗證同步站上來。",
         accent: "#7ee787",
         surface: "rgba(58, 168, 89, 0.14)",
       };
     }
 
+    if (validationHealth.score >= 85 && hasSampleIssue) {
+      return {
+        label: "結構好，樣本待累積",
+        detail: "今天名單乾淨，但歷史飆股樣本還不夠厚。",
+        accent: "#8fa9c9",
+        surface: "rgba(143, 169, 201, 0.14)",
+      };
+    }
+
     if (validationHealth.score >= 85 && isValidationPeriodPositive(recent20) && !isValidationPeriodPositive(recent60)) {
       return {
-        label: "近期改善中",
-        detail: "近20日轉強，但近60日和全樣本還沒完全跟上。",
+        label: "近期有飆股感",
+        detail: "近20日的急拉、主升、延續開始轉強，但近60日和較長樣本還沒完全跟上。",
         accent: "#ffd95f",
         surface: "rgba(255, 217, 95, 0.14)",
       };
@@ -1300,7 +1389,7 @@ export default function Home() {
 
     if (validationHealth.score >= 85 && !isValidationPeriodPositive(fullPeriod)) {
       return {
-        label: "今天漂亮，歷史未跟上",
+        label: "今天漂亮，飆股驗證未跟上",
         detail: "今天名單乾淨，但驗證還不足以直接照做。",
         accent: "#ff9c9c",
         surface: "rgba(255, 130, 130, 0.16)",
@@ -1309,7 +1398,7 @@ export default function Home() {
 
     return {
       label: "先觀察",
-      detail: "先看近20日和近60日有沒有持續改善。",
+      detail: "先看近20日和近60日的跨股票同訊號 5 / 10 / 20 日命中率有沒有同步改善。",
       accent: "#7fb6ff",
       surface: "rgba(96, 165, 250, 0.14)",
     };
@@ -1345,8 +1434,9 @@ export default function Home() {
               !period || period.sample_count <= 0
                 ? ["尚無足夠樣本", "先累積資料"]
                 : [
-                    `5日 ${formatSigned(period.summary.avg_return_5d)}% / 勝率 ${formatRatioPercent(period.summary.win_rate_5d)}`,
-                    `覆蓋 ${formatRatioPercent(period.coverage_rate)} / ${period.sample_count} 筆`,
+                    `5日急拉 ${formatRatioPercent(period.summary.sprint_hit_rate_5d)} / ${formatSigned(period.summary.avg_return_5d)}%`,
+                    `10日主升 ${formatRatioPercent(period.summary.trend_hit_rate_10d)} / ${formatSigned(period.summary.avg_return_10d)}%`,
+                    `20日延續 ${formatRatioPercent(period.summary.rocket_hit_rate_20d)} / ${formatSigned(period.summary.avg_return_20d)}%`,
                   ],
           };
         }),
@@ -2115,7 +2205,7 @@ export default function Home() {
                         邏輯驗證總覽
                       </div>
                       <div style={{ color: "#9cccf9", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
-                        先看目前狀態，再比較近20日、近60日和全樣本，就知道這套邏輯是最近變好，還是一直都有效。
+                        先看今天結構，再比較近20日、近60日與較長樣本的 20 日飆股命中率，就知道這套邏輯是不是正在抓到真正會噴的股票。
                       </div>
                     </div>
 
