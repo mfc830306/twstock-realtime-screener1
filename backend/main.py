@@ -4,7 +4,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from statistics import median
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,17 +50,22 @@ CACHE_SECONDS = 60
 
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 HISTORY_CACHE_HOURS = 6
-HISTORY_CACHE_MAX_SYMBOLS = 500
+HISTORY_CACHE_MAX_SYMBOLS = 400
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
 VALIDATION_FORWARD_DAYS = [1, 2, 3, 5, 10, 20]
 VALIDATION_ALLOWED_SIGNALS = {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
 VALIDATION_ALLOWED_RATINGS = {"A", "B+"}
-VALIDATION_HISTORY_CANDLES = 300
-VALIDATION_HISTORY_CALENDAR_DAYS = 500
+VALIDATION_RECENT_WINDOWS = [20, 60]
+VALIDATION_HISTORY_CANDLES = 250
+VALIDATION_HISTORY_CALENDAR_DAYS = 400
+VALIDATION_SPRINT_RETURN_5D = 8.0
+VALIDATION_TREND_RETURN_10D = 12.0
+VALIDATION_ROCKET_RETURN_20D = 15.0
+VALIDATION_STRONG_ROCKET_RETURN_20D = 20.0
 VALIDATION_MIN_HISTORY_SCORE = 30.0
-VALIDATION_POOL_PER_KEY = 24
-RECOMMENDATION_SEED_LIMIT = 220
+VALIDATION_POOL_PER_KEY = 18
+RECOMMENDATION_SEED_LIMIT = 80
 
 
 # =========================
@@ -171,22 +176,6 @@ def resolve_cert_path() -> Optional[str]:
     return None
 
 
-def is_market_open_now() -> bool:
-    now = now_taipei()
-    if now.weekday() >= 5:
-        return False
-    minutes = now.hour * 60 + now.minute
-    return 9 * 60 <= minutes <= 13 * 60 + 30
-
-
-def is_after_close_now() -> bool:
-    now = now_taipei()
-    if now.weekday() >= 5:
-        return False
-    minutes = now.hour * 60 + now.minute
-    return minutes > 13 * 60 + 30
-
-
 def get_market_status_text() -> str:
     now = now_taipei()
     if now.weekday() >= 5:
@@ -250,7 +239,7 @@ def parse_range_mid(text: str, fallback: float = 0.0) -> float:
     txt = safe_str(text)
     if not txt:
         return fallback
-    txt = txt.replace("突破", "").replace("後再評估", "").replace("等拉回後再評估", "").strip()
+    txt = txt.replace("突破", "").replace("後再評估", "").strip()
     parts = [p.strip() for p in txt.split("~")]
     nums = []
     for p in parts:
@@ -267,7 +256,7 @@ def parse_range_bounds(text: str, fallback: float = 0.0) -> Tuple[float, float]:
     txt = safe_str(text)
     if not txt:
         return fallback, fallback
-    txt = txt.replace("突破", "").replace("後再評估", "").replace("等拉回後再評估", "").strip()
+    txt = txt.replace("突破", "").replace("後再評估", "").strip()
     parts = [p.strip() for p in txt.split("~")]
     nums: List[float] = []
     for p in parts:
@@ -481,12 +470,12 @@ def build_signal_and_reason(
             ),
         }
 
-    if -0.6 <= change_percent <= 2.2 and 0.42 <= close_position <= 0.76 and amplitude_pct <= 4.6:
+    if 0.3 <= change_percent <= 3.2 and 0.42 <= close_position <= 0.74 and amplitude_pct <= 4.8:
         return {
             "signal": "整理待發",
             "reason": (
-                f"今日漲跌幅 {change_percent:+.2f}%，振幅 {amplitude_pct:.2f}%，"
-                "價格仍在整理可攻擊區，尚未出現過熱追價，屬等待下一次量價表態型。"
+                f"今日小幅墊高 {change_percent:.2f}%，振幅 {amplitude_pct:.2f}%，"
+                "價格仍在可攻擊區而非情緒高點，屬整理後準備表態型。"
             ),
         }
 
@@ -499,7 +488,7 @@ def build_signal_and_reason(
             ),
         }
 
-    if price > open_price and -0.2 <= change_percent <= 3.6 and 0.45 <= close_position <= 0.8:
+    if price > open_price and 0.4 <= change_percent <= 3.8 and 0.45 <= close_position <= 0.8:
         return {
             "signal": "穩步走高",
             "reason": (
@@ -560,14 +549,14 @@ def enrich_reason_with_context(
 
     if change_percent >= 5:
         extra.append("單日漲幅過大，較不利 2~4 天低風險切入")
-    elif 0.3 <= change_percent <= 4:
+    elif 0.8 <= change_percent <= 4:
         extra.append("漲幅屬合理動能區，較符合潛力股模型")
 
     if volume >= 30000:
         extra.append("量能過大，需小心已經成為市場熱門追價股")
     elif 5000 <= volume <= 20000:
         extra.append("量能活絡但未失控，屬較健康的短線放量")
-    elif volume < 1500:
+    elif volume < 2000:
         extra.append("量能仍偏低，後續續攻力道需再確認")
 
     if amplitude_pct >= 6:
@@ -598,7 +587,7 @@ def build_trade_plan(
         entry_low = max(price - base_buffer, 0.01)
         entry_high = price
         target_low = price * 1.03
-        target_high = price * 1.08
+        target_high = price * 1.07
         stop = max(price - wider_buffer, 0.01)
         return {
             "entry_price": format_price_range(entry_low, entry_high),
@@ -749,6 +738,71 @@ def set_history_cache(symbol: str, data: Dict[str, Any]) -> None:
         _HISTORY_CACHE.pop(cache_key, None)
 
 
+def overlay_snapshot_on_candles(
+    candles: List[Dict[str, Any]],
+    base_stock: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], float]:
+    if not candles:
+        return [], 0.0
+
+    merged = [dict(x) for x in candles]
+    snapshot_price = safe_float(base_stock.get("price"))
+    snapshot_volume = safe_int(base_stock.get("volume"))
+    snapshot_prev_close = safe_float(base_stock.get("prev_close"))
+    snapshot_open = safe_float(base_stock.get("open"))
+    snapshot_high = safe_float(base_stock.get("high"))
+    snapshot_low = safe_float(base_stock.get("low"))
+    snapshot_date_key = normalize_date_key(base_stock.get("update_time")) or now_taipei().strftime("%Y%m%d")
+    last_candle_date_key = normalize_date_key(merged[-1].get("date"))
+
+    if snapshot_price <= 0:
+        prev_close = snapshot_prev_close
+        if prev_close <= 0 and len(merged) >= 2:
+            prev_close = safe_float(merged[-2].get("close"))
+        elif prev_close <= 0:
+            prev_close = safe_float(merged[-1].get("close"))
+        return merged, prev_close
+
+    if snapshot_date_key and last_candle_date_key and snapshot_date_key > last_candle_date_key:
+        prev_close = snapshot_prev_close if snapshot_prev_close > 0 else safe_float(merged[-1].get("close"))
+        open_price = snapshot_open if snapshot_open > 0 else prev_close
+        high_price = max([x for x in [snapshot_high, snapshot_price, open_price] if x > 0], default=snapshot_price)
+        low_price = positive_min([snapshot_low, snapshot_price, open_price], min(snapshot_price, open_price))
+        merged.append({
+            "date": snapshot_date_key,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": snapshot_price,
+            "volume": snapshot_volume if snapshot_volume > 0 else safe_int(merged[-1].get("volume")),
+            "change": round(snapshot_price - prev_close, 2) if prev_close > 0 else 0.0,
+        })
+        return merged, prev_close
+
+    current = dict(merged[-1])
+    prev_close = snapshot_prev_close if snapshot_prev_close > 0 else (
+        safe_float(merged[-2].get("close")) if len(merged) >= 2 else safe_float(current.get("close"))
+    )
+    current_open = snapshot_open if snapshot_open > 0 else safe_float(current.get("open"))
+    current_high = max(
+        [x for x in [safe_float(current.get("high")), snapshot_high, snapshot_price, current_open] if x > 0],
+        default=snapshot_price,
+    )
+    current_low = positive_min(
+        [safe_float(current.get("low")), snapshot_low, snapshot_price, current_open],
+        min(snapshot_price, current_open if current_open > 0 else snapshot_price),
+    )
+    current["open"] = current_open if current_open > 0 else snapshot_price
+    current["high"] = current_high
+    current["low"] = current_low
+    current["close"] = snapshot_price
+    if snapshot_volume > 0:
+        current["volume"] = snapshot_volume
+    current["change"] = round(snapshot_price - prev_close, 2) if prev_close > 0 else safe_float(current.get("change"))
+    merged[-1] = current
+    return merged, prev_close
+
+
 def ema(values: List[float], period: int) -> List[float]:
     if not values:
         return []
@@ -804,26 +858,6 @@ def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
     return avg(trs[-period:]) if trs else 0.0
 
 
-def calc_std(values: List[float]) -> float:
-    if not values:
-        return 0.0
-    mean = avg(values)
-    return math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
-
-
-def calc_range_pct(candles: List[Dict[str, Any]]) -> float:
-    if not candles:
-        return 0.0
-    high = max(safe_float(x.get("high")) for x in candles)
-    low = min(safe_float(x.get("low")) for x in candles)
-    ref = safe_float(candles[-1].get("close"))
-    if ref <= 0:
-        ref = high
-    if ref <= 0:
-        return 0.0
-    return ((high - low) / ref) * 100
-
-
 def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
     cached = get_history_cache(symbol)
     if cached:
@@ -858,235 +892,92 @@ def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
     return data
 
 
-def build_live_today_candle(base_stock: Dict[str, Any], fallback_prev_close: float) -> Optional[Dict[str, Any]]:
-    price = safe_float(base_stock.get("price"))
-    if price <= 0:
-        return None
-
-    open_price = safe_float(base_stock.get("open"))
-    high_price = safe_float(base_stock.get("high"))
-    low_price = safe_float(base_stock.get("low"))
-    volume = safe_int(base_stock.get("volume"))
-    update_time = safe_str(base_stock.get("update_time"))
-    date_key = normalize_date_key(update_time) or now_taipei().strftime("%Y%m%d")
-    prev_close = safe_float(base_stock.get("prev_close")) or fallback_prev_close
-
-    if open_price <= 0:
-        open_price = prev_close if prev_close > 0 else price
-    if high_price <= 0:
-        high_price = max(price, open_price)
-    if low_price <= 0:
-        low_price = min(price, open_price)
-
-    return {
-        "date": date_key,
-        "open": open_price,
-        "high": max(high_price, price, open_price),
-        "low": positive_min([low_price, price, open_price], min(price, open_price)),
-        "close": price,
-        "volume": volume,
-        "change": round(price - prev_close, 2) if prev_close > 0 else 0.0,
-    }
-
-
-def prepare_analysis_context(
-    candles: List[Dict[str, Any]],
-    base_stock: Dict[str, Any],
-    include_today_for_indicators: bool,
-) -> Dict[str, Any]:
-    """
-    核心修正：
-    - 盤中：指標只用昨日以前完整日K，今天 snapshot 只拿來做觸發判斷
-    - 收盤後：可把今天視為完整資料併入指標
-    """
-    if len(candles) < 35:
-        return {
-            "analysis_candles": candles,
-            "indicator_candles": candles,
-            "current_candle": candles[-1] if candles else {},
-            "previous_close": 0.0,
-            "using_live_today": False,
-        }
-
-    history_candles = [dict(x) for x in candles]
-    last_history_close = safe_float(history_candles[-1].get("close"))
-    live_today = build_live_today_candle(base_stock, fallback_prev_close=last_history_close)
-    last_history_date = normalize_date_key(history_candles[-1].get("date"))
-    live_date = normalize_date_key(live_today.get("date")) if live_today else ""
-    using_live_today = False
-
-    analysis_candles = [dict(x) for x in history_candles]
-    indicator_candles = [dict(x) for x in history_candles]
-    current_candle = history_candles[-1]
-    previous_close = safe_float(history_candles[-2].get("close")) if len(history_candles) >= 2 else last_history_close
-
-    if live_today and live_date:
-        if live_date > last_history_date:
-            using_live_today = True
-            analysis_candles.append(live_today)
-            current_candle = live_today
-            previous_close = last_history_close
-            if include_today_for_indicators:
-                indicator_candles.append(live_today)
-        elif live_date == last_history_date:
-            using_live_today = True
-            merged = dict(history_candles[-1])
-            merged["open"] = safe_float(live_today.get("open")) or safe_float(merged.get("open"))
-            merged["high"] = max(
-                safe_float(merged.get("high")),
-                safe_float(live_today.get("high")),
-                safe_float(live_today.get("close")),
-            )
-            merged["low"] = positive_min(
-                [safe_float(merged.get("low")), safe_float(live_today.get("low")), safe_float(live_today.get("close"))],
-                safe_float(merged.get("low")) or safe_float(live_today.get("close")),
-            )
-            merged["close"] = safe_float(live_today.get("close")) or safe_float(merged.get("close"))
-            if safe_int(live_today.get("volume")) > 0:
-                merged["volume"] = safe_int(live_today.get("volume"))
-            analysis_candles[-1] = merged
-            current_candle = merged
-            previous_close = safe_float(history_candles[-2].get("close")) if len(history_candles) >= 2 else last_history_close
-            if include_today_for_indicators:
-                indicator_candles[-1] = dict(merged)
-
-    return {
-        "analysis_candles": analysis_candles,
-        "indicator_candles": indicator_candles,
-        "current_candle": current_candle,
-        "previous_close": previous_close,
-        "using_live_today": using_live_today,
-    }
-
-
 def classify_daily_pattern(
     close_now: float,
     prev_close: float,
     ma5: float,
     ma10: float,
     ma20: float,
-    ma20_prev: float,
     high20: float,
     low20: float,
     vol_ratio5: float,
-    avg_vol5: float,
-    avg_vol20: float,
     rsi14: float,
     macd_hist: float,
-    range5_pct: float,
-    range20_pct: float,
-    atr14: float,
-) -> Dict[str, Any]:
+) -> Dict[str, str]:
     day_change_pct = ((close_now - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
     distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 999.0
-    distance_from_low20 = ((close_now - low20) / low20 * 100) if low20 > 0 else 999.0
-    ma20_slope_pct = ((ma20 - ma20_prev) / ma20_prev * 100) if ma20_prev > 0 else 0.0
-
     above_ma20 = close_now > ma20
+    ma5_turn_up = ma5 >= ma10
+    ma10_support = ma10 >= ma20
     close_above_ma5 = close_now >= ma5
-    short_ma_ok = ma5 >= ma10 * 0.992
-    mid_ma_ok = ma10 >= ma20 * 0.985
-    range_contraction = (range20_pct > 0 and range5_pct / range20_pct <= 0.72)
+    healthy_momentum = 0.2 <= day_change_pct <= 5.0
+    healthy_volume = 0.95 <= vol_ratio5 <= 3.2
+    healthy_rsi = 48 <= rsi14 <= 70
 
-    breakout_score = 0.0
-    breakout_score += score_band(day_change_pct, 0.1, 4.8, 1.6, 14)
-    breakout_score += score_band(vol_ratio5, 0.9, 2.8, 1.45, 18)
-    breakout_score += score_band(distance_to_high20, 0.8, 9.0, 2.8, 20)
-    breakout_score += score_band(rsi14, 48, 70, 58, 12)
-    breakout_score += 10 if above_ma20 else 0
-    breakout_score += 8 if short_ma_ok else 0
-    breakout_score += 8 if mid_ma_ok else 0
-    breakout_score += 6 if close_above_ma5 else 0
-    breakout_score += 6 if macd_hist >= -0.03 else 0
-    breakout_score -= 12 if day_change_pct >= 5.4 else 0
-    breakout_score -= 10 if vol_ratio5 >= 3.2 else 0
-
-    bottom_score = 0.0
-    bottom_score += score_band(day_change_pct, -0.4, 3.5, 1.1, 16)
-    bottom_score += score_band(vol_ratio5, 0.8, 2.4, 1.25, 16)
-    bottom_score += score_band(distance_from_low20, 3.0, 20.0, 9.0, 14)
-    bottom_score += score_band(distance_to_high20, 4.0, 18.0, 9.0, 10)
-    bottom_score += score_band(rsi14, 44, 64, 53, 10)
-    bottom_score += 8 if close_now >= ma20 * 0.995 else 0
-    bottom_score += 8 if ma20_slope_pct >= -0.4 else 0
-    bottom_score += 6 if short_ma_ok else 0
-    bottom_score += 6 if macd_hist >= -0.08 else 0
-    bottom_score += 6 if range_contraction else 0
-    bottom_score -= 12 if day_change_pct >= 4.6 else 0
-    bottom_score -= 10 if distance_to_high20 <= 2.0 else 0
-
-    squeeze_score = 0.0
-    squeeze_score += score_band(day_change_pct, -0.8, 2.5, 0.8, 10)
-    squeeze_score += score_band(vol_ratio5, 0.6, 1.8, 0.95, 10)
-    squeeze_score += score_band(distance_to_high20, 2.0, 14.0, 6.5, 14)
-    squeeze_score += score_band(rsi14, 42, 62, 52, 10)
-    squeeze_score += score_band(range5_pct, 1.0, 8.0, 3.0, 12)
-    squeeze_score += 10 if range_contraction else 0
-    squeeze_score += 8 if close_now >= ma20 * 0.99 else 0
-    squeeze_score += 6 if ma20_slope_pct >= -0.2 else 0
-    squeeze_score += 6 if avg_vol5 <= avg_vol20 * 0.95 else 0
-    squeeze_score += 6 if macd_hist >= -0.08 else 0
-    squeeze_score -= 8 if day_change_pct >= 4.2 else 0
-
-    pullback_score = 0.0
-    pullback_score += score_band(day_change_pct, -1.2, 3.5, 0.9, 14)
-    pullback_score += score_band(vol_ratio5, 0.8, 2.6, 1.2, 14)
-    pullback_score += score_band(distance_to_high20, 1.0, 10.0, 4.0, 14)
-    pullback_score += score_band(rsi14, 46, 68, 55, 10)
-    pullback_score += 10 if above_ma20 else 0
-    pullback_score += 8 if close_now >= ma10 * 0.995 else 0
-    pullback_score += 8 if ma5 >= ma20 else 0
-    pullback_score += 6 if macd_hist >= -0.04 else 0
-    pullback_score += 6 if atr14 > 0 and (atr14 / max(close_now, 0.01)) * 100 <= 4.2 else 0
-    pullback_score -= 10 if day_change_pct >= 5.0 else 0
-
-    model_scores = {
-        "breakout_setup": round(max(breakout_score, 0.0), 2),
-        "bottom_reversal": round(max(bottom_score, 0.0), 2),
-        "squeeze_setup": round(max(squeeze_score, 0.0), 2),
-        "trend_pullback": round(max(pullback_score, 0.0), 2),
-    }
-
-    best_model = max(model_scores.items(), key=lambda x: x[1])[0]
-    best_score = model_scores[best_model]
-
-    if best_model == "breakout_setup":
+    if (
+        above_ma20
+        and ma5_turn_up
+        and (ma10_support or close_now >= ma10 * 0.985)
+        and close_above_ma5
+        and healthy_momentum
+        and healthy_volume
+        and healthy_rsi
+        and 0.0 <= distance_to_high20 <= 6.0
+        and macd_hist >= -0.05
+    ):
         return {
             "signal": "突破前夕",
             "trend_type": "短線潛力最強",
-            "pattern": "靠近區間高點但尚未過熱，量能溫和放大，結構偏向突破前夕",
-            "model_scores": model_scores,
-            "best_model": best_model,
-            "model_score": best_score,
+            "pattern": "站上中期均線、量增靠近波段高點，且短均線結構完整",
         }
 
-    if best_model == "bottom_reversal":
+    if (
+        above_ma20
+        and ma5_turn_up
+        and close_above_ma5
+        and -0.2 <= day_change_pct <= 4.6
+        and 0.9 <= vol_ratio5 <= 3.0
+        and 46 <= rsi14 <= 70
+        and macd_hist >= -0.08
+    ):
         return {
-            "signal": "溫和轉強",
-            "trend_type": "底部轉強",
-            "pattern": "整理後重回中期均線附近，量價轉佳，偏向底部轉強型",
-            "model_scores": model_scores,
-            "best_model": best_model,
-            "model_score": best_score,
+            "signal": "量增轉強",
+            "trend_type": "短線準備發動",
+            "pattern": "價格轉強、量能溫和放大，短線結構開始成形",
         }
 
-    if best_model == "squeeze_setup":
+    if (
+        above_ma20
+        and ma5 >= ma20
+        and 0.8 <= distance_to_high20 <= 8.0
+        and 0.75 <= vol_ratio5 <= 1.6
+        and 45 <= rsi14 <= 64
+        and macd_hist >= -0.08
+    ):
         return {
             "signal": "整理待發",
-            "trend_type": "量縮待噴",
-            "pattern": "波動與量能同步收斂，價格未破壞結構，偏向量縮整理待噴型",
-            "model_scores": model_scores,
-            "best_model": best_model,
-            "model_score": best_score,
+            "trend_type": "整理後可攻",
+            "pattern": "整理靠近壓力區，尚未過熱，等待放量突破",
+        }
+
+    if close_now > ma20 and ma5 >= ma20 and close_now >= ma5 and rsi14 >= 48 and macd_hist >= -0.03:
+        return {
+            "signal": "溫和轉強",
+            "trend_type": "趨勢改善",
+            "pattern": "重回中期均線之上，結構改善但尚未進入最強型",
+        }
+
+    if close_now < ma20 or (ma5 < ma10 < ma20) or rsi14 < 45:
+        return {
+            "signal": "偏弱觀察",
+            "trend_type": "暫不列入主攻",
+            "pattern": "仍未完成轉強，較接近弱勢反彈或空頭整理",
         }
 
     return {
-        "signal": "量增轉強",
-        "trend_type": "強勢回檔再攻",
-        "pattern": "主趨勢仍在，回檔後重新轉強，偏向強勢整理後再攻型",
-        "model_scores": model_scores,
-        "best_model": best_model,
-        "model_score": best_score,
+        "signal": "中性觀察",
+        "trend_type": "等待確認",
+        "pattern": "方向尚未完全明朗",
     }
 
 
@@ -1102,9 +993,10 @@ def build_historical_reason(
     vol_now: int,
     avg_vol5: float,
     rsi14: float,
+    macd_line: float,
+    signal_line: float,
     macd_hist: float,
     pattern_text: str,
-    live_mode_note: str,
 ) -> str:
     day_change_pct = ((close_now - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
     distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 0.0
@@ -1117,8 +1009,7 @@ def build_historical_reason(
         f" 目前 5 日量比 {vol_ratio5:.2f} 倍，RSI {rsi14:.1f}，MACD Hist {macd_hist:.3f}。"
         f" 股價距離 20 日高點約 {distance_to_high20:.2f}%，近 20 日區間為 "
         f"{format_price_value(low20)} ~ {format_price_value(high20)}。"
-        f" 綜合判斷屬「{pattern_text}」，較偏向 2~5 天內可能延續轉強的準備型結構。"
-        f"{live_mode_note}"
+        f" 綜合判斷屬「{pattern_text}」，較偏向 2~4 天內可能續強的準備型結構，而非已經爆衝末端。"
     )
 
 
@@ -1149,7 +1040,6 @@ def build_historical_technical_comment(
 def build_historical_trade_plan(
     price: float,
     ma5: float,
-    ma10: float,
     ma20: float,
     high20: float,
     low20: float,
@@ -1162,35 +1052,11 @@ def build_historical_trade_plan(
     buffer_small = max(atr14 * 0.6, price * 0.012, 0.3)
     buffer_large = max(atr14 * 1.0, price * 0.025, 0.5)
 
-    if signal == "突破前夕":
-        support = max(min(ma5, price), ma10, ma20)
-        return {
-            "entry_price": format_price_range(max(support, price - buffer_large), price),
-            "target_price": format_price_range(max(price * 1.04, high20), max(price * 1.09, high20 + buffer_small)),
-            "stop_loss": format_price_value(max(ma10 - buffer_small, 0.01)),
-        }
-
-    if signal == "量增轉強":
-        support = max(min(ma10, price), ma20)
-        return {
-            "entry_price": format_price_range(max(support, price - buffer_large), price),
-            "target_price": format_price_range(max(price * 1.04, high20 * 1.01), max(price * 1.08, high20 * 1.04)),
-            "stop_loss": format_price_value(max(ma20 - buffer_small, 0.01)),
-        }
-
-    if signal == "整理待發":
-        support = max(ma20, low20)
+    if signal in {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}:
+        support = max(min(ma5, price), ma20, low20)
         return {
             "entry_price": format_price_range(max(support, price - buffer_large), price),
             "target_price": format_price_range(max(price * 1.03, high20), max(price * 1.07, high20 + buffer_small)),
-            "stop_loss": format_price_value(max(support - buffer_small, 0.01)),
-        }
-
-    if signal == "溫和轉強":
-        support = max(ma20, low20)
-        return {
-            "entry_price": format_price_range(max(support, price - buffer_large), price),
-            "target_price": format_price_range(max(price * 1.04, ma5), max(price * 1.08, high20)),
             "stop_loss": format_price_value(max(support - buffer_small, 0.01)),
         }
 
@@ -1206,7 +1072,7 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
         return {
             "operation_rating": "A",
             "operation_bias": "偏多卡位",
-            "operation_style": "2~5天主攻",
+            "operation_style": "2~4天主攻",
             "strategy_action": "優先找回測不破或隔日量穩續強切入，不追單日急拉。",
             "risk_note": "若次日直接爆量長紅，代表追價溫度升高，應縮小部位避免買在短線高潮。",
         }
@@ -1217,6 +1083,14 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "operation_style": "等突破",
             "strategy_action": "等待量增突破或回測守住 MA20 後進場。",
             "risk_note": "若量能遲遲不出來，容易繼續橫盤拖時間。",
+        }
+    if signal in {"偏弱觀察"}:
+        return {
+            "operation_rating": "D",
+            "operation_bias": "保守",
+            "operation_style": "先不主攻",
+            "strategy_action": "先等站回 MA20 與量能回升再看。",
+            "risk_note": "弱勢股不適合拿來做 2~4 天主攻。",
         }
     return {
         "operation_rating": "C",
@@ -1239,8 +1113,6 @@ def calc_potential_recommendation_score(
     avg_vol5: float,
     rsi14: float,
     macd_hist: float,
-    model_score: float,
-    signal: str,
 ) -> float:
     if prev_close <= 0 or close_now <= 0:
         return 0.0
@@ -1250,42 +1122,38 @@ def calc_potential_recommendation_score(
     distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 99.0
 
     score = 0.0
-    score += score_band(day_change_pct, -0.4, 4.8, 1.2, 18)
-    score += score_band(vol_ratio5, 0.7, 2.8, 1.3, 18)
-    score += score_band(rsi14, 44, 70, 56, 12)
-    score += score_band(distance_to_high20, 1.0, 14.0, 4.5, 12)
-    score += model_score * 0.42
+    score += score_band(day_change_pct, 0.3, 5.0, 2.0, 22)
+    score += score_band(vol_ratio5, 0.95, 3.0, 1.6, 24)
+    score += score_band(rsi14, 46, 71, 57, 16)
+    score += score_band(distance_to_high20, 0.8, 8.0, 2.6, 22)
 
     if close_now > ma20:
-        score += 10
+        score += 12
     if ma5 >= ma10:
-        score += 6
+        score += 8
     if ma10 >= ma20:
         score += 6
     if close_now >= ma5:
         score += 4
-    if macd_hist >= -0.03:
-        score += 6
+    if macd_hist >= 0:
+        score += 8
 
-    if signal == "突破前夕":
-        score += 6
-    elif signal == "量增轉強":
-        score += 5
-    elif signal == "整理待發":
-        score += 4
-    elif signal == "溫和轉強":
-        score += 4
-
-    if day_change_pct >= 6.0:
-        score -= 18
-    if vol_ratio5 >= 3.5:
-        score -= 16
+    if close_now < ma20:
+        score -= 15
+    if close_now < ma5:
+        score -= 6
+    if ma5 < ma10 < ma20:
+        score -= 12
+    if close_now < low20 * 1.03:
+        score -= 10
+    if day_change_pct >= 5.2:
+        score -= 15
+    if vol_ratio5 >= 3.0:
+        score -= 12
     if rsi14 >= 72:
         score -= 10
-    if distance_to_high20 < 0.3:
-        score -= 5
-    if close_now < ma20:
-        score -= 12
+    if distance_to_high20 < 0.5:
+        score -= 6
 
     return round(max(score, 0.0), 2)
 
@@ -1298,82 +1166,49 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
 
         data = fetch_symbol_daily_candles(symbol)
         candles = data.get("candles", [])
-        if len(candles) < 60:
+        if len(candles) < 35:
             return base_stock
 
-        include_today_for_indicators = is_after_close_now()
-        context = prepare_analysis_context(
-            candles=candles,
-            base_stock=base_stock,
-            include_today_for_indicators=include_today_for_indicators,
+        analysis_candles, prev_close = overlay_snapshot_on_candles(candles, base_stock)
+        if len(analysis_candles) < 35:
+            return base_stock
+
+        closes = [safe_float(x.get("close")) for x in analysis_candles]
+        volumes = [safe_int(x.get("volume")) for x in analysis_candles]
+        close_now = closes[-1]
+        vol_now = volumes[-1]
+        snapshot_price = safe_float(base_stock.get("price"))
+        snapshot_volume = safe_int(base_stock.get("volume"))
+        snapshot_recommendation_score = safe_float(
+            base_stock.get("snapshot_recommendation_score")
+            or base_stock.get("recommendation_score")
+            or base_stock.get("score")
         )
-        analysis_candles = context["analysis_candles"]
-        indicator_candles = context["indicator_candles"]
-        current_candle = context["current_candle"]
-        prev_close = safe_float(context["previous_close"])
-        using_live_today = bool(context["using_live_today"])
 
-        if len(indicator_candles) < 35 or not current_candle:
-            return base_stock
-
-        closes = [safe_float(x.get("close")) for x in indicator_candles]
-        volumes = [safe_int(x.get("volume")) for x in indicator_candles]
-
-        close_now = safe_float(current_candle.get("close"))
-        vol_now = safe_int(current_candle.get("volume"))
-        if close_now <= 0:
-            return base_stock
-
-        prev_closes = closes[:-1] if len(closes) >= 2 else closes
-        prev_volumes = volumes[:-1] if len(volumes) >= 2 else volumes
-        if len(prev_closes) < 20 or len(prev_volumes) < 20:
-            return base_stock
-
-        ma5 = avg(prev_closes[-5:])
-        ma10 = avg(prev_closes[-10:])
-        ma20 = avg(prev_closes[-20:])
-        ma20_prev = avg(prev_closes[-21:-1]) if len(prev_closes) >= 21 else ma20
-        avg_vol5 = avg(prev_volumes[-5:])
-        avg_vol20 = avg(prev_volumes[-20:])
-
-        recent_analysis_20 = analysis_candles[-20:]
-        high20 = max(safe_float(x.get("high")) for x in recent_analysis_20)
-        low20 = min(safe_float(x.get("low")) for x in recent_analysis_20)
-
-        rsi14 = calc_rsi(closes[:-1] + [close_now], 14)
-        macd_line, signal_line, macd_hist = calc_macd(closes[:-1] + [close_now])
-
-        atr_candles = indicator_candles[:-1] + [current_candle]
-        atr14 = calc_atr(atr_candles, 14)
+        ma5 = avg(closes[-5:])
+        ma10 = avg(closes[-10:])
+        ma20 = avg(closes[-20:])
+        avg_vol5 = avg(volumes[-5:])
+        avg_vol20 = avg(volumes[-20:])
+        high20 = max(safe_float(x.get("high")) for x in analysis_candles[-20:])
+        low20 = min(safe_float(x.get("low")) for x in analysis_candles[-20:])
+        rsi14 = calc_rsi(closes, 14)
+        macd_line, signal_line, macd_hist = calc_macd(closes)
+        atr14 = calc_atr(analysis_candles, 14)
 
         vol_ratio5 = (vol_now / avg_vol5) if avg_vol5 > 0 else 1.0
-        range5_pct = calc_range_pct(analysis_candles[-5:])
-        range20_pct = calc_range_pct(analysis_candles[-20:])
-
         pattern_info = classify_daily_pattern(
             close_now=close_now,
             prev_close=prev_close,
             ma5=ma5,
             ma10=ma10,
             ma20=ma20,
-            ma20_prev=ma20_prev,
             high20=high20,
             low20=low20,
             vol_ratio5=vol_ratio5,
-            avg_vol5=avg_vol5,
-            avg_vol20=avg_vol20,
             rsi14=rsi14,
             macd_hist=macd_hist,
-            range5_pct=range5_pct,
-            range20_pct=range20_pct,
-            atr14=atr14,
         )
-
-        live_mode_note = ""
-        if using_live_today and not include_today_for_indicators:
-            live_mode_note = " 盤中模式下，均線 / RSI / MACD 以昨日完整日K為基準，今日即時價只用於觸發與位置判斷。"
-        elif using_live_today and include_today_for_indicators:
-            live_mode_note = " 今日已收盤，技術指標已納入當日完整行情。"
 
         reason = build_historical_reason(
             name=safe_str(base_stock.get("name")),
@@ -1387,9 +1222,10 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             vol_now=vol_now,
             avg_vol5=avg_vol5,
             rsi14=rsi14,
+            macd_line=macd_line,
+            signal_line=signal_line,
             macd_hist=macd_hist,
             pattern_text=pattern_info["pattern"],
-            live_mode_note=live_mode_note,
         )
         technical_comment = build_historical_technical_comment(
             ma5=ma5,
@@ -1408,7 +1244,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         plan = build_historical_trade_plan(
             price=close_now,
             ma5=ma5,
-            ma10=ma10,
             ma20=ma20,
             high20=high20,
             low20=low20,
@@ -1417,12 +1252,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         )
         strategy = build_historical_strategy(pattern_info["signal"])
         risk_reward = calc_risk_reward(plan["entry_price"], plan["target_price"], plan["stop_loss"])
-
-        snapshot_recommendation_score = safe_float(
-            base_stock.get("snapshot_recommendation_score")
-            or base_stock.get("recommendation_score")
-            or base_stock.get("score")
-        )
 
         recommendation_score = calc_potential_recommendation_score(
             close_now=close_now,
@@ -1436,8 +1265,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             avg_vol5=avg_vol5,
             rsi14=rsi14,
             macd_hist=macd_hist,
-            model_score=safe_float(pattern_info.get("model_score")),
-            signal=pattern_info["signal"],
         )
 
         merged = dict(base_stock)
@@ -1460,9 +1287,7 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "snapshot_recommendation_score": snapshot_recommendation_score,
             "score": recommendation_score,
             "analysis_source": "historical_k",
-            "analysis_basis": "aligned_market_phase",
-            "model_score": pattern_info.get("model_score", 0),
-            "best_model": pattern_info.get("best_model", ""),
+            "analysis_basis": "realtime_overlay",
         })
         merged["price"] = round(close_now, 2)
         merged["volume"] = vol_now
@@ -1474,9 +1299,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         return base_stock
 
 
-# =========================
-# Validation
-# =========================
 def summarize_validation_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     returns_map: Dict[int, List[float]] = {day: [] for day in VALIDATION_FORWARD_DAYS}
     mfe_5d_values: List[float] = []
@@ -1557,7 +1379,7 @@ def summarize_validation_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any
     breakout_runway_20d = round(avg_mfe_20d - abs(avg_mae_20d), 2)
 
     positive_edge = (
-        sample_count >= 30
+        sample_count >= 12
         and avg_return_5d > 0
         and avg_return_10d > 0
         and avg_return_20d > 0
@@ -1568,9 +1390,9 @@ def summarize_validation_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any
         and breakout_runway_20d > 0
     )
 
-    if sample_count >= 80:
+    if sample_count >= 40:
         confidence = "高"
-    elif sample_count >= 35:
+    elif sample_count >= 20:
         confidence = "中"
     else:
         confidence = "低"
@@ -1656,108 +1478,77 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
     data = fetch_symbol_daily_candles(symbol)
     candles = data.get("candles", [])
     max_forward = max(VALIDATION_FORWARD_DAYS)
-    if len(candles) < 60 + max_forward:
+    if len(candles) < 35 + max_forward:
         return {"stock_item": stock_item, "samples": []}
 
+    closes = [safe_float(x.get("close")) for x in candles]
+    volumes = [safe_int(x.get("volume")) for x in candles]
     samples: List[Dict[str, Any]] = []
     last_signal_date = ""
 
-    for idx in range(40, len(candles) - max_forward - 1):
-        history_up_to_signal = candles[: idx + 1]
-        if len(history_up_to_signal) < 40:
-            continue
+    for idx in range(34, len(candles) - max_forward):
+        close_now = closes[idx]
+        prev_close = closes[idx - 1]
+        vol_now = volumes[idx]
+        history_closes = closes[: idx + 1]
+        history_volumes = volumes[: idx + 1]
+        history_candles = candles[: idx + 1]
 
-        signal_candle = history_up_to_signal[-1]
-        signal_close = safe_float(signal_candle.get("close"))
-        prev_close = safe_float(history_up_to_signal[-2].get("close"))
-        signal_volume = safe_int(signal_candle.get("volume"))
-
-        prev_closes = [safe_float(x.get("close")) for x in history_up_to_signal[:-1]]
-        prev_volumes = [safe_int(x.get("volume")) for x in history_up_to_signal[:-1]]
-
-        if len(prev_closes) < 20 or len(prev_volumes) < 20:
-            continue
-
-        ma5 = avg(prev_closes[-5:])
-        ma10 = avg(prev_closes[-10:])
-        ma20 = avg(prev_closes[-20:])
-        ma20_prev = avg(prev_closes[-21:-1]) if len(prev_closes) >= 21 else ma20
-        avg_vol5 = avg(prev_volumes[-5:])
-        avg_vol20 = avg(prev_volumes[-20:])
-
-        recent20 = history_up_to_signal[-20:]
-        high20 = max(safe_float(x.get("high")) for x in recent20)
-        low20 = min(safe_float(x.get("low")) for x in recent20)
-
-        indicator_closes = prev_closes + [signal_close]
-        macd_line, signal_line, macd_hist = calc_macd(indicator_closes)
-        rsi14 = calc_rsi(indicator_closes, 14)
-        atr14 = calc_atr(history_up_to_signal, 14)
-
-        vol_ratio5 = (signal_volume / avg_vol5) if avg_vol5 > 0 else 1.0
-        range5_pct = calc_range_pct(history_up_to_signal[-5:])
-        range20_pct = calc_range_pct(history_up_to_signal[-20:])
+        ma5 = avg(history_closes[-5:])
+        ma10 = avg(history_closes[-10:])
+        ma20 = avg(history_closes[-20:])
+        avg_vol5 = avg(history_volumes[-5:])
+        high20 = max(safe_float(x.get("high")) for x in history_candles[-20:])
+        low20 = min(safe_float(x.get("low")) for x in history_candles[-20:])
+        rsi14 = calc_rsi(history_closes, 14)
+        macd_line, signal_line, macd_hist = calc_macd(history_closes)
+        atr14 = calc_atr(history_candles, 14)
+        vol_ratio5 = (vol_now / avg_vol5) if avg_vol5 > 0 else 1.0
 
         pattern_info = classify_daily_pattern(
-            close_now=signal_close,
+            close_now=close_now,
             prev_close=prev_close,
             ma5=ma5,
             ma10=ma10,
             ma20=ma20,
-            ma20_prev=ma20_prev,
             high20=high20,
             low20=low20,
             vol_ratio5=vol_ratio5,
-            avg_vol5=avg_vol5,
-            avg_vol20=avg_vol20,
             rsi14=rsi14,
             macd_hist=macd_hist,
-            range5_pct=range5_pct,
-            range20_pct=range20_pct,
-            atr14=atr14,
         )
-
-        strategy = build_historical_strategy(pattern_info["signal"])
-
         if pattern_info["signal"] != current_signal:
             continue
+
+        strategy = build_historical_strategy(pattern_info["signal"])
         if strategy["operation_rating"] != current_rating:
             continue
 
         recommendation_score = calc_potential_recommendation_score(
-            close_now=signal_close,
+            close_now=close_now,
             prev_close=prev_close,
             ma5=ma5,
             ma10=ma10,
             ma20=ma20,
             high20=high20,
             low20=low20,
-            vol_now=signal_volume,
+            vol_now=vol_now,
             avg_vol5=avg_vol5,
             rsi14=rsi14,
             macd_hist=macd_hist,
-            model_score=safe_float(pattern_info.get("model_score")),
-            signal=pattern_info["signal"],
         )
         if recommendation_score < VALIDATION_MIN_HISTORY_SCORE:
             continue
 
         plan = build_historical_trade_plan(
-            price=signal_close,
+            price=close_now,
             ma5=ma5,
-            ma10=ma10,
             ma20=ma20,
             high20=high20,
             low20=low20,
             atr14=atr14,
             signal=pattern_info["signal"],
         )
-
-        next_open = safe_float(candles[idx + 1].get("open"))
-        if next_open <= 0:
-            next_open = safe_float(candles[idx + 1].get("close"))
-        if next_open <= 0:
-            continue
 
         future_candles = candles[idx + 1: idx + 1 + max_forward]
         future_candles_5d = candles[idx + 1: idx + 1 + 5]
@@ -1771,10 +1562,14 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
         ):
             continue
 
+        entry_price = safe_float(candles[idx + 1].get("open"))
+        if entry_price <= 0:
+            entry_price = safe_float(candles[idx + 1].get("close")) or close_now
+
         forward_returns: Dict[int, float] = {}
         for day in VALIDATION_FORWARD_DAYS:
             future_close = safe_float(candles[idx + day].get("close"))
-            forward_returns[day] = round(calc_return_pct(next_open, future_close), 2)
+            forward_returns[day] = round(calc_return_pct(entry_price, future_close), 2)
 
         target_low, _ = parse_range_bounds(plan["target_price"], 0.0)
         stop_price = safe_float(plan["stop_loss"])
@@ -1784,30 +1579,30 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
         future_low_10d = min(safe_float(c.get("low")) for c in future_candles_10d)
         future_high_20d = max(safe_float(c.get("high")) for c in future_candles_20d)
         future_low_20d = min(safe_float(c.get("low")) for c in future_candles_20d)
-        max_favorable_return_10d = round(calc_return_pct(next_open, future_high_10d), 2)
-        max_adverse_return_10d = round(calc_return_pct(next_open, future_low_10d), 2)
-        max_favorable_return_20d = round(calc_return_pct(next_open, future_high_20d), 2)
-        max_adverse_return_20d = round(calc_return_pct(next_open, future_low_20d), 2)
+        max_favorable_return_10d = round(calc_return_pct(entry_price, future_high_10d), 2)
+        max_adverse_return_10d = round(calc_return_pct(entry_price, future_low_10d), 2)
+        max_favorable_return_20d = round(calc_return_pct(entry_price, future_high_20d), 2)
+        max_adverse_return_20d = round(calc_return_pct(entry_price, future_low_20d), 2)
 
         samples.append({
             "symbol": symbol,
             "signal": current_signal,
             "date": safe_str(candles[idx].get("date")),
             "trading_days_ago": len(candles) - 1 - idx,
-            "entry_price": round(next_open, 2),
+            "entry_price": round(entry_price, 2),
             "forward_returns": forward_returns,
-            "max_favorable_return_5d": round(calc_return_pct(next_open, future_high_5d), 2),
-            "max_adverse_return_5d": round(calc_return_pct(next_open, future_low_5d), 2),
+            "max_favorable_return_5d": round(calc_return_pct(entry_price, future_high_5d), 2),
+            "max_adverse_return_5d": round(calc_return_pct(entry_price, future_low_5d), 2),
             "max_favorable_return_10d": max_favorable_return_10d,
             "max_adverse_return_10d": max_adverse_return_10d,
             "max_favorable_return_20d": max_favorable_return_20d,
             "max_adverse_return_20d": max_adverse_return_20d,
             "target_hit_5d": target_low > 0 and future_high_5d >= target_low,
             "stop_hit_5d": stop_price > 0 and future_low_5d <= stop_price,
-            "sprint_hit_5d": round(calc_return_pct(next_open, future_high_5d), 2) >= 8.0,
-            "trend_hit_10d": max_favorable_return_10d >= 12.0,
-            "rocket_hit_20d": max_favorable_return_20d >= 15.0,
-            "strong_rocket_hit_20d": max_favorable_return_20d >= 20.0,
+            "sprint_hit_5d": round(calc_return_pct(entry_price, future_high_5d), 2) >= VALIDATION_SPRINT_RETURN_5D,
+            "trend_hit_10d": max_favorable_return_10d >= VALIDATION_TREND_RETURN_10D,
+            "rocket_hit_20d": max_favorable_return_20d >= VALIDATION_ROCKET_RETURN_20D,
+            "strong_rocket_hit_20d": max_favorable_return_20d >= VALIDATION_STRONG_ROCKET_RETURN_20D,
         })
         last_signal_date = safe_str(candles[idx].get("date"))
 
@@ -1873,9 +1668,9 @@ def build_validation_seed_pool(
             continue
         if safe_float(stock.get("price")) < 8:
             continue
-        if safe_int(stock.get("volume")) < 500:
+        if safe_int(stock.get("volume")) < 600:
             continue
-        if not (-3.0 <= safe_float(stock.get("change_percent")) <= 7.0):
+        if not (-2.5 <= safe_float(stock.get("change_percent")) <= 6.8):
             continue
         grouped.setdefault(key, []).append(stock)
 
@@ -1883,8 +1678,7 @@ def build_validation_seed_pool(
     for key, items in grouped.items():
         items.sort(
             key=lambda x: (
-                safe_float(x.get("historical_recommendation_score") or x.get("recommendation_score")),
-                safe_float(x.get("model_score")),
+                safe_float(x.get("snapshot_recommendation_score") or x.get("recommendation_score")),
                 safe_int(x.get("volume")),
                 safe_int(x.get("trade_value")),
             ),
@@ -1905,116 +1699,67 @@ def build_validation_seed_pool(
     return seed_pool or list(recommendations)
 
 
-def build_validation_score(
-    summary: Dict[str, Any],
-    coverage_rate: float,
-    average_samples_per_stock: float,
-) -> int:
-    sample_count = safe_int(summary.get("sample_count"))
-    avg_return_5d = safe_float(summary.get("avg_return_5d"))
-    avg_return_10d = safe_float(summary.get("avg_return_10d"))
-    avg_return_20d = safe_float(summary.get("avg_return_20d"))
-    sprint_hit_rate_5d = safe_float(summary.get("sprint_hit_rate_5d"))
-    trend_hit_rate_10d = safe_float(summary.get("trend_hit_rate_10d"))
-    win_rate_20d = safe_float(summary.get("win_rate_20d"))
-    rocket_hit_rate_20d = safe_float(summary.get("rocket_hit_rate_20d"))
-    strong_rocket_hit_rate_20d = safe_float(summary.get("strong_rocket_hit_rate_20d"))
-    avg_mfe_20d = safe_float(summary.get("avg_mfe_20d"))
-    avg_mae_20d = safe_float(summary.get("avg_mae_20d"))
-    payoff_ratio_20d = safe_float(summary.get("payoff_ratio_20d"))
+def build_validation_period_snapshot(
+    label: str,
+    recommendations: List[Dict[str, Any]],
+    pooled_samples_map: Dict[str, List[Dict[str, Any]]],
+    lookback_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    filtered_samples: List[Dict[str, Any]] = []
+    stocks_without_history: List[str] = []
+    validated_stock_count = 0
+    used_keys = set()
 
-    breakout_runway_20d = avg_mfe_20d - abs(avg_mae_20d)
-    score = (
-        clamp(sample_count / 120, 0.0, 1.0) * 14
-        + clamp(coverage_rate / 0.75, 0.0, 1.0) * 10
-        + clamp(average_samples_per_stock / 18, 0.0, 1.0) * 10
-        + clamp(avg_return_5d / 4.5, 0.0, 1.0) * 8
-        + clamp(avg_return_10d / 6.5, 0.0, 1.0) * 10
-        + clamp(avg_return_20d / 8.0, 0.0, 1.0) * 10
-        + clamp(sprint_hit_rate_5d / 0.25, 0.0, 1.0) * 8
-        + clamp(trend_hit_rate_10d / 0.2, 0.0, 1.0) * 10
-        + clamp((win_rate_20d - 0.48) / 0.18, 0.0, 1.0) * 8
-        + clamp(rocket_hit_rate_20d / 0.3, 0.0, 1.0) * 12
-        + clamp(strong_rocket_hit_rate_20d / 0.16, 0.0, 1.0) * 8
-        + clamp(breakout_runway_20d / 8.0, 0.0, 1.0) * 10
-        + clamp((payoff_ratio_20d - 1.0) / 1.0, 0.0, 1.0) * 10
+    for stock_info in recommendations:
+        signal_key = build_signal_rating_key(
+            stock_info.get("signal"),
+            stock_info.get("operation_rating"),
+        )
+        filtered_stock_samples = filter_validation_samples_by_days(
+            pooled_samples_map.get(signal_key, []),
+            lookback_days,
+        )
+        if filtered_stock_samples and signal_key not in used_keys:
+            filtered_samples.extend(filtered_stock_samples)
+            used_keys.add(signal_key)
+        if filtered_stock_samples:
+            validated_stock_count += 1
+        else:
+            stocks_without_history.append(
+                f"{stock_info.get('symbol', '')} {stock_info.get('name', '')}".strip()
+            )
+
+    summary = summarize_validation_samples(filtered_samples)
+    recommendation_count = len(recommendations)
+    coverage_rate = round((validated_stock_count / recommendation_count) if recommendation_count else 0.0, 4)
+    average_samples_per_stock = round(
+        (summary["sample_count"] / validated_stock_count) if validated_stock_count else 0.0,
+        2,
     )
-    return int(round(score))
+    validation_score = build_validation_score(summary, coverage_rate, average_samples_per_stock)
+    verdict = build_validation_verdict(validation_score, summary, coverage_rate, average_samples_per_stock)
+    risk_flags = build_validation_risk_flags(
+        summary,
+        coverage_rate,
+        average_samples_per_stock,
+        stocks_without_history,
+    )
 
-
-def build_validation_verdict(
-    validation_score: int,
-    summary: Dict[str, Any],
-    coverage_rate: float,
-    average_samples_per_stock: float,
-) -> str:
-    sample_count = safe_int(summary.get("sample_count"))
-    avg_return_10d = safe_float(summary.get("avg_return_10d"))
-    avg_return_20d = safe_float(summary.get("avg_return_20d"))
-    sprint_hit_rate_5d = safe_float(summary.get("sprint_hit_rate_5d"))
-    trend_hit_rate_10d = safe_float(summary.get("trend_hit_rate_10d"))
-    win_rate_20d = safe_float(summary.get("win_rate_20d"))
-    rocket_hit_rate_20d = safe_float(summary.get("rocket_hit_rate_20d"))
-
-    if coverage_rate < 0.6 or sample_count < 20 or average_samples_per_stock < 8:
-        return "樣本不足"
-    if (
-        validation_score >= 78
-        and summary.get("positive_edge")
-        and sprint_hit_rate_5d >= 0.18
-        and trend_hit_rate_10d >= 0.14
-        and rocket_hit_rate_20d >= 0.22
-        and avg_return_20d > 0
-        and win_rate_20d >= 0.54
-    ):
-        return "可追蹤飆股"
-    if validation_score >= 62 and sprint_hit_rate_5d >= 0.13 and trend_hit_rate_10d >= 0.1 and avg_return_10d > 0:
-        return "可用但保守"
-    if validation_score >= 50 or trend_hit_rate_10d >= 0.1 or rocket_hit_rate_20d >= 0.1:
-        return "觀察中"
-    return "飆股優勢不足"
-
-
-def build_validation_risk_flags(
-    summary: Dict[str, Any],
-    coverage_rate: float,
-    average_samples_per_stock: float,
-    stocks_without_history: List[str],
-) -> List[str]:
-    sample_count = safe_int(summary.get("sample_count"))
-    sprint_hit_rate_5d = safe_float(summary.get("sprint_hit_rate_5d"))
-    trend_hit_rate_10d = safe_float(summary.get("trend_hit_rate_10d"))
-    avg_return_20d = safe_float(summary.get("avg_return_20d"))
-    rocket_hit_rate_20d = safe_float(summary.get("rocket_hit_rate_20d"))
-    strong_rocket_hit_rate_20d = safe_float(summary.get("strong_rocket_hit_rate_20d"))
-    avg_mfe_20d = safe_float(summary.get("avg_mfe_20d"))
-    avg_mae_20d = safe_float(summary.get("avg_mae_20d"))
-    payoff_ratio_20d = safe_float(summary.get("payoff_ratio_20d"))
-
-    flags: List[str] = []
-    if coverage_rate < 0.6:
-        flags.append("今日推薦中可對照的歷史樣本覆蓋率偏低。")
-    if sample_count < 35:
-        flags.append("整體歷史樣本仍偏少，飆股驗證容易受少數案例影響。")
-    if average_samples_per_stock < 10:
-        flags.append("每檔可參考的跨股票同訊號案例仍不多，飆股命中率還要保留看待。")
-    if sprint_hit_rate_5d < 0.12:
-        flags.append("5 日急拉命中率還不高，訊號後短線點火能力不足。")
-    if trend_hit_rate_10d < 0.10:
-        flags.append("10 日主升命中率偏低，容易只有短衝而接不成主升段。")
-    if avg_return_20d <= 0:
-        flags.append("20 日平均報酬沒有轉正，代表後續波段延伸仍不足。")
-    if rocket_hit_rate_20d < 0.15:
-        flags.append("20 日飆股命中率還不高，抓到真正發動股的能力不足。")
-    if avg_mfe_20d <= abs(avg_mae_20d):
-        flags.append("20 日順向空間沒有明顯大於逆向風險，持有體感不會太舒服。")
-    if sample_count >= 20 and strong_rocket_hit_rate_20d < 0.06:
-        flags.append("20 日強飆股命中率偏低，大波段樣本還不夠多。")
-    if sample_count >= 20 and payoff_ratio_20d < 1.05:
-        flags.append("20 日賺賠比沒有拉開，報酬品質還不夠漂亮。")
-    if stocks_without_history:
-        flags.append("部分今日推薦股票找不到足夠歷史對照。")
-    return flags[:5]
+    return {
+        "label": label,
+        "lookback_days": lookback_days,
+        "recommendation_count": recommendation_count,
+        "validated_stock_count": validated_stock_count,
+        "coverage_rate": coverage_rate,
+        "average_samples_per_stock": average_samples_per_stock,
+        "validation_score": validation_score,
+        "verdict": verdict,
+        "sample_count": summary["sample_count"],
+        "summary": summary,
+        "risk_flags": risk_flags,
+        "stocks_without_history": stocks_without_history,
+        "signal_pool_count": len(used_keys),
+    }
 
 
 def build_validation_notes(
@@ -2035,9 +1780,9 @@ def build_validation_notes(
     avg_mfe_20d = safe_float(summary.get("avg_mfe_20d"))
     avg_mae_20d = safe_float(summary.get("avg_mae_20d"))
 
-    if sample_count < 35:
+    if sample_count < 20:
         notes.append("跨股票同訊號的歷史樣本還不夠厚，這份飆股驗證先拿來看方向，不適合直接當高信心結論。")
-    elif avg_return_20d > 0 and rocket_hit_rate_20d >= 0.22 and trend_hit_rate_10d >= 0.14:
+    elif avg_return_20d > 0 and rocket_hit_rate_20d >= 0.25 and trend_hit_rate_10d >= 0.16:
         notes.append(
             f"5 日急拉命中率 {sprint_hit_rate_5d * 100:.1f}% 、10 日主升命中率 {trend_hit_rate_10d * 100:.1f}% 、"
             f"20 日延續命中率 {rocket_hit_rate_20d * 100:.1f}% ，代表這套邏輯對抓波段發動已有一定辨識力。"
@@ -2051,11 +1796,13 @@ def build_validation_notes(
 
     if avg_mfe_20d > abs(avg_mae_20d):
         notes.append(
-            f"20 日順向空間平均 {avg_mfe_20d:.2f}% ，大於逆向風險 {avg_mae_20d:.2f}% ，代表命中時的延展性還不錯。"
+            f"20 日順向空間平均 {avg_mfe_20d:.2f}% ，大於逆向風險 {avg_mae_20d:.2f}% ，"
+            "代表命中時的延展性還不錯。"
         )
     else:
         notes.append(
-            f"20 日順向空間平均 {avg_mfe_20d:.2f}% ，逆向風險 {avg_mae_20d:.2f}% ，代表追蹤過程仍容易先遇到震盪。"
+            f"20 日順向空間平均 {avg_mfe_20d:.2f}% ，逆向風險 {avg_mae_20d:.2f}% ，"
+            "代表追蹤過程仍容易先遇到震盪。"
         )
 
     if signal_breakdown:
@@ -2091,76 +1838,126 @@ def build_validation_notes(
         if strongest_stock:
             top = strongest_stock[0]
             notes.append(
-                f"{top.get('symbol', '')} {top.get('name', '')} 所屬的跨股訊號池飆股命中表現相對較穩，可優先列入飆股核心觀察。"
+                f"{top.get('symbol', '')} {top.get('name', '')} 所屬的跨股訊號池飆股命中表現相對較穩，"
+                "可優先列入飆股核心觀察。"
             )
 
-    if strong_rocket_hit_rate_20d >= 0.08 and win_rate_20d >= 0.5:
+    if strong_rocket_hit_rate_20d >= 0.1 and win_rate_20d >= 0.5:
         notes.append("20 日內強飆股命中率已有一定基礎，代表不只抓得到續強，也有機會抓到大波段。")
 
     return notes[:4]
 
 
-def build_validation_period_snapshot(
-    label: str,
-    recommendations: List[Dict[str, Any]],
-    pooled_samples_map: Dict[str, List[Dict[str, Any]]],
-    lookback_days: Optional[int] = None,
-) -> Dict[str, Any]:
-    filtered_samples: List[Dict[str, Any]] = []
-    stocks_without_history: List[str] = []
-    validated_stock_count = 0
-    used_keys: Set[str] = set()
+def build_validation_score(
+    summary: Dict[str, Any],
+    coverage_rate: float,
+    average_samples_per_stock: float,
+) -> int:
+    sample_count = safe_int(summary.get("sample_count"))
+    avg_return_5d = safe_float(summary.get("avg_return_5d"))
+    avg_return_10d = safe_float(summary.get("avg_return_10d"))
+    avg_return_20d = safe_float(summary.get("avg_return_20d"))
+    sprint_hit_rate_5d = safe_float(summary.get("sprint_hit_rate_5d"))
+    trend_hit_rate_10d = safe_float(summary.get("trend_hit_rate_10d"))
+    win_rate_20d = safe_float(summary.get("win_rate_20d"))
+    rocket_hit_rate_20d = safe_float(summary.get("rocket_hit_rate_20d"))
+    strong_rocket_hit_rate_20d = safe_float(summary.get("strong_rocket_hit_rate_20d"))
+    avg_mfe_20d = safe_float(summary.get("avg_mfe_20d"))
+    avg_mae_20d = safe_float(summary.get("avg_mae_20d"))
+    payoff_ratio_20d = safe_float(summary.get("payoff_ratio_20d"))
 
-    for stock_info in recommendations:
-        signal_key = build_signal_rating_key(
-            stock_info.get("signal"),
-            stock_info.get("operation_rating"),
-        )
-        filtered_stock_samples = filter_validation_samples_by_days(
-            pooled_samples_map.get(signal_key, []),
-            lookback_days,
-        )
-        if filtered_stock_samples:
-            validated_stock_count += 1
-            if signal_key not in used_keys:
-                filtered_samples.extend(filtered_stock_samples)
-                used_keys.add(signal_key)
-        else:
-            stocks_without_history.append(
-                f"{stock_info.get('symbol', '')} {stock_info.get('name', '')}".strip()
-            )
-
-    summary = summarize_validation_samples(filtered_samples)
-    recommendation_count = len(recommendations)
-    coverage_rate = round((validated_stock_count / recommendation_count) if recommendation_count else 0.0, 4)
-    average_samples_per_stock = round(
-        (summary["sample_count"] / len(used_keys)) if used_keys else 0.0,
-        2,
+    breakout_runway_20d = avg_mfe_20d - abs(avg_mae_20d)
+    score = (
+        clamp(sample_count / 80, 0.0, 1.0) * 12
+        + clamp(coverage_rate / 0.75, 0.0, 1.0) * 12
+        + clamp(average_samples_per_stock / 12, 0.0, 1.0) * 8
+        + clamp(avg_return_5d / 5.0, 0.0, 1.0) * 8
+        + clamp(avg_return_10d / 7.0, 0.0, 1.0) * 8
+        + clamp(avg_return_20d / 8.0, 0.0, 1.0) * 10
+        + clamp(sprint_hit_rate_5d / 0.28, 0.0, 1.0) * 10
+        + clamp(trend_hit_rate_10d / 0.22, 0.0, 1.0) * 12
+        + clamp((win_rate_20d - 0.5) / 0.15, 0.0, 1.0) * 8
+        + clamp(rocket_hit_rate_20d / 0.35, 0.0, 1.0) * 12
+        + clamp(strong_rocket_hit_rate_20d / 0.2, 0.0, 1.0) * 8
+        + clamp(breakout_runway_20d / 8.0, 0.0, 1.0) * 10
+        + clamp((payoff_ratio_20d - 1.0) / 1.2, 0.0, 1.0) * 10
     )
-    validation_score = build_validation_score(summary, coverage_rate, average_samples_per_stock)
-    verdict = build_validation_verdict(validation_score, summary, coverage_rate, average_samples_per_stock)
-    risk_flags = build_validation_risk_flags(
-        summary,
-        coverage_rate,
-        average_samples_per_stock,
-        stocks_without_history,
-    )
+    return int(round(score))
 
-    return {
-        "label": label,
-        "lookback_days": lookback_days,
-        "recommendation_count": recommendation_count,
-        "validated_stock_count": validated_stock_count,
-        "coverage_rate": coverage_rate,
-        "average_samples_per_stock": average_samples_per_stock,
-        "validation_score": validation_score,
-        "verdict": verdict,
-        "sample_count": summary["sample_count"],
-        "summary": summary,
-        "risk_flags": risk_flags,
-        "stocks_without_history": stocks_without_history,
-        "signal_pool_count": len(used_keys),
-    }
+
+def build_validation_verdict(
+    validation_score: int,
+    summary: Dict[str, Any],
+    coverage_rate: float,
+    average_samples_per_stock: float,
+) -> str:
+    sample_count = safe_int(summary.get("sample_count"))
+    avg_return_10d = safe_float(summary.get("avg_return_10d"))
+    avg_return_20d = safe_float(summary.get("avg_return_20d"))
+    sprint_hit_rate_5d = safe_float(summary.get("sprint_hit_rate_5d"))
+    trend_hit_rate_10d = safe_float(summary.get("trend_hit_rate_10d"))
+    win_rate_20d = safe_float(summary.get("win_rate_20d"))
+    rocket_hit_rate_20d = safe_float(summary.get("rocket_hit_rate_20d"))
+
+    if coverage_rate < 0.6 or sample_count < 12 or average_samples_per_stock < 5:
+        return "樣本不足"
+    if (
+        validation_score >= 78
+        and summary.get("positive_edge")
+        and sprint_hit_rate_5d >= 0.2
+        and trend_hit_rate_10d >= 0.16
+        and rocket_hit_rate_20d >= 0.25
+        and avg_return_20d > 0
+        and win_rate_20d >= 0.55
+    ):
+        return "可追蹤飆股"
+    if validation_score >= 63 and sprint_hit_rate_5d >= 0.15 and trend_hit_rate_10d >= 0.12 and avg_return_10d > 0:
+        return "可用但保守"
+    if validation_score >= 50 or trend_hit_rate_10d >= 0.1 or rocket_hit_rate_20d >= 0.1:
+        return "觀察中"
+    return "飆股優勢不足"
+
+
+def build_validation_risk_flags(
+    summary: Dict[str, Any],
+    coverage_rate: float,
+    average_samples_per_stock: float,
+    stocks_without_history: List[str],
+) -> List[str]:
+    sample_count = safe_int(summary.get("sample_count"))
+    sprint_hit_rate_5d = safe_float(summary.get("sprint_hit_rate_5d"))
+    trend_hit_rate_10d = safe_float(summary.get("trend_hit_rate_10d"))
+    avg_return_20d = safe_float(summary.get("avg_return_20d"))
+    rocket_hit_rate_20d = safe_float(summary.get("rocket_hit_rate_20d"))
+    strong_rocket_hit_rate_20d = safe_float(summary.get("strong_rocket_hit_rate_20d"))
+    avg_mfe_20d = safe_float(summary.get("avg_mfe_20d"))
+    avg_mae_20d = safe_float(summary.get("avg_mae_20d"))
+    payoff_ratio_20d = safe_float(summary.get("payoff_ratio_20d"))
+
+    flags: List[str] = []
+    if coverage_rate < 0.6:
+        flags.append("今日推薦中可對照的歷史樣本覆蓋率偏低。")
+    if sample_count < 20:
+        flags.append("整體歷史樣本仍偏少，飆股驗證容易受少數案例影響。")
+    if average_samples_per_stock < 8:
+        flags.append("每檔可參考的跨股票同訊號案例仍不多，飆股命中率還要保留看待。")
+    if sprint_hit_rate_5d < 0.15:
+        flags.append("5 日急拉命中率還不高，訊號後短線點火能力不足。")
+    if trend_hit_rate_10d < 0.12:
+        flags.append("10 日主升命中率偏低，容易只有短衝而接不成主升段。")
+    if avg_return_20d <= 0:
+        flags.append("20 日平均報酬沒有轉正，代表後續波段延伸仍不足。")
+    if rocket_hit_rate_20d < 0.18:
+        flags.append("20 日飆股命中率還不高，抓到真正發動股的能力不足。")
+    if avg_mfe_20d <= abs(avg_mae_20d):
+        flags.append("20 日順向空間沒有明顯大於逆向風險，持有體感不會太舒服。")
+    if sample_count >= 12 and strong_rocket_hit_rate_20d < 0.08:
+        flags.append("20 日強飆股命中率偏低，大波段樣本還不夠多。")
+    if sample_count >= 12 and payoff_ratio_20d < 1.1:
+        flags.append("20 日賺賠比沒有拉開，報酬品質還不夠漂亮。")
+    if stocks_without_history:
+        flags.append("部分今日推薦股票找不到足夠歷史對照。")
+    return flags[:5]
 
 
 def build_strategy_validation(
@@ -2415,31 +2212,31 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     close_position = calc_position_ratio(price, high_price, low_price)
     amplitude_pct = calc_amplitude_pct(high_price, low_price, previous_close)
 
-    momentum_score = score_band(change_percent, -0.4, 5.0, 1.6, 18)
-    position_score = score_band(close_position, 0.25, 0.88, 0.65, 16)
-    amplitude_score = score_band(amplitude_pct, 0.8, 6.8, 3.0, 10)
-    liquidity_score = score_band(volume, 600, 50000, 8000, 14)
+    momentum_score = score_band(change_percent, -0.3, 5.0, 2.1, 20)
+    position_score = score_band(close_position, 0.28, 0.88, 0.62, 18)
+    amplitude_score = score_band(amplitude_pct, 0.8, 6.8, 3.2, 10)
+    liquidity_score = score_band(volume, 1200, 40000, 9000, 12)
 
     structure_bonus = 0.0
     if price >= open_price:
         structure_bonus += 5
-    if 0.42 <= close_position <= 0.82:
-        structure_bonus += 5
-    if -0.5 <= change_percent <= 4.2:
+    if 0.48 <= close_position <= 0.8:
+        structure_bonus += 4
+    if 0.6 <= change_percent <= 4.2:
         structure_bonus += 4
 
     weakness_penalty = 0.0
     if price < open_price:
-        weakness_penalty += 4
-    if close_position <= 0.2:
+        weakness_penalty += 5
+    if close_position <= 0.22:
         weakness_penalty += 6
-    if change_percent < -1.5:
-        weakness_penalty += 7
+    if change_percent < -1.0:
+        weakness_penalty += 6
 
     overheat_penalty = 0.0
-    if change_percent >= 6:
-        overheat_penalty += 14
-    if close_position >= 0.92:
+    if change_percent >= 5:
+        overheat_penalty += 12
+    if close_position >= 0.9:
         overheat_penalty += 8
     if amplitude_pct >= 7:
         overheat_penalty += 6
@@ -2703,14 +2500,13 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
 
 
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
-    # 先放寬前置篩選，避免把真正未發動的股先砍掉
     candidates = [
         s for s in stocks
         if is_main_board_stock(s)
         and safe_float(s.get("price")) >= 8
-        and safe_int(s.get("volume")) >= 400
-        and -3.5 <= safe_float(s.get("change_percent")) <= 7.0
-        and safe_float(s.get("snapshot_recommendation_score") or s.get("recommendation_score")) >= 8
+        and safe_int(s.get("volume")) >= 800
+        and -1.2 <= safe_float(s.get("change_percent")) <= 6.2
+        and safe_float(s.get("snapshot_recommendation_score") or s.get("recommendation_score")) >= 18
         and safe_str(s.get("signal")) not in {"短線過熱", "偏弱整理"}
     ]
 
@@ -2745,50 +2541,20 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
     analyzed = [
         s for s in analyzed
         if s.get("signal") in {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
-        and safe_float(s.get("recommendation_score")) >= 34
+        and safe_float(s.get("recommendation_score")) >= 32
         and safe_str(s.get("operation_rating")) in {"A", "B+"}
     ]
 
     analyzed.sort(
         key=lambda x: (
-            safe_float(x.get("recommendation_score")),
-            safe_float(x.get("model_score")),
+            x.get("recommendation_score", 0),
             1 if x.get("signal") == "突破前夕" else 0,
-            1 if x.get("signal") == "量增轉強" else 0,
             1 if x.get("operation_rating") == "A" else 0,
             x.get("volume", 0),
-            x.get("trade_value", 0),
         ),
         reverse=True,
     )
-
-    # 避免 Top10 全部塞同一型態
-    diversified: List[Dict[str, Any]] = []
-    signal_cap: Dict[str, int] = {}
-    per_signal_limit = 4
-
-    for item in analyzed:
-        signal = safe_str(item.get("signal"))
-        count = signal_cap.get(signal, 0)
-        if count >= per_signal_limit:
-            continue
-        diversified.append(item)
-        signal_cap[signal] = count + 1
-        if len(diversified) >= top_n:
-            break
-
-    if len(diversified) < top_n:
-        picked_symbols = {safe_str(x.get("symbol")) for x in diversified}
-        for item in analyzed:
-            symbol = safe_str(item.get("symbol"))
-            if symbol in picked_symbols:
-                continue
-            diversified.append(item)
-            picked_symbols.add(symbol)
-            if len(diversified) >= top_n:
-                break
-
-    return diversified[:top_n]
+    return analyzed[:top_n]
 
 
 def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[str, Any]]:
