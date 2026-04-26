@@ -66,6 +66,8 @@ VALIDATION_STRONG_ROCKET_RETURN_20D = 20.0
 VALIDATION_MIN_HISTORY_SCORE = 30.0
 VALIDATION_POOL_PER_KEY = 18
 RECOMMENDATION_SEED_LIMIT = 80
+BOOK_PROXY_MIN_SELECTION_SCORE = 58.0
+BOOK_PROXY_STRONG_SELECTION_SCORE = 68.0
 
 
 # =========================
@@ -275,6 +277,42 @@ def avg(values: List[float]) -> float:
     if not values:
         return 0.0
     return sum(values) / len(values)
+
+
+def market_session_progress() -> float:
+    now = now_taipei()
+    if now.weekday() >= 5:
+        return 1.0
+    open_minutes = 9 * 60
+    close_minutes = 13 * 60 + 30
+    current_minutes = now.hour * 60 + now.minute
+    if current_minutes <= open_minutes:
+        return 0.05
+    if current_minutes >= close_minutes:
+        return 1.0
+    return clamp((current_minutes - open_minutes) / (close_minutes - open_minutes), 0.05, 1.0)
+
+
+def estimate_full_day_volume(current_volume: int) -> int:
+    if current_volume <= 0:
+        return 0
+    status = get_market_status_text()
+    if status != "開盤":
+        return current_volume
+    progress = market_session_progress()
+    return int(current_volume / max(progress, 0.05))
+
+
+def completed_candles_for_reference(candles: List[Dict[str, Any]], base_stock: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    if not candles:
+        return []
+    snapshot_date_key = normalize_date_key((base_stock or {}).get("update_time"))
+    last_date_key = normalize_date_key(candles[-1].get("date"))
+    if snapshot_date_key and last_date_key and snapshot_date_key >= last_date_key:
+        return candles[:-1] if len(candles) > 1 else candles
+    if get_market_status_text() == "開盤" and len(candles) > 1:
+        return candles[:-1]
+    return candles
 
 
 def format_number(num: float) -> str:
@@ -914,17 +952,40 @@ def classify_daily_pattern(
     healthy_volume = 0.95 <= vol_ratio5 <= 3.2
     healthy_rsi = 48 <= rsi14 <= 70
 
-    if (
-        above_ma20
-        and ma5_turn_up
-        and (ma10_support or close_now >= ma10 * 0.985)
-        and close_above_ma5
-        and healthy_momentum
-        and healthy_volume
-        and healthy_rsi
-        and 0.0 <= distance_to_high20 <= 6.0
-        and macd_hist >= -0.05
-    ):
+    breakout_score = 0.0
+    if above_ma20:
+        breakout_score += 18
+    if ma5_turn_up:
+        breakout_score += 14
+    if ma10_support or close_now >= ma10 * 0.985:
+        breakout_score += 12
+    if close_above_ma5:
+        breakout_score += 10
+    if healthy_momentum:
+        breakout_score += 12
+    if healthy_volume:
+        breakout_score += 12
+    if healthy_rsi:
+        breakout_score += 8
+    if 0.0 <= distance_to_high20 <= 6.0:
+        breakout_score += 10
+    elif 6.0 < distance_to_high20 <= 8.0:
+        breakout_score += 5
+    if macd_hist >= -0.05:
+        breakout_score += 8
+
+    hard_fail = (
+        close_now < ma20 * 0.99
+        or day_change_pct < -0.6
+        or day_change_pct > 5.5
+        or vol_ratio5 < 0.75
+        or vol_ratio5 > 3.8
+        or rsi14 < 44
+        or rsi14 > 74
+        or distance_to_high20 > 9.5
+    )
+
+    if breakout_score >= 78 and not hard_fail:
         return {
             "signal": "突破前夕",
             "trend_type": "短線潛力最強",
@@ -1158,6 +1219,12 @@ def calc_potential_recommendation_score(
     return round(max(score, 0.0), 2)
 
 
+def calc_distance_pct(ceiling: float, value: float) -> float:
+    if ceiling <= 0 or value <= 0:
+        return 999.0
+    return ((ceiling - value) / ceiling) * 100
+
+
 def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str, Any]:
     try:
         symbol = safe_str(base_stock.get("symbol"))
@@ -1175,8 +1242,11 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
 
         closes = [safe_float(x.get("close")) for x in analysis_candles]
         volumes = [safe_int(x.get("volume")) for x in analysis_candles]
+        reference_candles = completed_candles_for_reference(analysis_candles, base_stock)
+        reference_volumes = [safe_int(x.get("volume")) for x in reference_candles]
         close_now = closes[-1]
         vol_now = volumes[-1]
+        projected_vol_now = estimate_full_day_volume(vol_now)
         snapshot_price = safe_float(base_stock.get("price"))
         snapshot_volume = safe_int(base_stock.get("volume"))
         snapshot_recommendation_score = safe_float(
@@ -1188,15 +1258,31 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         ma5 = avg(closes[-5:])
         ma10 = avg(closes[-10:])
         ma20 = avg(closes[-20:])
-        avg_vol5 = avg(volumes[-5:])
-        avg_vol20 = avg(volumes[-20:])
-        high20 = max(safe_float(x.get("high")) for x in analysis_candles[-20:])
-        low20 = min(safe_float(x.get("low")) for x in analysis_candles[-20:])
+        ma60 = avg(closes[-60:]) if len(closes) >= 60 else avg(closes)
+        avg_vol5 = avg(reference_volumes[-5:])
+        avg_vol20 = avg(reference_volumes[-20:])
+        high20 = max(safe_float(x.get("high")) for x in reference_candles[-20:]) if reference_candles else max(
+            safe_float(x.get("high")) for x in analysis_candles[-20:]
+        )
+        low20 = min(safe_float(x.get("low")) for x in reference_candles[-20:]) if reference_candles else min(
+            safe_float(x.get("low")) for x in analysis_candles[-20:]
+        )
+        high60 = max(safe_float(x.get("high")) for x in reference_candles[-60:]) if reference_candles else max(
+            safe_float(x.get("high")) for x in analysis_candles
+        )
+        low60 = min(safe_float(x.get("low")) for x in reference_candles[-60:]) if reference_candles else min(
+            safe_float(x.get("low")) for x in analysis_candles
+        )
         rsi14 = calc_rsi(closes, 14)
         macd_line, signal_line, macd_hist = calc_macd(closes)
         atr14 = calc_atr(analysis_candles, 14)
 
-        vol_ratio5 = (vol_now / avg_vol5) if avg_vol5 > 0 else 1.0
+        vol_ratio5 = (projected_vol_now / avg_vol5) if avg_vol5 > 0 else 1.0
+        atr14_pct = ((atr14 / close_now) * 100) if close_now > 0 else 0.0
+        premium_to_ma20_pct = ((close_now - ma20) / ma20 * 100) if ma20 > 0 else 0.0
+        premium_to_ma60_pct = ((close_now - ma60) / ma60 * 100) if ma60 > 0 else 0.0
+        distance_to_high20 = calc_distance_pct(high20, close_now)
+        distance_to_high60 = calc_distance_pct(high60, close_now)
         pattern_info = classify_daily_pattern(
             close_now=close_now,
             prev_close=prev_close,
@@ -1261,7 +1347,7 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             ma20=ma20,
             high20=high20,
             low20=low20,
-            vol_now=vol_now,
+            vol_now=projected_vol_now,
             avg_vol5=avg_vol5,
             rsi14=rsi14,
             macd_hist=macd_hist,
@@ -1288,6 +1374,20 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "score": recommendation_score,
             "analysis_source": "historical_k",
             "analysis_basis": "realtime_overlay",
+            "ma20_value": round(ma20, 2),
+            "ma60_value": round(ma60, 2),
+            "high20_value": round(high20, 2),
+            "high60_value": round(high60, 2),
+            "low20_value": round(low20, 2),
+            "low60_value": round(low60, 2),
+            "rsi14_value": round(rsi14, 2),
+            "vol_ratio5_value": round(vol_ratio5, 2),
+            "projected_volume": projected_vol_now,
+            "atr14_pct": round(atr14_pct, 2),
+            "premium_to_ma20_pct": round(premium_to_ma20_pct, 2),
+            "premium_to_ma60_pct": round(premium_to_ma60_pct, 2),
+            "distance_to_high20_pct": round(distance_to_high20, 2),
+            "distance_to_high60_pct": round(distance_to_high60, 2),
         })
         merged["price"] = round(close_now, 2)
         merged["volume"] = vol_now
@@ -1493,13 +1593,19 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
         history_closes = closes[: idx + 1]
         history_volumes = volumes[: idx + 1]
         history_candles = candles[: idx + 1]
+        reference_history_volumes = volumes[max(0, idx - 5): idx]
+        reference_history_candles = candles[max(0, idx - 20): idx]
 
         ma5 = avg(history_closes[-5:])
         ma10 = avg(history_closes[-10:])
         ma20 = avg(history_closes[-20:])
-        avg_vol5 = avg(history_volumes[-5:])
-        high20 = max(safe_float(x.get("high")) for x in history_candles[-20:])
-        low20 = min(safe_float(x.get("low")) for x in history_candles[-20:])
+        avg_vol5 = avg(reference_history_volumes)
+        high20 = max(safe_float(x.get("high")) for x in reference_history_candles) if reference_history_candles else max(
+            safe_float(x.get("high")) for x in history_candles[-20:]
+        )
+        low20 = min(safe_float(x.get("low")) for x in reference_history_candles) if reference_history_candles else min(
+            safe_float(x.get("low")) for x in history_candles[-20:]
+        )
         rsi14 = calc_rsi(history_closes, 14)
         macd_line, signal_line, macd_hist = calc_macd(history_closes)
         atr14 = calc_atr(history_candles, 14)
@@ -2499,14 +2605,182 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
     return sorted(stocks, key=lambda x: x.get(key, 0), reverse=reverse)
 
 
+def build_market_proxy_context(stocks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    universe = [s for s in stocks if is_main_board_stock(s)]
+    if not universe:
+        return {
+            "regime": "中性",
+            "advance_ratio": 0.5,
+            "avg_change": 0.0,
+            "strong_ratio": 0.0,
+            "up_trade_ratio": 0.5,
+        }
+
+    advance_count = sum(1 for s in universe if safe_float(s.get("change_percent")) > 0)
+    strong_count = sum(
+        1
+        for s in universe
+        if safe_str(s.get("signal")) in {"量增轉強", "整理待發", "穩步走高"}
+    )
+    total_trade_value = sum(max(safe_int(s.get("trade_value")), 0) for s in universe)
+    up_trade_value = sum(
+        max(safe_int(s.get("trade_value")), 0)
+        for s in universe
+        if safe_float(s.get("change_percent")) > 0
+    )
+    advance_ratio = advance_count / len(universe)
+    strong_ratio = strong_count / len(universe)
+    avg_change = avg([safe_float(s.get("change_percent")) for s in universe])
+    up_trade_ratio = (up_trade_value / total_trade_value) if total_trade_value > 0 else 0.5
+
+    if advance_ratio >= 0.56 and avg_change >= 0.45 and up_trade_ratio >= 0.58:
+        regime = "偏多"
+    elif advance_ratio <= 0.43 and avg_change <= -0.35 and up_trade_ratio <= 0.45:
+        regime = "保守"
+    else:
+        regime = "中性"
+
+    return {
+        "regime": regime,
+        "advance_ratio": round(advance_ratio, 4),
+        "avg_change": round(avg_change, 2),
+        "strong_ratio": round(strong_ratio, 4),
+        "up_trade_ratio": round(up_trade_ratio, 4),
+    }
+
+
+def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, Any]) -> Dict[str, Any]:
+    price = safe_float(stock.get("price"))
+    volume = safe_int(stock.get("volume"))
+    trade_value = max(safe_int(stock.get("trade_value")), 0)
+    signal = safe_str(stock.get("signal"))
+    rating = safe_str(stock.get("operation_rating"))
+    rsi14 = safe_float(stock.get("rsi14_value"))
+    vol_ratio5 = safe_float(stock.get("vol_ratio5_value"))
+    atr14_pct = safe_float(stock.get("atr14_pct"))
+    premium_to_ma20_pct = safe_float(stock.get("premium_to_ma20_pct"))
+    premium_to_ma60_pct = safe_float(stock.get("premium_to_ma60_pct"))
+    distance_to_high20_pct = safe_float(stock.get("distance_to_high20_pct"))
+    distance_to_high60_pct = safe_float(stock.get("distance_to_high60_pct"))
+    change_percent = safe_float(stock.get("change_percent"))
+
+    regime = safe_str(market_context.get("regime"), "中性")
+    advance_ratio = safe_float(market_context.get("advance_ratio"), 0.5)
+    avg_change = safe_float(market_context.get("avg_change"), 0.0)
+    up_trade_ratio = safe_float(market_context.get("up_trade_ratio"), 0.5)
+
+    market_score = 0.0
+    if regime == "偏多":
+        market_score += 18
+    elif regime == "中性":
+        market_score += 11
+    else:
+        market_score += 4
+    if advance_ratio >= 0.5:
+        market_score += 4
+    if up_trade_ratio >= 0.52:
+        market_score += 4
+    if avg_change > 0:
+        market_score += 3
+
+    leadership_score = 0.0
+    if signal == "突破前夕":
+        leadership_score += 22
+    elif signal == "量增轉強":
+        leadership_score += 18
+    elif signal == "整理待發":
+        leadership_score += 12
+    elif signal == "溫和轉強":
+        leadership_score += 10
+
+    if rating == "A":
+        leadership_score += 10
+    elif rating == "B+":
+        leadership_score += 6
+
+    if price > safe_float(stock.get("ma20_value")) > 0:
+        leadership_score += 8
+    if price > safe_float(stock.get("ma60_value")) > 0:
+        leadership_score += 8
+    if 0.0 <= distance_to_high20_pct <= 7.0:
+        leadership_score += 8
+    elif 7.0 < distance_to_high20_pct <= 12.0:
+        leadership_score += 4
+    if 0.0 <= distance_to_high60_pct <= 10.0:
+        leadership_score += 4
+
+    quality_score = 0.0
+    quality_score += score_band(volume, 800, 60000, 5000, 14)
+    quality_score += score_band(trade_value, 50_000_000, 6_000_000_000, 500_000_000, 12)
+    quality_score += score_band(price, 8, 500, 60, 6)
+    if atr14_pct <= 7.5:
+        quality_score += 6
+    elif atr14_pct <= 10.5:
+        quality_score += 3
+
+    valuation_proxy_score = 0.0
+    valuation_proxy_score += score_band(premium_to_ma20_pct, -4.0, 14.0, 5.0, 12)
+    valuation_proxy_score += score_band(premium_to_ma60_pct, -6.0, 18.0, 8.0, 12)
+    valuation_proxy_score += score_band(rsi14, 48.0, 68.0, 58.0, 10)
+    valuation_proxy_score += score_band(vol_ratio5, 0.85, 2.8, 1.35, 8)
+
+    overheat_penalty = 0.0
+    if change_percent >= 5.0:
+        overheat_penalty += 10
+    if rsi14 >= 72:
+        overheat_penalty += 8
+    if premium_to_ma20_pct >= 16:
+        overheat_penalty += 8
+    if premium_to_ma60_pct >= 24:
+        overheat_penalty += 6
+    if atr14_pct >= 12:
+        overheat_penalty += 5
+
+    selection_score = round(
+        max(market_score + leadership_score + quality_score + valuation_proxy_score - overheat_penalty, 0.0),
+        2,
+    )
+
+    environment_ok = regime != "保守" or (signal in {"突破前夕", "量增轉強"} and rating == "A")
+    leadership_ok = leadership_score >= 28
+    quality_ok = quality_score >= 18
+    value_ok = valuation_proxy_score >= 16 and overheat_penalty <= 12
+    framework_pass = (
+        environment_ok
+        and leadership_ok
+        and quality_ok
+        and value_ok
+        and selection_score >= BOOK_PROXY_MIN_SELECTION_SCORE
+    )
+
+    summary_bits = [
+        f"環境{regime}",
+        "強勢領先" if leadership_ok else "待觀察",
+        "流動性佳" if quality_ok else "量能偏弱",
+        "價格未過熱" if value_ok else "位置偏高",
+    ]
+
+    return {
+        "book_selection_score": selection_score,
+        "book_framework_pass": framework_pass,
+        "book_environment_ok": environment_ok,
+        "book_leadership_ok": leadership_ok,
+        "book_quality_ok": quality_ok,
+        "book_value_ok": value_ok,
+        "book_market_regime": regime,
+        "book_selection_comment": "／".join(summary_bits),
+    }
+
+
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
+    market_context = build_market_proxy_context(stocks)
     candidates = [
         s for s in stocks
         if is_main_board_stock(s)
         and safe_float(s.get("price")) >= 8
-        and safe_int(s.get("volume")) >= 800
-        and -1.2 <= safe_float(s.get("change_percent")) <= 6.2
-        and safe_float(s.get("snapshot_recommendation_score") or s.get("recommendation_score")) >= 18
+        and safe_int(s.get("volume")) >= 500
+        and -2.0 <= safe_float(s.get("change_percent")) <= 6.5
+        and safe_float(s.get("snapshot_recommendation_score") or s.get("recommendation_score")) >= 14
         and safe_str(s.get("signal")) not in {"短線過熱", "偏弱整理"}
     ]
 
@@ -2537,16 +2811,28 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
                     result_map[symbol] = original
 
     analyzed = list(result_map.values())
+    analyzed_with_proxy: List[Dict[str, Any]] = []
+    for stock in analyzed:
+        proxy_info = build_book_proxy_selection(stock, market_context)
+        merged = dict(stock)
+        merged.update(proxy_info)
+        analyzed_with_proxy.append(merged)
+    analyzed = analyzed_with_proxy
 
     analyzed = [
         s for s in analyzed
         if s.get("signal") in {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
-        and safe_float(s.get("recommendation_score")) >= 32
+        and safe_float(s.get("recommendation_score")) >= 30
         and safe_str(s.get("operation_rating")) in {"A", "B+"}
+        and (
+            safe_float(s.get("book_selection_score")) >= BOOK_PROXY_STRONG_SELECTION_SCORE
+            or bool(s.get("book_framework_pass"))
+        )
     ]
 
     analyzed.sort(
         key=lambda x: (
+            x.get("book_selection_score", 0),
             x.get("recommendation_score", 0),
             1 if x.get("signal") == "突破前夕" else 0,
             1 if x.get("operation_rating") == "A" else 0,
@@ -2610,6 +2896,9 @@ def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
         "stop_loss": s.get("stop_loss", ""),
         "risk_reward": s.get("risk_reward", ""),
         "risk_note": s.get("risk_note", ""),
+        "book_selection_score": s.get("book_selection_score", 0),
+        "book_market_regime": s.get("book_market_regime", ""),
+        "book_selection_comment": s.get("book_selection_comment", ""),
         "analysis_source": s.get("analysis_source", "snapshot"),
     }
 
@@ -2636,6 +2925,9 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
         "stop_loss": stock.get("stop_loss", ""),
         "risk_reward": stock.get("risk_reward", ""),
         "risk_note": stock.get("risk_note", ""),
+        "book_selection_score": stock.get("book_selection_score", 0),
+        "book_market_regime": stock.get("book_market_regime", ""),
+        "book_selection_comment": stock.get("book_selection_comment", ""),
         "update_time": stock.get("update_time", ""),
     }
 
