@@ -1736,8 +1736,8 @@ export default function Home() {
                     >
                       {[
                         getValidationBasisText(strategyValidation),
-                        getReturnBasisText(strategyValidation.return_basis),
-                        `驗證池 ${strategyValidation.validation_pool_size ?? "-"} 檔`,
+                        getReturnBasisText(strategyValidation?.return_basis),
+                        `驗證池 ${strategyValidation?.validation_pool_size ?? "-"} 檔`,
                       ].map((text) => (
                         <span
                           key={text}
@@ -2456,7 +2456,7 @@ export default function Home() {
                       {strategyValidation && (
                         <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
                           驗證方法：{getValidationBasisText(strategyValidation)}；報酬口徑：
-                          {getReturnBasisText(strategyValidation.return_basis)}
+                          {getReturnBasisText(strategyValidation?.return_basis)}
                         </div>
                       )}
                     </div>
