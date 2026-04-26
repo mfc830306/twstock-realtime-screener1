@@ -65,6 +65,7 @@ VALIDATION_ROCKET_RETURN_20D = 15.0
 VALIDATION_STRONG_ROCKET_RETURN_20D = 20.0
 VALIDATION_MIN_HISTORY_SCORE = 30.0
 VALIDATION_POOL_PER_KEY = 18
+VALIDATION_SEED_ANALYSIS_LIMIT = 180
 RECOMMENDATION_SEED_LIMIT = 80
 BOOK_PROXY_MIN_SELECTION_SCORE = 58.0
 BOOK_PROXY_STRONG_SELECTION_SCORE = 68.0
@@ -1566,6 +1567,8 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
         "stop_hit_rate_5d": 0.0,
         "last_signal_date": "",
         "confidence": "低",
+        "validation_basis": "historical_signal_rating_pool",
+        "return_basis": "signal_next_open_to_nth_session_close",
     }
 
     if (
@@ -1673,9 +1676,12 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
             entry_price = safe_float(candles[idx + 1].get("close")) or close_now
 
         forward_returns: Dict[int, float] = {}
+        exit_dates: Dict[int, str] = {}
         for day in VALIDATION_FORWARD_DAYS:
+            # Day N means buying at the next session open and marking at the Nth session close.
             future_close = safe_float(candles[idx + day].get("close"))
             forward_returns[day] = round(calc_return_pct(entry_price, future_close), 2)
+            exit_dates[day] = safe_str(candles[idx + day].get("date"))
 
         target_low, _ = parse_range_bounds(plan["target_price"], 0.0)
         stop_price = safe_float(plan["stop_loss"])
@@ -1695,8 +1701,11 @@ def build_stock_signal_validation(base_stock: Dict[str, Any]) -> Dict[str, Any]:
             "signal": current_signal,
             "date": safe_str(candles[idx].get("date")),
             "trading_days_ago": len(candles) - 1 - idx,
+            "entry_date": safe_str(candles[idx + 1].get("date")),
             "entry_price": round(entry_price, 2),
             "forward_returns": forward_returns,
+            "exit_dates": exit_dates,
+            "return_basis": "signal_next_open_to_nth_session_close",
             "max_favorable_return_5d": round(calc_return_pct(entry_price, future_high_5d), 2),
             "max_adverse_return_5d": round(calc_return_pct(entry_price, future_low_5d), 2),
             "max_favorable_return_10d": max_favorable_return_10d,
@@ -1763,28 +1772,76 @@ def build_validation_seed_pool(
     if not target_keys:
         return list(recommendations)
 
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    market_context = build_market_proxy_context(stocks)
+    rough_candidates: List[Dict[str, Any]] = []
     for stock in stocks:
-        signal = safe_str(stock.get("signal"))
-        rating = safe_str(stock.get("operation_rating"))
-        key = build_signal_rating_key(signal, rating)
-        if key not in target_keys:
-            continue
         if not is_main_board_stock(stock):
             continue
         if safe_float(stock.get("price")) < 8:
             continue
-        if safe_int(stock.get("volume")) < 600:
+        if safe_int(stock.get("volume")) < 500:
             continue
         if not (-2.5 <= safe_float(stock.get("change_percent")) <= 6.8):
             continue
+        if safe_str(stock.get("signal")) in {"短線過熱", "偏弱整理"}:
+            continue
+        rough_candidates.append(stock)
+
+    rough_candidates.sort(
+        key=lambda x: (
+            safe_float(x.get("snapshot_recommendation_score") or x.get("recommendation_score")),
+            safe_float(x.get("snapshot_score") or x.get("score")),
+            safe_int(x.get("volume")),
+            safe_int(x.get("trade_value")),
+        ),
+        reverse=True,
+    )
+    analysis_limit = min(
+        len(rough_candidates),
+        max(RECOMMENDATION_SEED_LIMIT * 2, VALIDATION_POOL_PER_KEY * max(len(target_keys), 1) * 4),
+        VALIDATION_SEED_ANALYSIS_LIMIT,
+    )
+    rough_candidates = rough_candidates[:analysis_limit]
+
+    analyzed_candidates: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        future_map = {
+            executor.submit(build_historical_analysis_for_stock, stock): stock
+            for stock in rough_candidates
+        }
+        for future in as_completed(future_map):
+            original = future_map[future]
+            try:
+                analyzed = future.result()
+            except Exception:
+                analyzed = original
+
+            merged = dict(analyzed)
+            merged.update(build_book_proxy_selection(merged, market_context))
+
+            key = build_signal_rating_key(merged.get("signal"), merged.get("operation_rating"))
+            if key not in target_keys:
+                continue
+            if safe_float(merged.get("recommendation_score")) < VALIDATION_MIN_HISTORY_SCORE:
+                continue
+            if (
+                safe_float(merged.get("book_selection_score")) < BOOK_PROXY_MIN_SELECTION_SCORE
+                and not bool(merged.get("book_framework_pass"))
+            ):
+                continue
+            analyzed_candidates.append(merged)
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for stock in analyzed_candidates:
+        key = build_signal_rating_key(stock.get("signal"), stock.get("operation_rating"))
         grouped.setdefault(key, []).append(stock)
 
     seed_pool: List[Dict[str, Any]] = []
     for key, items in grouped.items():
         items.sort(
             key=lambda x: (
-                safe_float(x.get("snapshot_recommendation_score") or x.get("recommendation_score")),
+                safe_float(x.get("book_selection_score")),
+                safe_float(x.get("recommendation_score")),
                 safe_int(x.get("volume")),
                 safe_int(x.get("trade_value")),
             ),
@@ -1850,10 +1907,18 @@ def build_validation_period_snapshot(
         average_samples_per_stock,
         stocks_without_history,
     )
+    window_note = ""
+    if lookback_days is not None:
+        window_note = (
+            f"只統計訊號日距今 {lookback_days} 個交易日內，且已完成 "
+            f"{max(VALIDATION_FORWARD_DAYS)} 日追蹤的樣本。"
+        )
 
     return {
         "label": label,
         "lookback_days": lookback_days,
+        "window_note": window_note,
+        "return_basis": "訊號隔日開盤進場，N日報酬=進場後第N個交易日收盤。",
         "recommendation_count": recommendation_count,
         "validated_stock_count": validated_stock_count,
         "coverage_rate": coverage_rate,
@@ -2110,6 +2175,7 @@ def build_strategy_validation(
             "current_signal": safe_str(stock.get("signal")),
             "current_rating": safe_str(stock.get("operation_rating")),
             "current_score": round(safe_float(stock.get("recommendation_score") or stock.get("score")), 2),
+            "book_selection_score": round(safe_float(stock.get("book_selection_score")), 2),
             "sample_count": pooled_summary["sample_count"],
             "avg_return_5d": pooled_summary["avg_return_5d"],
             "win_rate_5d": pooled_summary["win_rate_5d"],
@@ -2130,6 +2196,8 @@ def build_strategy_validation(
             "last_signal_date": max((safe_str(x.get("date")) for x in pooled_samples), default=""),
             "confidence": pooled_summary["confidence"],
             "validation_scope": "cross_signal_pool",
+            "validation_basis": "same_historical_signal_rating_with_book_proxy_prefilter",
+            "return_basis": "signal_next_open_to_nth_session_close",
             "validation_symbol_count": len(pooled_symbol_counts.get(key, set())),
         })
 
@@ -2142,6 +2210,7 @@ def build_strategy_validation(
         signal_summary = summarize_validation_samples(samples)
         signal_breakdown.append({
             "signal": signal,
+            "return_basis": "signal_next_open_to_nth_session_close",
             "sample_count": signal_summary["sample_count"],
             "avg_return_3d": signal_summary["avg_return_3d"],
             "avg_return_5d": signal_summary["avg_return_5d"],
@@ -2215,8 +2284,12 @@ def build_strategy_validation(
     weakest_signal = signal_breakdown[-1]["signal"] if signal_breakdown else ""
 
     return {
+        "validation_basis": "cross_stock_historical_signal_pool_with_book_proxy_prefilter",
+        "return_basis": "訊號隔日開盤進場，N日報酬=進場後第N個交易日收盤；MFE/MAE=進場日起N個交易日內最高/最低。",
         "lookback_candles": VALIDATION_HISTORY_CANDLES,
         "holding_days": VALIDATION_FORWARD_DAYS,
+        "validation_pool_size": len(validation_pool),
+        "validation_universe_size": len(validation_universe or recommendations),
         "recommendation_count": len(recommendations),
         "validated_stock_count": validated_stock_count,
         "coverage_rate": coverage_rate,
@@ -2245,7 +2318,8 @@ def get_cached_validation(
     last_update: str,
 ) -> Dict[str, Any]:
     signature = "|".join(
-        f"{safe_str(x.get('symbol'))}:{safe_str(x.get('signal'))}:{safe_str(x.get('operation_rating'))}:{safe_float(x.get('recommendation_score')):.2f}"
+        f"{safe_str(x.get('symbol'))}:{safe_str(x.get('signal'))}:{safe_str(x.get('operation_rating'))}:"
+        f"{safe_float(x.get('recommendation_score')):.2f}:{safe_float(x.get('book_selection_score')):.2f}"
         for x in recommendations
     )
 
