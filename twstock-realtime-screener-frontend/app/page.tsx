@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -27,6 +27,9 @@ type Stock = {
   risk_note?: string;
   update_time?: string;
   analysis_source?: string;
+  book_selection_score?: number;
+  book_market_regime?: string;
+  book_selection_comment?: string;
 };
 
 type FocusedStock = {
@@ -92,6 +95,7 @@ type ValidationRecord = {
     signal: string;
     operationRating: string;
     recommendationScore: number;
+    bookSelectionScore: number;
     reason: string;
     entryPrice: string;
     targetPrice: string;
@@ -167,6 +171,7 @@ type StrategyValidationSummary = {
 
 type StrategyValidationSignal = {
   signal: string;
+  return_basis?: string;
   sample_count: number;
   avg_return_3d: number;
   avg_return_5d: number;
@@ -209,6 +214,9 @@ type StrategyValidationStock = {
   stop_hit_rate_5d: number;
   last_signal_date: string;
   confidence: string;
+  book_selection_score?: number;
+  validation_basis?: string;
+  return_basis?: string;
   validation_scope?: string;
   validation_symbol_count?: number;
 };
@@ -216,6 +224,8 @@ type StrategyValidationStock = {
 type StrategyValidationPeriod = {
   label: string;
   lookback_days?: number | null;
+  window_note?: string;
+  return_basis?: string;
   recommendation_count: number;
   validated_stock_count: number;
   coverage_rate: number;
@@ -230,8 +240,12 @@ type StrategyValidationPeriod = {
 };
 
 type StrategyValidation = {
+  validation_basis?: string;
+  return_basis?: string;
   lookback_candles: number;
   holding_days: number[];
+  validation_pool_size?: number;
+  validation_universe_size?: number;
   recommendation_count: number;
   validated_stock_count: number;
   coverage_rate: number;
@@ -420,6 +434,7 @@ function getFallbackValidationPeriod(validation: StrategyValidation): StrategyVa
     summary: validation.summary,
     risk_flags: validation.risk_flags,
     stocks_without_history: validation.stocks_without_history,
+    return_basis: validation.return_basis,
   };
 }
 
@@ -565,6 +580,20 @@ function formatPercent(value: number, digits = 0) {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function getValidationBasisText(validation?: StrategyValidation | null) {
+  if (!validation) return "尚無後端驗證資料";
+  if (validation.validation_basis === "cross_stock_historical_signal_pool_with_book_proxy_prefilter") {
+    return "歷史K同訊號/同評級 + 代理分預篩";
+  }
+  return validation.validation_basis || "跨股票同訊號驗證";
+}
+
+function getReturnBasisText(text?: string) {
+  if (!text) return "訊號隔日開盤進場，N日報酬看第N個交易日收盤。";
+  if (text.includes("訊號隔日開盤")) return text;
+  return "訊號隔日開盤進場，N日報酬看第N個交易日收盤。";
+}
+
 function isValidationPass(record: ValidationRecord) {
   const base = Math.max(record.recommendationCount, 1);
   const validRate = safeDivide(record.validSignalCount, base);
@@ -704,6 +733,7 @@ function buildValidationRecord(
       signal: stock.signal || "-",
       operationRating: stock.operation_rating || "-",
       recommendationScore: Number(stock.recommendation_score || stock.score || 0),
+      bookSelectionScore: Number(stock.book_selection_score || 0),
       reason: stock.reason || stock.technical_comment || "-",
       entryPrice: stock.entry_price || "-",
       targetPrice: stock.target_price || "-",
@@ -1300,17 +1330,17 @@ export default function Home() {
     let summary = "";
     if (strategyValidation && historicalValidationTone) {
       if (structureGood && positivePeriods.length === validationPeriods.length) {
-        summary = "今天結構、近20日、近60日與較長樣本的跨股票同訊號 5日急拉、10日主升、20日延續驗證都站得住，這套邏輯已接近可實戰的飆股模式。";
+        summary = "今天結構、近20日、近60日與較長樣本的歷史K同訊號驗證都站得住，且已用代理分預篩，這套邏輯已接近可實戰的飆股模式。";
       } else if (structureGood && isValidationPeriodPositive(recent20) && !isValidationPeriodPositive(recent60)) {
         summary = "今天結構很乾淨，近20日的三段驗證已開始改善，但近60日與較長樣本還沒完全跟上，因此先觀察不要直接放大。";
       } else if (structureGood && hasSampleIssue) {
-        summary = "今天結構很乾淨，但跨股票同訊號的歷史飆股樣本還在累積，先不要因為今天型態漂亮就直接當成可實單系統。";
+        summary = "今天結構很乾淨，但歷史K同訊號與代理分預篩後的飆股樣本還在累積，先不要因為今天型態漂亮就直接當成可實單系統。";
       } else if (structureGood) {
         summary = "今天結構很乾淨，但 5 / 10 / 20 日三段驗證還沒一致轉強，因此暫不建議直接依賴。";
       } else if (positivePeriods.length >= 2) {
         summary = "歷史飆股驗證不差，但今天這批名單沒有完全照規則長出來，因此今天不能直接照單全收。";
       } else {
-        summary = "目前近20日、近60日與較長樣本的跨股票同訊號 5 / 10 / 20 日驗證都沒有一致拉開，因此這套邏輯暫時只能觀察。";
+      summary = "目前近20日、近60日與較長樣本的歷史K同訊號 5 / 10 / 20 日驗證都沒有一致拉開，因此這套邏輯暫時只能觀察。";
       }
     } else {
       summary = `今天結構分數 ${validationHealth.score}/100，但歷史飆股覆蓋仍不足，今天資訊還不完整。`;
@@ -1323,7 +1353,7 @@ export default function Home() {
 
     let directRiskMessage: string | null = null;
     if (missingPeriodLabel) {
-      directRiskMessage = `${missingPeriodLabel} 的跨股票同訊號飆股歷史樣本還不夠，先累積資料再判斷是否真的有 edge。`;
+      directRiskMessage = `${missingPeriodLabel} 的歷史K同訊號飆股樣本還不夠，先累積資料再判斷是否真的有 edge。`;
     } else if (weakestPeriod) {
       directRiskMessage = `${weakestPeriod.label} 的 5 / 10 / 20 日命中率為 ${formatRatioPercent(
         weakestPeriod.summary.sprint_hit_rate_5d
@@ -1398,7 +1428,7 @@ export default function Home() {
 
     return {
       label: "先觀察",
-      detail: "先看近20日和近60日的跨股票同訊號 5 / 10 / 20 日命中率有沒有同步改善。",
+      detail: "先看近20日和近60日的歷史K同訊號 5 / 10 / 20 日命中率有沒有同步改善。",
       accent: "#7fb6ff",
       surface: "rgba(96, 165, 250, 0.14)",
     };
@@ -1419,6 +1449,7 @@ export default function Home() {
             `穩定度 ${validationHistoryStats?.passCount ?? 0}/${validationHistoryStats?.totalRecords ?? 0}`,
             `主訊號 ${validationRecord?.signalSummary.join(" / ") || "-"}`,
           ],
+          note: "只看今天推薦名單是否乾淨，不代表歷史命中率。",
         },
         ...validationPeriods.map(({ key, label, period }) => {
           const tone = getValidationPeriodSnapshot(period);
@@ -1434,14 +1465,16 @@ export default function Home() {
               !period || period.sample_count <= 0
                 ? ["尚無足夠樣本", "先累積資料"]
                 : [
+                    `樣本 ${period.sample_count} 筆 / 覆蓋 ${formatRatioPercent(period.coverage_rate)}`,
                     `5日急拉 ${formatRatioPercent(period.summary.sprint_hit_rate_5d)} / ${formatSigned(period.summary.avg_return_5d)}%`,
                     `10日主升 ${formatRatioPercent(period.summary.trend_hit_rate_10d)} / ${formatSigned(period.summary.avg_return_10d)}%`,
                     `20日延續 ${formatRatioPercent(period.summary.rocket_hit_rate_20d)} / ${formatSigned(period.summary.avg_return_20d)}%`,
                   ],
+            note: period?.window_note || period?.return_basis || strategyValidation?.return_basis || "",
           };
         }),
       ],
-    [validationHealth, validationHistoryStats, validationPeriods, validationRecord]
+    [strategyValidation, validationHealth, validationHistoryStats, validationPeriods, validationRecord]
   );
 
   const toggleValidationPanel = () => {
@@ -1692,6 +1725,38 @@ export default function Home() {
                     </div>
                   </div>
 
+                  {strategyValidation && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "8px",
+                        marginBottom: "14px",
+                      }}
+                    >
+                      {[
+                        getValidationBasisText(strategyValidation),
+                        getReturnBasisText(strategyValidation.return_basis),
+                        `驗證池 ${strategyValidation.validation_pool_size ?? "-"} 檔`,
+                      ].map((text) => (
+                        <span
+                          key={text}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            background: "rgba(255,255,255,0.06)",
+                            border: "1px solid rgba(255,255,255,0.1)",
+                            color: "#cfe3ff",
+                            fontSize: "12px",
+                            fontWeight: 800,
+                          }}
+                        >
+                          {text}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   <div
                     style={{
                       borderRadius: "14px",
@@ -1804,6 +1869,7 @@ export default function Home() {
                           </div>
                           <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "13px" }}>
                             分數 {stock.recommendationScore.toFixed(2)}
+                            {stock.bookSelectionScore > 0 ? ` / 代理 ${stock.bookSelectionScore.toFixed(1)}` : ""}
                           </div>
                         </div>
 
@@ -2138,7 +2204,8 @@ export default function Home() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          分數 {stock.score ?? 0}
+                          推薦 {stock.recommendation_score || stock.score || 0}
+                          {stock.book_selection_score ? ` / 代理 ${stock.book_selection_score.toFixed(1)}` : ""}
                         </div>
                       </div>
 
@@ -2168,6 +2235,7 @@ export default function Home() {
                         <span>目標：{stock.target_price || "-"}</span>
                         <span>停損：{stock.stop_loss || "-"}</span>
                         <span>風報比：{stock.risk_reward || "-"}</span>
+                        {stock.book_selection_comment && <span>代理：{stock.book_selection_comment}</span>}
                       </div>
                     </div>
                   );
@@ -2205,7 +2273,7 @@ export default function Home() {
                         邏輯驗證總覽
                       </div>
                       <div style={{ color: "#9cccf9", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
-                        先看今天結構，再比較近20日、近60日與較長樣本的 20 日飆股命中率，就知道這套邏輯是不是正在抓到真正會噴的股票。
+                        先看今天結構，再比較「歷史K同訊號/同評級 + 代理分預篩」後的 5 / 10 / 20 日命中率，避免快照分和歷史分混在一起。
                       </div>
                     </div>
 
@@ -2330,12 +2398,33 @@ export default function Home() {
                           <div style={{ color: "#ffffff", fontSize: "24px", fontWeight: 900, marginBottom: "8px" }}>
                             {metric.score}
                           </div>
-                          <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.65, fontWeight: 700 }}>
-                            {metric.metrics[0]}
-                          </div>
-                          <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.65, fontWeight: 700, marginTop: "4px" }}>
-                            {metric.metrics[1]}
-                          </div>
+                          {metric.metrics.map((item, itemIndex) => (
+                            <div
+                              key={`${metric.key}-${itemIndex}`}
+                              style={{
+                                color: itemIndex === 0 ? "#cfe3ff" : "#9fc7f5",
+                                fontSize: "12px",
+                                lineHeight: 1.65,
+                                fontWeight: 700,
+                                marginTop: itemIndex === 0 ? 0 : "4px",
+                              }}
+                            >
+                              {item}
+                            </div>
+                          ))}
+                          {metric.note && (
+                            <div
+                              style={{
+                                color: "#8fb8e8",
+                                fontSize: "11px",
+                                lineHeight: 1.55,
+                                fontWeight: 700,
+                                marginTop: "8px",
+                              }}
+                            >
+                              {metric.note}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2364,6 +2453,12 @@ export default function Home() {
                             }`
                           : ""}
                       </div>
+                      {strategyValidation && (
+                        <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700 }}>
+                          驗證方法：{getValidationBasisText(strategyValidation)}；報酬口徑：
+                          {getReturnBasisText(strategyValidation.return_basis)}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -2434,6 +2529,7 @@ export default function Home() {
                             </div>
                             <div style={{ color: "#fff5b3", fontWeight: 900, fontSize: "14px" }}>
                               分數 {stock.recommendationScore.toFixed(2)}
+                              {stock.bookSelectionScore > 0 ? ` / 代理 ${stock.bookSelectionScore.toFixed(1)}` : ""}
                             </div>
                           </div>
 
@@ -2825,7 +2921,7 @@ export default function Home() {
                         {stock.operation_rating || "-"}
                       </td>
 
-                      <td style={tdStyle}>{stock.score ?? 0}</td>
+                      <td style={tdStyle}>{stock.recommendation_score || stock.score || 0}</td>
 
                       <td style={tdStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
