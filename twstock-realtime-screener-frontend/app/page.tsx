@@ -86,6 +86,8 @@ type ApiResponse = {
 };
 
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
+const VALIDATION_START_DATE = "20260427";
+const VALIDATION_START_LABEL = "2026/04/27";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -124,6 +126,10 @@ function formatDateString(dateText?: string) {
     return `${clean.slice(0, 4)}/${clean.slice(4, 6)}/${clean.slice(6, 8)}`;
   }
   return dateText;
+}
+
+function normalizeDateKey(dateText?: string) {
+  return String(dateText || "").replace(/\D/g, "").slice(0, 8);
 }
 
 function getMarketLightColor(status?: string) {
@@ -640,6 +646,19 @@ export default function Home() {
     return null;
   }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
 
+  const validationStartStocks = useMemo(
+    () => recommendations.slice(0, 10),
+    [recommendations]
+  );
+
+  const validationDataDateKey = normalizeDateKey(dataDate);
+  const isValidationStartDataDate = validationDataDateKey === VALIDATION_START_DATE;
+
+  const isValidationStartReady =
+    recommendationStatus === "after_close_settlement" &&
+    isValidationStartDataDate &&
+    validationStartStocks.length > 0;
+
   const toggleRecommendationsPanel = () => {
     setShowRecommendationsPanel((prev) => {
       const next = !prev;
@@ -865,7 +884,7 @@ export default function Home() {
                   收盤推薦追蹤驗證
                 </h2>
                 <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
-                  這裡會獨立追蹤「收盤後推薦10檔」隔天之後的真實表現，和選股首頁分開呈現。
+                  新版驗證從 {VALIDATION_START_LABEL} 收盤推薦10檔開始；後續交易日只用來追蹤這批名單的真實表現。
                 </div>
               </div>
 
@@ -881,7 +900,7 @@ export default function Home() {
                   whiteSpace: "nowrap",
                 }}
               >
-                新版追蹤待建立
+                起始日 {VALIDATION_START_LABEL}
               </div>
             </div>
 
@@ -896,8 +915,10 @@ export default function Home() {
               {[
                 {
                   title: "驗證起點",
-                  value: "收盤後推薦",
-                  detail: "只追蹤收盤後結算的推薦10檔，盤中名單不列入驗證。",
+                  value: isValidationStartReady ? `${validationStartStocks.length} 檔` : "等待起始樣本",
+                  detail: isValidationStartReady
+                    ? `已讀到 ${formatDateString(dataDate)} 收盤推薦，作為新版驗證的待追蹤樣本。`
+                    : `新版驗證從 ${VALIDATION_START_LABEL} 收盤後推薦開始，盤中名單不列入。`,
                 },
                 {
                   title: "進場口徑",
@@ -930,6 +951,94 @@ export default function Home() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            <div
+              style={{
+                borderRadius: "20px",
+                padding: isMobile ? "16px" : "20px",
+                background: isValidationStartReady
+                  ? "linear-gradient(180deg, rgba(58,168,89,0.14) 0%, rgba(20,58,112,0.48) 100%)"
+                  : "linear-gradient(180deg, rgba(255,217,95,0.12) 0%, rgba(20,58,112,0.42) 100%)",
+                border: isValidationStartReady
+                  ? "1px solid rgba(126,231,135,0.24)"
+                  : "1px solid rgba(255,217,95,0.22)",
+                marginBottom: "18px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: isMobile ? "flex-start" : "center",
+                  gap: "12px",
+                  flexDirection: isMobile ? "column" : "row",
+                  marginBottom: "14px",
+                }}
+              >
+                <div>
+                  <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
+                    起始樣本狀態
+                  </div>
+                  <div style={{ color: isValidationStartReady ? "#7ee787" : "#ffd95f", fontSize: "24px", fontWeight: 900 }}>
+                    {isValidationStartReady ? "2026/04/27 已列入待驗證" : "尚未讀到 2026/04/27 起始樣本"}
+                  </div>
+                </div>
+                <div style={{ color: "#cfe3ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 800 }}>
+                  資料日：{formatDateString(dataDate)} ｜ 更新：{lastUpdate}
+                </div>
+              </div>
+
+              <div style={{ color: "#dce9ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700, marginBottom: "14px" }}>
+                {isValidationStartReady
+                  ? "4/27 收盤推薦會先放進待追蹤清單；等 4/28 開盤價出來後，才開始計算 1 / 2 / 3 / 5 / 10 日結果。"
+                  : recommendationMessage || `目前還沒有讀到 ${VALIDATION_START_LABEL} 的收盤後推薦名單。`}
+              </div>
+
+              {isValidationStartReady && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                    gap: "10px",
+                  }}
+                >
+                  {validationStartStocks.map((stock, index) => (
+                    <div
+                      key={`${stock.symbol}-start-validation`}
+                      style={{
+                        borderRadius: "16px",
+                        padding: "12px 14px",
+                        background: "rgba(255,255,255,0.05)",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "10px",
+                          marginBottom: "8px",
+                        }}
+                      >
+                        <div style={{ color: "#ffffff", fontSize: "17px", fontWeight: 900 }}>
+                          {index + 1}. {stock.symbol} {stock.name}
+                        </div>
+                        <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
+                          {stock.recommendation_score || stock.score || 0}
+                        </div>
+                      </div>
+                      <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
+                        訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.price)}
+                      </div>
+                      <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
+                        隔日開盤後開始追蹤，不用今天收盤價當績效進場價。
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div
