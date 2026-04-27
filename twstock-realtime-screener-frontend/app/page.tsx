@@ -74,6 +74,9 @@ type ApiResponse = {
   stocks: Stock[];
   recommendations?: Stock[];
   validation?: StrategyValidation | null;
+  recommendation_status?: string;
+  recommendation_message?: string;
+  validation_mode?: string;
   categories?: BackendCategory[];
   focused_stock?: FocusedStock | null;
   message?: string;
@@ -268,6 +271,7 @@ type StrategyValidation = {
 
 const BACKEND_BASE = "https://twstock-realtime-screener1.onrender.com/stocks";
 const VALIDATION_STORAGE_KEY = "twstock-validation-history-v1";
+const VALIDATION_UI_ENABLED = false;
 const VALIDATION_SIGNALS = ["突破前夕", "量增轉強", "整理待發", "溫和轉強"];
 const EXCLUDED_VALIDATION_SIGNALS = ["短線過熱", "偏弱觀察", "偏弱整理"];
 
@@ -783,6 +787,8 @@ export default function Home() {
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
   const [total, setTotal] = useState(0);
   const [allTotal, setAllTotal] = useState(0);
+  const [recommendationStatus, setRecommendationStatus] = useState("");
+  const [recommendationMessage, setRecommendationMessage] = useState("");
   const [showValidationPanel, setShowValidationPanel] = useState(false);
   const [showRecommendationsPanel, setShowRecommendationsPanel] = useState(true);
   const [showValidationDetails, setShowValidationDetails] = useState(false);
@@ -820,9 +826,7 @@ export default function Home() {
     const data: ApiResponse = await res.json();
     if (!data.success) throw new Error(data.error || data.message || "取得推薦資料失敗");
 
-    const source = (data.recommendations?.length ? data.recommendations : data.stocks || []).map(
-      normalizeStock
-    );
+    const source = (data.recommendations || []).map(normalizeStock);
     const safeRecommendations = source
       .filter((stock) => stock.market === "上市" || stock.market === "上櫃")
       .sort(
@@ -832,7 +836,9 @@ export default function Home() {
       .slice(0, 10);
     if (requestId !== recommendationsRequestIdRef.current) return;
     setRecommendations(safeRecommendations);
-    setStrategyValidation(data.validation || null);
+    setStrategyValidation(null);
+    setRecommendationStatus(data.recommendation_status || "");
+    setRecommendationMessage(data.recommendation_message || "");
   }
 
   async function fetchPagedStocks(
@@ -892,9 +898,11 @@ export default function Home() {
 
       if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
       if (data.categories) setBackendCategories(data.categories);
-      if (data.recommendations?.length) {
+      if (Array.isArray(data.recommendations) && !keyword && category === "all") {
         setRecommendations((data.recommendations || []).map(normalizeStock).slice(0, 10));
-        setStrategyValidation(data.validation || null);
+        setStrategyValidation(null);
+        setRecommendationStatus(data.recommendation_status || "");
+        setRecommendationMessage(data.recommendation_message || "");
       }
 
       setMarketStatus(data.market_status || "-");
@@ -964,9 +972,7 @@ export default function Home() {
       const data: ApiResponse = await res.json();
       if (!data.success) throw new Error(data.error || data.message || "載入失敗");
 
-      const source = (data.recommendations?.length ? data.recommendations : data.stocks || []).map(
-        normalizeStock
-      );
+      const source = (data.recommendations || []).map(normalizeStock);
       const safeRecommendations = source
         .filter((stock) => stock.market === "上市" || stock.market === "上櫃")
         .sort(
@@ -977,7 +983,9 @@ export default function Home() {
 
       if (requestId !== recommendationsRequestIdRef.current) return null;
       setRecommendations(safeRecommendations);
-      setStrategyValidation(data.validation || null);
+      setStrategyValidation(null);
+      setRecommendationStatus(data.recommendation_status || "");
+      setRecommendationMessage(data.recommendation_message || "");
       return data;
     } catch (err) {
       if (requestId !== recommendationsRequestIdRef.current) return null;
@@ -1043,10 +1051,12 @@ export default function Home() {
 
       if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
       if (data.categories) setBackendCategories(data.categories);
-      if (data.recommendations?.length) {
+      if (Array.isArray(data.recommendations) && !keyword && category === "all") {
         recommendationsRequestIdRef.current += 1;
         setRecommendations((data.recommendations || []).map(normalizeStock).slice(0, 10));
-        setStrategyValidation(data.validation || null);
+        setStrategyValidation(null);
+        setRecommendationStatus(data.recommendation_status || "");
+        setRecommendationMessage(data.recommendation_message || "");
       }
 
       setMarketStatus(data.market_status || "-");
@@ -1668,25 +1678,27 @@ export default function Home() {
               }}
             >
               <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>價格分類</h2>
-              <button
-                type="button"
-                onClick={toggleValidationPanel}
-                style={{
-                  border: "1px solid rgba(120, 205, 255, 0.28)",
-                  borderRadius: "12px",
-                  padding: "8px 12px",
-                  background: showValidationPanel
-                    ? "linear-gradient(180deg, rgba(106, 187, 255, 0.28) 0%, rgba(56, 116, 214, 0.38) 100%)"
-                    : "rgba(255,255,255,0.05)",
-                  color: "#e8f4ff",
-                  fontWeight: 800,
-                  fontSize: "13px",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {showValidationPanel ? "收起驗證" : "驗證紀錄"}
-              </button>
+              {VALIDATION_UI_ENABLED && (
+                <button
+                  type="button"
+                  onClick={toggleValidationPanel}
+                  style={{
+                    border: "1px solid rgba(120, 205, 255, 0.28)",
+                    borderRadius: "12px",
+                    padding: "8px 12px",
+                    background: showValidationPanel
+                      ? "linear-gradient(180deg, rgba(106, 187, 255, 0.28) 0%, rgba(56, 116, 214, 0.38) 100%)"
+                      : "rgba(255,255,255,0.05)",
+                    color: "#e8f4ff",
+                    fontWeight: 800,
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {showValidationPanel ? "收起驗證" : "驗證紀錄"}
+                </button>
+              )}
             </div>
 
             {false && showValidationPanel && validationRecord && (
@@ -2030,6 +2042,7 @@ export default function Home() {
               <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
                 交易模式說明
               </div>
+              <div>• 推薦10檔只在收盤後結算，盤中不更新推薦名單</div>
               <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
               <div>• 點擊推薦股或列表股，也可直接切換分析</div>
               <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
@@ -2046,7 +2059,14 @@ export default function Home() {
                 marginBottom: showRecommendationsPanel ? "10px" : "0",
               }}
             >
-              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 推薦10檔</h2>
+              <div>
+                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 推薦10檔</h2>
+                {recommendationMessage && (
+                  <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginTop: "6px" }}>
+                    {recommendationMessage}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={toggleRecommendationsPanel}
@@ -2078,7 +2098,9 @@ export default function Home() {
               >
               {recommendations.length === 0 ? (
                 <div style={{ color: "#cfe2ff", padding: "16px 4px", fontWeight: 700 }}>
-                  目前沒有可顯示的推薦資料
+                  {recommendationStatus === "intraday_paused"
+                    ? "盤中暫停結算推薦10檔，請收盤後再更新。"
+                    : recommendationMessage || "目前沒有可顯示的推薦資料"}
                 </div>
               ) : (
                 recommendations.map((stock) => {
@@ -2244,7 +2266,8 @@ export default function Home() {
               </div>
             )}
 
-            {!showRecommendationsPanel &&
+            {VALIDATION_UI_ENABLED &&
+              !showRecommendationsPanel &&
               showValidationPanel &&
               validationRecord &&
               validationHealth &&
