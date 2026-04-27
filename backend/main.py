@@ -191,6 +191,24 @@ def get_market_status_text() -> str:
     return "休市"
 
 
+def should_settle_recommendations(market_status: Optional[str] = None) -> bool:
+    status = market_status or get_market_status_text()
+    return status != "開盤"
+
+
+def build_recommendation_settlement_info(market_status: Optional[str] = None) -> Dict[str, str]:
+    status = market_status or get_market_status_text()
+    if should_settle_recommendations(status):
+        return {
+            "recommendation_status": "after_close_settlement",
+            "recommendation_message": "推薦10檔以最近一次收盤後完整資料結算，適合隔日觀察或進場前追蹤。",
+        }
+    return {
+        "recommendation_status": "intraday_paused",
+        "recommendation_message": "盤中暫停結算推薦10檔，避免半日成交量與未完成日K影響名單；請收盤後再更新。",
+    }
+
+
 def price_category(price: float) -> str:
     if price < 10:
         return "0-10"
@@ -2588,6 +2606,9 @@ def get_cached_recommendations(
     last_update: str,
     top_n: int = 10,
 ) -> List[Dict[str, Any]]:
+    if not should_settle_recommendations():
+        return []
+
     cached_items = _RECOMMENDATION_CACHE.get("items")
     if (
         isinstance(cached_items, list)
@@ -3047,6 +3068,8 @@ def get_stocks(
     try:
         result = get_cached_all_stocks(force_refresh=force_refresh)
         all_stocks = result["stocks"]
+        market_status = get_market_status_text()
+        recommendation_info = build_recommendation_settlement_info(market_status)
 
         filtered = filter_stocks(
             all_stocks,
@@ -3070,6 +3093,7 @@ def get_stocks(
             and not q.strip()
             and price_min <= 0
             and price_max <= 0
+            and should_settle_recommendations(market_status)
         ):
             recs = get_cached_recommendations(
                 all_stocks,
@@ -3077,13 +3101,6 @@ def get_stocks(
                 last_update=result["last_update"],
                 top_n=10,
             )
-            if recs:
-                validation = get_cached_validation(
-                    recs,
-                    all_stocks,
-                    data_date=result["data_date"],
-                    last_update=result["last_update"],
-                )
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
@@ -3098,10 +3115,13 @@ def get_stocks(
 
         return {
             "success": True,
-            "market_status": get_market_status_text(),
+            "market_status": market_status,
             "data_date": result["data_date"],
             "last_update": result["last_update"],
             "message": result.get("message", ""),
+            "recommendation_status": recommendation_info["recommendation_status"],
+            "recommendation_message": recommendation_info["recommendation_message"],
+            "validation_mode": "disabled",
             "total": total_filtered,
             "offset": offset,
             "limit": limit,
@@ -3110,7 +3130,7 @@ def get_stocks(
             "all_total": twse_total + otc_total,
             "categories": cats,
             "recommendations": [clean_stock_output(x) for x in recs],
-            "validation": validation,
+            "validation": None,
             "focused_stock": build_focused_analysis(focused) if focused else None,
             "stocks": [clean_stock_output(x) for x in paged],
         }
