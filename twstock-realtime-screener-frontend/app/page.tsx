@@ -71,6 +71,9 @@ type ValidationItem = {
   signal?: string;
   operation_rating?: string;
   start_close_price?: number;
+  current_price?: number;
+  current_day_change_pct?: number;
+  return_from_start_close_pct?: number;
   entry_date?: string;
   entry_open_price?: number;
   latest_price?: number;
@@ -95,7 +98,9 @@ type ValidationSummary = {
   count?: number;
   entered_count?: number;
   avg_latest_return_pct?: number;
+  avg_return_from_start_close_pct?: number;
   win_rate_pct?: number;
+  start_close_win_rate_pct?: number;
   hit_target_count?: number;
   hit_stop_count?: number;
 };
@@ -1034,9 +1039,9 @@ export default function Home() {
                 },
                 {
                   title: "追蹤週期",
-                  value: validationSummary.entered_count ? `${formatSigned(validationSummary.avg_latest_return_pct)}%` : "1 / 2 / 3 / 5 / 10日",
+                  value: validationSummary.count ? `${formatSigned(validationSummary.avg_return_from_start_close_pct)}%` : "1 / 2 / 3 / 5 / 10日",
                   detail: validationSummary.entered_count
-                    ? `目前勝率 ${formatSigned(validationSummary.win_rate_pct)}%，達標 ${validationSummary.hit_target_count || 0} 檔，停損 ${validationSummary.hit_stop_count || 0} 檔。`
+                    ? `收盤追蹤勝率 ${formatSigned(validationSummary.start_close_win_rate_pct)}%，進場勝率 ${formatSigned(validationSummary.win_rate_pct)}%，達標 ${validationSummary.hit_target_count || 0} 檔。`
                     : "後續會累積每個交易日的真實追蹤結果。",
                 },
               ].map((item) => (
@@ -1143,12 +1148,12 @@ export default function Home() {
                         </div>
                       </div>
                       <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
-                        訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)}
+                        訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)} ｜ 現價：{formatPrice(stock.current_price || stock.latest_price)}
                       </div>
                       <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
                         {stock.entry_open_price
-                          ? `進場：${formatDateString(stock.entry_date)} 開盤 ${formatPrice(stock.entry_open_price)} ｜ 最新 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}% ｜ 回撤 ${formatSigned(stock.max_drawdown_pct)}%`
-                          : "隔日開盤後開始追蹤，不用起始日收盤價當績效進場價。"}
+                          ? `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 進場起算 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}%`
+                          : `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 尚未記錄隔日開盤價`}
                       </div>
                     </div>
                   ))}
@@ -1315,7 +1320,7 @@ export default function Home() {
                           </div>
                         </div>
                         <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 800 }}>
-                          樣本 {summary.count || items.length || 0} 檔 ｜ 已進場 {summary.entered_count || 0} 檔 ｜ 平均 {formatSigned(summary.avg_latest_return_pct)}%
+                          樣本 {summary.count || items.length || 0} 檔 ｜ 收盤起算平均 {formatSigned(summary.avg_return_from_start_close_pct)}% ｜ 已進場 {summary.entered_count || 0} 檔
                         </div>
                       </div>
 
@@ -1353,12 +1358,12 @@ export default function Home() {
                               </div>
                             </div>
                             <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
-                              訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)}
+                              訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)} ｜ 現價：{formatPrice(stock.current_price || stock.latest_price)}
                             </div>
                             <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
                               {stock.entry_open_price
-                                ? `進場 ${formatPrice(stock.entry_open_price)} ｜ 最新 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}% ｜ 回撤 ${formatSigned(stock.max_drawdown_pct)}%`
-                                : "尚未記錄隔日開盤價"}
+                                ? `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 進場起算 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}%`
+                                : `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 尚未記錄隔日開盤價`}
                             </div>
                           </div>
                         ))}
