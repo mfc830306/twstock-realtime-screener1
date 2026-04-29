@@ -111,6 +111,24 @@ type ValidationResponse = {
   message?: string;
 };
 
+type ValidationHistoryRun = {
+  date: string;
+  created_at?: string;
+  last_update?: string;
+  status?: string;
+  message?: string;
+  summary?: ValidationSummary;
+  items?: ValidationItem[];
+};
+
+type ValidationHistoryResponse = {
+  success: boolean;
+  total?: number;
+  runs?: ValidationHistoryRun[];
+  error?: string;
+  message?: string;
+};
+
 type ApiResponse = {
   success: boolean;
   market_status?: string;
@@ -137,8 +155,9 @@ type ApiResponse = {
 const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 const BACKEND_BASE = `${API_BASE}/stocks`;
 const VALIDATION_BASE = `${API_BASE}/validation`;
-const VALIDATION_START_DATE = "20260427";
-const VALIDATION_START_LABEL = "2026/04/27";
+const VALIDATION_HISTORY_BASE = `${API_BASE}/validation/history`;
+const VALIDATION_START_DATE = "latest";
+const VALIDATION_START_LABEL = "最近收盤日";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -151,7 +170,7 @@ const PRICE_CATEGORIES = [
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
-type ActiveScreen = "screener" | "validation";
+type ActiveScreen = "screener" | "validation" | "history";
 
 const ITEMS_PER_PAGE = 20;
 
@@ -329,6 +348,7 @@ export default function Home() {
   const [validationRun, setValidationRun] = useState<ValidationRun | null>(null);
   const [validationSummary, setValidationSummary] = useState<ValidationSummary>({});
   const [validationLoading, setValidationLoading] = useState(false);
+  const [validationHistory, setValidationHistory] = useState<ValidationHistoryRun[]>([]);
 
   const initialLoadedRef = useRef(false);
   const pagedRequestIdRef = useRef(0);
@@ -641,6 +661,19 @@ export default function Home() {
     }
   }
 
+  async function fetchValidationHistorySafe() {
+    try {
+      const params = new URLSearchParams({ limit: "120", include_items: "true" });
+      const res = await fetch(`${VALIDATION_HISTORY_BASE}?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: ValidationHistoryResponse = await res.json();
+      if (!data.success) throw new Error(data.error || data.message || "載入推薦紀錄失敗");
+      setValidationHistory(data.runs || []);
+    } catch {
+      setValidationHistory([]);
+    }
+  }
+
   async function fetchAllDataSafe(options?: { forceRefresh?: boolean }) {
     setLoading(true);
     setError("");
@@ -663,6 +696,7 @@ export default function Home() {
     }
 
     await fetchValidationRunSafe({ forceRefresh: options?.forceRefresh });
+    await fetchValidationHistorySafe();
 
     initialLoadedRef.current = true;
     setLoading(false);
@@ -859,6 +893,7 @@ export default function Home() {
               {[
                 { key: "screener" as ActiveScreen, label: "選股首頁" },
                 { key: "validation" as ActiveScreen, label: "驗證追蹤" },
+                { key: "history" as ActiveScreen, label: "推薦紀錄" },
               ].map((item) => {
                 const active = activeScreen === item.key;
                 return (
@@ -956,7 +991,7 @@ export default function Home() {
                   收盤推薦追蹤驗證
                 </h2>
                 <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
-                  新版驗證從 {VALIDATION_START_LABEL} 收盤推薦10檔開始；後續交易日只用來追蹤這批名單的真實表現。
+                  系統會每天收盤後保存推薦10檔；此頁預設顯示最近一個已保存收盤日的追蹤結果。
                 </div>
               </div>
 
@@ -972,7 +1007,7 @@ export default function Home() {
                   whiteSpace: "nowrap",
                 }}
               >
-                起始日 {VALIDATION_START_LABEL}
+                追蹤日 {validationDisplayDate}
               </div>
             </div>
 
@@ -990,7 +1025,7 @@ export default function Home() {
                   value: isValidationStartReady ? `${validationStartStocks.length} 檔` : "等待起始樣本",
                   detail: isValidationStartReady
                     ? `已固定保存 ${validationDisplayDate} 收盤推薦，後續只追蹤這批樣本。`
-                    : validationRun?.message || `新版驗證從 ${VALIDATION_START_LABEL} 收盤後推薦開始，盤中名單不列入。`,
+                    : validationRun?.message || `系統會從每個收盤日開始自動保存推薦10檔，盤中名單不列入。`,
                 },
                 {
                   title: "進場口徑",
@@ -1059,7 +1094,7 @@ export default function Home() {
                       ? "讀取驗證資料中"
                       : isValidationStartReady
                         ? `${validationDisplayDate} 已列入待驗證`
-                        : `尚未讀到 ${VALIDATION_START_LABEL} 起始樣本`}
+                        : `尚未讀到固定推薦樣本`}
                   </div>
                 </div>
                 <div style={{ color: "#cfe3ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 800 }}>
@@ -1070,7 +1105,7 @@ export default function Home() {
               <div style={{ color: "#dce9ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700, marginBottom: "14px" }}>
                 {isValidationStartReady
                   ? validationRun?.message || "起始推薦已固定保存；隔日開盤價出現後，會開始累積 1 / 2 / 3 / 5 / 10 日結果。"
-                  : validationRun?.message || `目前還沒有讀到 ${VALIDATION_START_LABEL} 的收盤後推薦名單。`}
+                  : validationRun?.message || `目前還沒有任何已保存的收盤後推薦名單。`}
               </div>
 
               {isValidationStartReady && (
@@ -1176,13 +1211,163 @@ export default function Home() {
                   目前狀態
                 </div>
                 <div style={{ color: "#ffffff", fontSize: "26px", fontWeight: 900, marginBottom: "10px" }}>
-                  等待新版資料結構
+                  每日推薦自動歸檔
                 </div>
                 <div style={{ color: "#e6f0ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700 }}>
-                  畫面已獨立出來。下一步我們可以設計後端儲存格式，例如每日推薦紀錄、隔日開盤追蹤、5日/10日結果更新。
+                  後端會把每天收盤後推薦10檔保存成固定樣本；之後驗證頁可依日期讀取，不再因為修改驗證日期而找不到先前資料。
                 </div>
               </div>
             </div>
+          </section>
+        )}
+
+        {activeScreen === "history" && (
+          <section
+            style={{
+              ...panelStyle,
+              minHeight: isMobile ? "auto" : "680px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "flex-start" : "center",
+                gap: "14px",
+                flexDirection: isMobile ? "column" : "row",
+                marginBottom: "18px",
+              }}
+            >
+              <div>
+                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
+                  每日歸檔
+                </div>
+                <h2 style={{ fontSize: isMobile ? "26px" : "32px", fontWeight: 900, margin: 0 }}>
+                  所有推薦股票紀錄
+                </h2>
+                <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
+                  每個收盤日固定保存推薦10檔；日後驗證直接讀取這裡的歷史樣本。
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={fetchValidationHistorySafe}
+                style={{
+                  border: "1px solid rgba(120, 205, 255, 0.28)",
+                  borderRadius: "12px",
+                  padding: "10px 14px",
+                  background: "rgba(255,255,255,0.05)",
+                  color: "#e8f4ff",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                重新整理
+              </button>
+            </div>
+
+            {validationHistory.length === 0 ? (
+              <div
+                style={{
+                  borderRadius: "18px",
+                  padding: "18px",
+                  background: "rgba(255,217,95,0.12)",
+                  border: "1px solid rgba(255,217,95,0.22)",
+                  color: "#ffd95f",
+                  fontSize: "16px",
+                  fontWeight: 900,
+                }}
+              >
+                目前尚未保存任何收盤推薦紀錄。收盤後按更新，或呼叫 /validation，即會開始累積。
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: "16px" }}>
+                {validationHistory.map((run) => {
+                  const summary = run.summary || {};
+                  const items = run.items || [];
+                  return (
+                    <div
+                      key={run.date}
+                      style={{
+                        borderRadius: "20px",
+                        padding: isMobile ? "16px" : "18px",
+                        background: "rgba(20, 58, 112, 0.52)",
+                        border: "1px solid rgba(120, 180, 255, 0.16)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: isMobile ? "flex-start" : "center",
+                          gap: "12px",
+                          flexDirection: isMobile ? "column" : "row",
+                          marginBottom: "12px",
+                        }}
+                      >
+                        <div>
+                          <div style={{ color: "#ffffff", fontSize: "22px", fontWeight: 900 }}>
+                            {formatDateString(run.date)} 推薦10檔
+                          </div>
+                          <div style={{ color: "#9fc7f5", fontSize: "13px", fontWeight: 800, marginTop: "6px" }}>
+                            建立：{run.created_at || "-"} ｜ 更新：{run.last_update || "-"}
+                          </div>
+                        </div>
+                        <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 800 }}>
+                          樣本 {summary.count || items.length || 0} 檔 ｜ 已進場 {summary.entered_count || 0} 檔 ｜ 平均 {formatSigned(summary.avg_latest_return_pct)}%
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                          gap: "10px",
+                        }}
+                      >
+                        {items.map((stock, index) => (
+                          <div
+                            key={`${run.date}-${stock.symbol}`}
+                            style={{
+                              borderRadius: "16px",
+                              padding: "12px 14px",
+                              background: "rgba(255,255,255,0.05)",
+                              border: "1px solid rgba(255,255,255,0.08)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: "10px",
+                                marginBottom: "8px",
+                              }}
+                            >
+                              <div style={{ color: "#ffffff", fontSize: "16px", fontWeight: 900 }}>
+                                {stock.rank || index + 1}. {stock.symbol} {stock.name}
+                              </div>
+                              <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
+                                {stock.recommendation_score || 0}
+                              </div>
+                            </div>
+                            <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
+                              訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)}
+                            </div>
+                            <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
+                              {stock.entry_open_price
+                                ? `進場 ${formatPrice(stock.entry_open_price)} ｜ 最新 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}% ｜ 回撤 ${formatSigned(stock.max_drawdown_pct)}%`
+                                : "尚未記錄隔日開盤價"}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 
