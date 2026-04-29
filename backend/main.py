@@ -1586,6 +1586,7 @@ def resolve_validation_date(date_key: str, fallback_date: str = "") -> str:
 
 
 def build_validation_item(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    start_close_price = safe_float(stock.get("price"))
     return {
         "rank": rank,
         "market": stock.get("market", ""),
@@ -1598,10 +1599,13 @@ def build_validation_item(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
         "target_price_plan": stock.get("target_price", ""),
         "stop_loss_plan": stock.get("stop_loss", ""),
         "risk_reward_plan": stock.get("risk_reward", ""),
-        "start_close_price": stock.get("price", 0),
+        "start_close_price": start_close_price,
+        "current_price": start_close_price,
+        "current_day_change_pct": safe_float(stock.get("change_percent")),
+        "return_from_start_close_pct": 0,
         "entry_date": "",
         "entry_open_price": 0,
-        "latest_price": stock.get("price", 0),
+        "latest_price": start_close_price,
         "latest_change_pct": 0,
         "max_high_pct": 0,
         "max_drawdown_pct": 0,
@@ -1646,6 +1650,16 @@ def update_validation_run_tracking(run: Dict[str, Any], stocks: List[Dict[str, A
         high_price = safe_float(stock.get("high")) or price
         low_price = safe_float(stock.get("low")) or price
         close_price = price
+        start_close_price = safe_float(item.get("start_close_price"))
+
+        item["current_price"] = close_price
+        item["current_day_change_pct"] = round(safe_float(stock.get("change_percent")), 2)
+        if start_close_price > 0:
+            item["return_from_start_close_pct"] = round(
+                ((close_price - start_close_price) / start_close_price) * 100,
+                2,
+            )
+
         observations = item.setdefault("observations", {})
         observations[date_key] = {
             "date": date_key,
@@ -1654,6 +1668,8 @@ def update_validation_run_tracking(run: Dict[str, Any], stocks: List[Dict[str, A
             "low": low_price,
             "close": close_price,
             "volume": safe_int(stock.get("volume")),
+            "day_change_pct": round(safe_float(stock.get("change_percent")), 2),
+            "return_from_start_close_pct": item.get("return_from_start_close_pct", 0),
             "last_update": last_update,
         }
 
@@ -1715,18 +1731,41 @@ def get_or_create_validation_run(date_key: str, all_stocks: List[Dict[str, Any]]
     }
 
 
+def update_all_validation_runs_tracking(all_stocks: List[Dict[str, Any]], data_date: str, last_update: str) -> None:
+    store = load_validation_store()
+    runs = store.get("runs", {})
+    if not isinstance(runs, dict):
+        return
+
+    changed = False
+    for date_key, run in list(runs.items()):
+        if not isinstance(run, dict):
+            continue
+        updated = update_validation_run_tracking(run, all_stocks, data_date, last_update)
+        runs[date_key] = updated
+        changed = True
+
+    if changed:
+        store["runs"] = runs
+        save_validation_store(store)
+
+
 def summarize_validation_run(run: Dict[str, Any]) -> Dict[str, Any]:
     items = run.get("items", []) if isinstance(run.get("items"), list) else []
     entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
     latest_returns = [safe_float(x.get("latest_change_pct")) for x in entered]
+    start_returns = [safe_float(x.get("return_from_start_close_pct")) for x in items]
     wins = [x for x in entered if safe_float(x.get("latest_change_pct")) > 0]
+    start_wins = [x for x in items if safe_float(x.get("return_from_start_close_pct")) > 0]
     hit_targets = [x for x in entered if x.get("hit_target")]
     hit_stops = [x for x in entered if x.get("hit_stop")]
     return {
         "count": len(items),
         "entered_count": len(entered),
         "avg_latest_return_pct": round(avg(latest_returns), 2) if latest_returns else 0,
+        "avg_return_from_start_close_pct": round(avg(start_returns), 2) if start_returns else 0,
         "win_rate_pct": round((len(wins) / len(entered)) * 100, 2) if entered else 0,
+        "start_close_win_rate_pct": round((len(start_wins) / len(items)) * 100, 2) if items else 0,
         "hit_target_count": len(hit_targets),
         "hit_stop_count": len(hit_stops),
     }
@@ -2277,6 +2316,7 @@ def get_validation(
         current_data_date = normalize_date_key(result["data_date"])
         target_date = resolve_validation_date(date, current_data_date)
         recs: List[Dict[str, Any]] = []
+        update_all_validation_runs_tracking(all_stocks, result["data_date"], result["last_update"])
 
         if current_data_date and should_settle_recommendations(market_status):
             recs = get_cached_recommendations(
@@ -2387,6 +2427,7 @@ def get_stocks(
         all_stocks = result["stocks"]
         market_status = get_market_status_text()
         recommendation_info = build_recommendation_settlement_info(market_status)
+        update_all_validation_runs_tracking(all_stocks, result["data_date"], result["last_update"])
 
         filtered = filter_stocks(
             all_stocks,
