@@ -53,7 +53,7 @@ RECOMMENDATION_SEED_LIMIT = 80
 BOOK_PROXY_MIN_SELECTION_SCORE = 58.0
 BOOK_PROXY_STRONG_SELECTION_SCORE = 68.0
 
-VALIDATION_START_DATE = os.getenv("VALIDATION_START_DATE", "20260427")
+VALIDATION_START_DATE = os.getenv("VALIDATION_START_DATE", "latest")
 VALIDATION_STORE_PATH = os.getenv("VALIDATION_STORE_PATH", "validation_runs.json")
 VALIDATION_HORIZONS = [1, 2, 3, 5, 10]
 
@@ -1568,6 +1568,23 @@ def get_validation_run(date_key: str) -> Optional[Dict[str, Any]]:
     return run if isinstance(run, dict) else None
 
 
+def get_latest_validation_date() -> str:
+    store = load_validation_store()
+    runs = store.get("runs", {})
+    if not isinstance(runs, dict) or not runs:
+        return ""
+    valid_dates = [normalize_date_key(key) for key in runs.keys()]
+    valid_dates = [key for key in valid_dates if key]
+    return max(valid_dates) if valid_dates else ""
+
+
+def resolve_validation_date(date_key: str, fallback_date: str = "") -> str:
+    raw = safe_str(date_key).lower()
+    if raw in ("", "latest", "current", "auto"):
+        return get_latest_validation_date() or normalize_date_key(fallback_date)
+    return normalize_date_key(date_key) or normalize_date_key(fallback_date)
+
+
 def build_validation_item(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
     return {
         "rank": rank,
@@ -1676,18 +1693,24 @@ def update_validation_run_tracking(run: Dict[str, Any], stocks: List[Dict[str, A
 
 
 def get_or_create_validation_run(date_key: str, all_stocks: List[Dict[str, Any]], data_date: str, last_update: str, recommendations: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    target_date = normalize_date_key(date_key) or VALIDATION_START_DATE
+    target_date = resolve_validation_date(date_key, data_date)
+    current_data_date = normalize_date_key(data_date)
     run = get_validation_run(target_date)
-    if run is None and normalize_date_key(data_date) == target_date and recommendations:
+
+    if run is None and current_data_date == target_date and recommendations:
         run = create_validation_run(target_date, recommendations, last_update)
+
     if run is not None:
         return update_validation_run_tracking(run, all_stocks, data_date, last_update)
+
+    latest_date = get_latest_validation_date()
+    hint = f"目前最新保存日為 {latest_date}。" if latest_date else "目前尚未保存任何收盤推薦。"
     return {
-        "date": target_date,
+        "date": target_date or current_data_date,
         "created_at": "",
         "last_update": last_update,
         "status": "missing",
-        "message": f"尚未保存 {target_date} 的固定驗證樣本。請在該日收盤後呼叫 /stocks 或 /validation 建立名單。",
+        "message": f"尚未保存 {target_date or current_data_date} 的固定驗證樣本。系統會從部署後每個收盤日開始自動保存推薦10檔。{hint}",
         "items": [],
     }
 
@@ -2251,20 +2274,34 @@ def get_validation(
         result = get_cached_all_stocks(force_refresh=force_refresh)
         all_stocks = result["stocks"]
         market_status = get_market_status_text()
+        current_data_date = normalize_date_key(result["data_date"])
+        target_date = resolve_validation_date(date, current_data_date)
         recs: List[Dict[str, Any]] = []
-        if normalize_date_key(result["data_date"]) == normalize_date_key(date) and should_settle_recommendations(market_status):
+
+        if current_data_date and should_settle_recommendations(market_status):
             recs = get_cached_recommendations(
                 all_stocks,
                 data_date=result["data_date"],
                 last_update=result["last_update"],
                 top_n=10,
             )
+            if recs:
+                get_or_create_validation_run(
+                    current_data_date,
+                    all_stocks,
+                    data_date=result["data_date"],
+                    last_update=result["last_update"],
+                    recommendations=recs,
+                )
+                if safe_str(date).lower() in ("", "latest", "current", "auto"):
+                    target_date = current_data_date
+
         run = get_or_create_validation_run(
-            date,
+            target_date,
             all_stocks,
             data_date=result["data_date"],
             last_update=result["last_update"],
-            recommendations=recs,
+            recommendations=recs if target_date == current_data_date else None,
         )
         return {
             "success": True,
@@ -2283,6 +2320,51 @@ def get_validation(
                 "trace": traceback.format_exc(),
                 "validation": None,
                 "summary": {},
+            },
+        )
+
+
+@app.get("/validation/history")
+def get_validation_history(
+    limit: int = Query(60, ge=1, le=365),
+    include_items: bool = Query(True),
+):
+    try:
+        store = load_validation_store()
+        runs = store.get("runs", {})
+        if not isinstance(runs, dict):
+            runs = {}
+
+        items = []
+        for date_key in sorted(runs.keys(), reverse=True)[:limit]:
+            run = runs.get(date_key)
+            if not isinstance(run, dict):
+                continue
+            row = {
+                "date": run.get("date", date_key),
+                "created_at": run.get("created_at", ""),
+                "last_update": run.get("last_update", ""),
+                "status": run.get("status", ""),
+                "message": run.get("message", ""),
+                "summary": summarize_validation_run(run),
+            }
+            if include_items:
+                row["items"] = run.get("items", [])
+            items.append(row)
+
+        return {
+            "success": True,
+            "total": len(items),
+            "runs": items,
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "runs": [],
             },
         )
 
@@ -2337,7 +2419,7 @@ def get_stocks(
             )
             if recs:
                 get_or_create_validation_run(
-                    VALIDATION_START_DATE,
+                    result["data_date"],
                     all_stocks,
                     data_date=result["data_date"],
                     last_update=result["last_update"],
