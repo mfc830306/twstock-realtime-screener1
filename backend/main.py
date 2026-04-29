@@ -1,4 +1,5 @@
 import os
+import json
 import math
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,44 +34,28 @@ _CACHE: Dict[str, Any] = {
     "last_update": "",
     "message": "",
 }
-
 _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "items": None,
     "data_date": "",
     "last_update": "",
     "top_n": 0,
 }
-
-_VALIDATION_CACHE: Dict[str, Any] = {
-    "payload": None,
-    "last_update": "",
-    "signature": "",
-    "fetched_at": None,
-}
-
 CACHE_SECONDS = 60
 
 _HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 HISTORY_CACHE_HOURS = 6
-HISTORY_CACHE_MAX_SYMBOLS = 500
+HISTORY_CACHE_MAX_SYMBOLS = 400
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
-
 HISTORICAL_K_CANDLES = 250
-HISTORICAL_K_CALENDAR_DAYS = 420
-
-RECOMMENDATION_SEED_LIMIT = 100
+HISTORICAL_K_CALENDAR_DAYS = 400
+RECOMMENDATION_SEED_LIMIT = 80
 BOOK_PROXY_MIN_SELECTION_SCORE = 58.0
 BOOK_PROXY_STRONG_SELECTION_SCORE = 68.0
 
-VALIDATION_START_DATE = "20260427"
-VALIDATION_START_LABEL = "2026/04/27"
-VALIDATION_ENTRY_DATE = "20260428"
-VALIDATION_FORWARD_DAYS = [1, 2, 3, 5, 10]
-VALIDATION_ALLOWED_SIGNALS = {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
-VALIDATION_ALLOWED_RATINGS = {"A", "B+"}
-VALIDATION_SEED_LIMIT = 260
-VALIDATION_TOP_N = 10
+VALIDATION_START_DATE = os.getenv("VALIDATION_START_DATE", "20260427")
+VALIDATION_STORE_PATH = os.getenv("VALIDATION_STORE_PATH", "validation_runs.json")
+VALIDATION_HORIZONS = [1, 2, 3, 5, 10]
 
 
 # =========================
@@ -151,151 +136,8 @@ def positive_min(values: List[float], default: float = 0.0) -> float:
     return min(positives) if positives else default
 
 
-def avg(values: List[float]) -> float:
-    if not values:
-        return 0.0
-    return sum(values) / len(values)
-
-
-def clamp(v: float, low: float, high: float) -> float:
-    return max(low, min(v, high))
-
-
-def score_band(value: float, low: float, high: float, peak: float, full_score: float) -> float:
-    if value < low or value > high:
-        return 0.0
-    if value == peak:
-        return full_score
-    if value < peak:
-        width = max(peak - low, 1e-9)
-        return full_score * ((value - low) / width)
-    width = max(high - peak, 1e-9)
-    return full_score * ((high - value) / width)
-
-
-def format_number(num: float) -> str:
-    try:
-        if num is None or math.isnan(num):
-            return "-"
-    except Exception:
-        pass
-    if abs(num - int(num)) < 0.001:
-        return f"{int(num):,}"
-    return f"{num:,.2f}"
-
-
-def format_price_value(v: float) -> str:
-    if v <= 0:
-        return ""
-    rounded = round(v, 2)
-    if abs(rounded - int(rounded)) < 0.001:
-        return str(int(rounded))
-    return f"{rounded:.2f}"
-
-
-def format_price_range(low: float, high: float) -> str:
-    low = max(low, 0.01)
-    high = max(high, low)
-    return f"{format_price_value(low)} ~ {format_price_value(high)}"
-
-
-def parse_range_mid(text: str, fallback: float = 0.0) -> float:
-    txt = safe_str(text)
-    if not txt:
-        return fallback
-    txt = txt.replace("突破", "").replace("後再評估", "").strip()
-    parts = [p.strip() for p in txt.split("~")]
-    nums = []
-    for p in parts:
-        try:
-            nums.append(float(p))
-        except Exception:
-            pass
-    if not nums:
-        return fallback
-    return sum(nums) / len(nums)
-
-
-def parse_range_bounds(text: str, fallback: float = 0.0) -> Tuple[float, float]:
-    txt = safe_str(text)
-    if not txt:
-        return fallback, fallback
-    txt = txt.replace("突破", "").replace("後再評估", "").strip()
-    parts = [p.strip() for p in txt.split("~")]
-    nums: List[float] = []
-    for p in parts:
-        try:
-            nums.append(float(p))
-        except Exception:
-            pass
-    if not nums:
-        return fallback, fallback
-    if len(nums) == 1:
-        return nums[0], nums[0]
-    return min(nums), max(nums)
-
-
-def calc_position_ratio(price: float, high_price: float, low_price: float) -> float:
-    if high_price > low_price:
-        ratio = (price - low_price) / (high_price - low_price)
-        return max(0.0, min(ratio, 1.0))
-    return 0.5
-
-
-def calc_amplitude_pct(high_price: float, low_price: float, previous_close: float) -> float:
-    intraday_range = max(high_price - low_price, 0.0)
-    if previous_close > 0:
-        return (intraday_range / previous_close) * 100
-    return 0.0
-
-
-def calc_distance_pct(ceiling: float, value: float) -> float:
-    if ceiling <= 0 or value <= 0:
-        return 999.0
-    return ((ceiling - value) / ceiling) * 100
-
-
-def price_category(price: float) -> str:
-    if price < 10:
-        return "0-10"
-    if price < 20:
-        return "10-20"
-    if price < 50:
-        return "20-50"
-    if price < 100:
-        return "50-100"
-    if price < 200:
-        return "100-200"
-    if price < 500:
-        return "200-500"
-    if price < 1000:
-        return "500-1000"
-    return "1000+"
-
-
-def is_main_board_stock(s: Dict[str, Any]) -> bool:
-    return safe_str(s.get("market")) in ("上市", "上櫃")
-
-
-def is_valid_main_board_symbol(symbol: str, name: str) -> bool:
-    s = safe_str(symbol).upper()
-    n = safe_str(name).upper()
-    if not s or len(s) != 4 or not s.isdigit():
-        return False
-    if s.startswith("00") or "ETF" in n:
-        return False
-    return True
-
-
-def merge_stock_lists(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    dedup: Dict[str, Dict[str, Any]] = {}
-    for group in groups:
-        for item in group:
-            symbol = safe_str(item.get("symbol"))
-            if not symbol:
-                continue
-            dedup[symbol] = item
-    return list(dedup.values())
+def build_signal_rating_key(signal: Any, rating: Any) -> str:
+    return f"{safe_str(signal)}|{safe_str(rating)}"
 
 
 def resolve_cert_path() -> Optional[str]:
@@ -354,6 +196,95 @@ def build_recommendation_settlement_info(market_status: Optional[str] = None) ->
     }
 
 
+def price_category(price: float) -> str:
+    if price < 10:
+        return "0-10"
+    if price < 20:
+        return "10-20"
+    if price < 50:
+        return "20-50"
+    if price < 100:
+        return "50-100"
+    if price < 200:
+        return "100-200"
+    if price < 500:
+        return "200-500"
+    if price < 1000:
+        return "500-1000"
+    return "1000+"
+
+
+def format_price_value(v: float) -> str:
+    if v <= 0:
+        return ""
+    rounded = round(v, 2)
+    if abs(rounded - int(rounded)) < 0.001:
+        return str(int(rounded))
+    return f"{rounded:.2f}"
+
+
+def format_price_range(low: float, high: float) -> str:
+    low = max(low, 0.01)
+    high = max(high, low)
+    return f"{format_price_value(low)} ~ {format_price_value(high)}"
+
+
+def calc_position_ratio(price: float, high_price: float, low_price: float) -> float:
+    if high_price > low_price:
+        ratio = (price - low_price) / (high_price - low_price)
+        return max(0.0, min(ratio, 1.0))
+    return 0.5
+
+
+def calc_amplitude_pct(high_price: float, low_price: float, previous_close: float) -> float:
+    intraday_range = max(high_price - low_price, 0.0)
+    if previous_close > 0:
+        return (intraday_range / previous_close) * 100
+    return 0.0
+
+
+def parse_range_mid(text: str, fallback: float = 0.0) -> float:
+    txt = safe_str(text)
+    if not txt:
+        return fallback
+    txt = txt.replace("突破", "").replace("後再評估", "").strip()
+    parts = [p.strip() for p in txt.split("~")]
+    nums = []
+    for p in parts:
+        try:
+            nums.append(float(p))
+        except Exception:
+            pass
+    if not nums:
+        return fallback
+    return sum(nums) / len(nums)
+
+
+def parse_range_bounds(text: str, fallback: float = 0.0) -> Tuple[float, float]:
+    txt = safe_str(text)
+    if not txt:
+        return fallback, fallback
+    txt = txt.replace("突破", "").replace("後再評估", "").strip()
+    parts = [p.strip() for p in txt.split("~")]
+    nums: List[float] = []
+    for p in parts:
+        try:
+            nums.append(float(p))
+        except Exception:
+            pass
+    if not nums:
+        return fallback, fallback
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return min(nums), max(nums)
+
+
+def avg(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
 def market_session_progress() -> float:
     now = now_taipei()
     if now.weekday() >= 5:
@@ -371,10 +302,75 @@ def market_session_progress() -> float:
 def estimate_full_day_volume(current_volume: int) -> int:
     if current_volume <= 0:
         return 0
-    if get_market_status_text() != "開盤":
+    status = get_market_status_text()
+    if status != "開盤":
         return current_volume
     progress = market_session_progress()
     return int(current_volume / max(progress, 0.05))
+
+
+def completed_candles_for_reference(candles: List[Dict[str, Any]], base_stock: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    if not candles:
+        return []
+    snapshot_date_key = normalize_date_key((base_stock or {}).get("update_time"))
+    last_date_key = normalize_date_key(candles[-1].get("date"))
+    if snapshot_date_key and last_date_key and snapshot_date_key >= last_date_key:
+        return candles[:-1] if len(candles) > 1 else candles
+    if get_market_status_text() == "開盤" and len(candles) > 1:
+        return candles[:-1]
+    return candles
+
+
+def format_number(num: float) -> str:
+    try:
+        if num is None or math.isnan(num):
+            return "-"
+    except Exception:
+        pass
+    if abs(num - int(num)) < 0.001:
+        return f"{int(num):,}"
+    return f"{num:,.2f}"
+
+
+def clamp(v: float, low: float, high: float) -> float:
+    return max(low, min(v, high))
+
+
+def score_band(value: float, low: float, high: float, peak: float, full_score: float) -> float:
+    if value < low or value > high:
+        return 0.0
+    if value == peak:
+        return full_score
+    if value < peak:
+        width = max(peak - low, 1e-9)
+        return full_score * ((value - low) / width)
+    width = max(high - peak, 1e-9)
+    return full_score * ((high - value) / width)
+
+
+def is_main_board_stock(s: Dict[str, Any]) -> bool:
+    return safe_str(s.get("market")) in ("上市", "上櫃")
+
+
+def is_valid_main_board_symbol(symbol: str, name: str) -> bool:
+    s = safe_str(symbol).upper()
+    n = safe_str(name).upper()
+    if not s or len(s) != 4 or not s.isdigit():
+        return False
+    if s.startswith("00") or "ETF" in n:
+        return False
+    return True
+
+
+def merge_stock_lists(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    dedup: Dict[str, Dict[str, Any]] = {}
+    for group in groups:
+        for item in group:
+            symbol = safe_str(item.get("symbol"))
+            if not symbol:
+                continue
+            dedup[symbol] = item
+    return list(dedup.values())
 
 
 # =========================
@@ -429,6 +425,9 @@ def get_stock_rest_client():
     return stock_client
 
 
+# =========================
+# Parse / Normalize
+# =========================
 def extract_rows(resp: Any) -> List[Dict[str, Any]]:
     if isinstance(resp, list):
         return resp
@@ -455,7 +454,7 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
 
 
 # =========================
-# Snapshot Analysis
+# Snapshot 短線型態
 # =========================
 def build_signal_and_reason(
     price: float,
@@ -477,6 +476,7 @@ def build_signal_and_reason(
             "reason": (
                 f"今日漲幅 {change_percent:.2f}% 屬溫和轉強區間，收盤位置比 {close_position:.0%}，"
                 f"成交量 {vol_k:.0f}K 張，屬短線資金開始進場但尚未過熱的型態。"
+                "這類型股票較符合 2~4 天延續上攻的節奏。"
             ),
         }
 
@@ -493,26 +493,36 @@ def build_signal_and_reason(
         return {
             "signal": "短線過熱",
             "reason": (
-                f"今日漲幅 {change_percent:.2f}% 已偏大，且收盤逼近高點，追價風險提升。"
+                f"今日漲幅 {change_percent:.2f}% 已偏大，且收盤逼近高點（位置比 {close_position:.0%}），"
+                "雖然強勢，但較像已經發動後段，追價風險提升。"
             ),
         }
 
     if price > open_price and 0.4 <= change_percent <= 3.8 and 0.45 <= close_position <= 0.8:
         return {
             "signal": "穩步走高",
-            "reason": "價格維持溫和上行，盤中承接力尚可，屬短線可觀察續強的健康結構。",
+            "reason": (
+                "價格維持溫和上行，盤中承接力尚可，未見急拉急殺，"
+                "屬短線可觀察續強的健康結構。"
+            ),
         }
 
     if -0.8 <= change_percent <= 0.8 and amplitude_pct <= 3.5:
         return {
             "signal": "區間整理",
-            "reason": f"今日漲跌幅 {change_percent:+.2f}%，振幅 {amplitude_pct:.2f}%，仍在整理消化階段。",
+            "reason": (
+                f"今日漲跌幅 {change_percent:+.2f}%，振幅 {amplitude_pct:.2f}%，"
+                "股價仍在整理消化階段，需等待下一次量價表態。"
+            ),
         }
 
     if change_percent < 0 and close_position <= 0.35:
         return {
             "signal": "偏弱整理",
-            "reason": f"今日收跌 {abs(change_percent):.2f}%，收盤偏低，短線買盤主導性不足。",
+            "reason": (
+                f"今日收跌 {abs(change_percent):.2f}%，收盤偏低，短線買盤主導性不足，"
+                "暫不屬於 2~4 天潛力攻擊型。"
+            ),
         }
 
     return {
@@ -548,26 +558,34 @@ def enrich_reason_with_context(
         extra.append("收盤低於開盤，盤中追價延續性較弱")
 
     if change_percent >= 5:
-        extra.append("單日漲幅過大，較不利低風險切入")
+        extra.append("單日漲幅過大，較不利 2~4 天低風險切入")
     elif 0.8 <= change_percent <= 4:
-        extra.append("漲幅屬合理動能區")
+        extra.append("漲幅屬合理動能區，較符合潛力股模型")
 
     if volume >= 30000:
-        extra.append("量能過大，需小心已成市場熱門追價股")
+        extra.append("量能過大，需小心已經成為市場熱門追價股")
     elif 5000 <= volume <= 20000:
-        extra.append("量能活絡但未失控")
+        extra.append("量能活絡但未失控，屬較健康的短線放量")
     elif volume < 2000:
         extra.append("量能仍偏低，後續續攻力道需再確認")
 
     if amplitude_pct >= 6:
         extra.append("日內振幅偏大，隔日追價波動風險提高")
     elif amplitude_pct <= 3.5:
-        extra.append("振幅控制尚可")
+        extra.append("振幅控制尚可，走勢結構相對穩定")
 
-    return base_reason if not extra else base_reason + "。補充：" + "；".join(extra) + "。"
+    if not extra:
+        return base_reason
+
+    return base_reason + "。補充：" + "；".join(extra) + "。"
 
 
-def build_trade_plan(price: float, high_price: float, low_price: float, signal: str) -> Dict[str, str]:
+def build_trade_plan(
+    price: float,
+    high_price: float,
+    low_price: float,
+    signal: str,
+) -> Dict[str, str]:
     if price <= 0:
         return {"entry_price": "", "target_price": "", "stop_loss": ""}
 
@@ -587,14 +605,14 @@ def build_trade_plan(price: float, high_price: float, low_price: float, signal: 
             "stop_loss": format_price_value(stop),
         }
 
-    if signal == "短線過熱":
+    if signal in {"短線過熱"}:
         return {
             "entry_price": "等拉回後再評估",
             "target_price": format_price_range(price * 1.02, price * 1.04),
             "stop_loss": format_price_value(max(price * 0.965, 0.01)),
         }
 
-    if signal == "偏弱整理":
+    if signal in {"偏弱整理"}:
         return {
             "entry_price": "暫不建議",
             "target_price": "",
@@ -623,7 +641,10 @@ def build_strategy_and_risk(
     if signal in {"量增轉強", "整理待發"}:
         return {
             "trend_type": "短線潛力攻擊",
-            "technical_comment": f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。",
+            "technical_comment": (
+                f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。"
+                " 結構偏向 2~4 天續強觀察。"
+            ),
             "operation_rating": "A",
             "operation_bias": "偏多卡位",
             "operation_style": "拉回布局",
@@ -631,10 +652,13 @@ def build_strategy_and_risk(
             "risk_note": "若隔日爆量長紅或開高走低，代表短線過熱，應避免追價。",
         }
 
-    if signal == "穩步走高":
+    if signal in {"穩步走高"}:
         return {
             "trend_type": "溫和轉強",
-            "technical_comment": f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。",
+            "technical_comment": (
+                f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。"
+                " 結構健康，但仍需下一日量價確認。"
+            ),
             "operation_rating": "B+",
             "operation_bias": "偏多觀察",
             "operation_style": "等待續強",
@@ -642,10 +666,13 @@ def build_strategy_and_risk(
             "risk_note": "若隔日無量或跌破前一日低點，代表轉強失敗。",
         }
 
-    if signal == "短線過熱":
+    if signal in {"短線過熱"}:
         return {
             "trend_type": "強勢過熱",
-            "technical_comment": f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。",
+            "technical_comment": (
+                f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。"
+                " 強勢明顯，但較不符合低風險潛力股切入。"
+            ),
             "operation_rating": "C",
             "operation_bias": "不追高",
             "operation_style": "等拉回",
@@ -653,10 +680,13 @@ def build_strategy_and_risk(
             "risk_note": "隔日若無法續強，容易轉成短線獲利了結。",
         }
 
-    if signal == "偏弱整理":
+    if signal in {"偏弱整理"}:
         return {
             "trend_type": "偏弱結構",
-            "technical_comment": f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。",
+            "technical_comment": (
+                f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。"
+                " 目前不在短線潛力模型內。"
+            ),
             "operation_rating": "D",
             "operation_bias": "保守觀望",
             "operation_style": "不急著進",
@@ -666,7 +696,10 @@ def build_strategy_and_risk(
 
     return {
         "trend_type": "整理觀察",
-        "technical_comment": f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。",
+        "technical_comment": (
+            f"收盤位置比 {pos:.0%}；日內振幅 {amplitude_pct:.2f}%；成交量 {volume:,} 張。"
+            " 需等待更明確表態。"
+        ),
         "operation_rating": "C",
         "operation_bias": "觀察",
         "operation_style": "等訊號",
@@ -689,7 +722,7 @@ def calc_risk_reward(entry_price: str, target_price: str, stop_loss: str) -> str
 
 
 # =========================
-# Historical K
+# Historical K analysis
 # =========================
 def get_history_cache(symbol: str) -> Optional[Dict[str, Any]]:
     item = _HISTORY_CACHE.get(symbol)
@@ -715,57 +748,6 @@ def set_history_cache(symbol: str, data: Dict[str, Any]) -> None:
         _HISTORY_CACHE.pop(cache_key, None)
 
 
-def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
-    cached = get_history_cache(symbol)
-    if cached:
-        return cached
-
-    stock_client = get_stock_rest_client()
-    to_date = now_taipei().strftime("%Y-%m-%d")
-    from_date = (now_taipei() - timedelta(days=HISTORICAL_K_CALENDAR_DAYS)).strftime("%Y-%m-%d")
-
-    resp = stock_client.historical.candles(
-        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
-    )
-
-    rows = extract_rows(resp)
-    candles: List[Dict[str, Any]] = []
-
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        candles.append({
-            "date": safe_str(row.get("date")),
-            "open": safe_float(row.get("open")),
-            "high": safe_float(row.get("high")),
-            "low": safe_float(row.get("low")),
-            "close": safe_float(row.get("close")),
-            "volume": safe_int(row.get("volume")),
-            "change": safe_float(row.get("change")),
-        })
-
-    candles = [x for x in candles if x["close"] > 0]
-
-    if len(candles) > HISTORICAL_K_CANDLES:
-        candles = candles[-HISTORICAL_K_CANDLES:]
-
-    data = {"candles": candles}
-    set_history_cache(symbol, data)
-    return data
-
-
-def completed_candles_for_reference(candles: List[Dict[str, Any]], base_stock: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    if not candles:
-        return []
-    snapshot_date_key = normalize_date_key((base_stock or {}).get("update_time"))
-    last_date_key = normalize_date_key(candles[-1].get("date"))
-    if snapshot_date_key and last_date_key and snapshot_date_key >= last_date_key:
-        return candles[:-1] if len(candles) > 1 else candles
-    if get_market_status_text() == "開盤" and len(candles) > 1:
-        return candles[:-1]
-    return candles
-
-
 def overlay_snapshot_on_candles(
     candles: List[Dict[str, Any]],
     base_stock: Dict[str, Any],
@@ -774,7 +756,6 @@ def overlay_snapshot_on_candles(
         return [], 0.0
 
     merged = [dict(x) for x in candles]
-
     snapshot_price = safe_float(base_stock.get("price"))
     snapshot_volume = safe_int(base_stock.get("volume"))
     snapshot_prev_close = safe_float(base_stock.get("prev_close"))
@@ -813,7 +794,6 @@ def overlay_snapshot_on_candles(
         safe_float(merged[-2].get("close")) if len(merged) >= 2 else safe_float(current.get("close"))
     )
     current_open = snapshot_open if snapshot_open > 0 else safe_float(current.get("open"))
-
     current_high = max(
         [x for x in [safe_float(current.get("high")), snapshot_high, snapshot_price, current_open] if x > 0],
         default=snapshot_price,
@@ -822,15 +802,12 @@ def overlay_snapshot_on_candles(
         [safe_float(current.get("low")), snapshot_low, snapshot_price, current_open],
         min(snapshot_price, current_open if current_open > 0 else snapshot_price),
     )
-
     current["open"] = current_open if current_open > 0 else snapshot_price
     current["high"] = current_high
     current["low"] = current_low
     current["close"] = snapshot_price
-
     if snapshot_volume > 0:
         current["volume"] = snapshot_volume
-
     current["change"] = round(snapshot_price - prev_close, 2) if prev_close > 0 else safe_float(current.get("change"))
     merged[-1] = current
     return merged, prev_close
@@ -849,20 +826,16 @@ def ema(values: List[float], period: int) -> List[float]:
 def calc_rsi(closes: List[float], period: int = 14) -> float:
     if len(closes) <= period:
         return 50.0
-
     gains, losses = [], []
     for i in range(1, len(closes)):
         diff = closes[i] - closes[i - 1]
         gains.append(max(diff, 0))
         losses.append(abs(min(diff, 0)))
-
     avg_gain = avg(gains[:period])
     avg_loss = avg(losses[:period])
-
     for i in range(period, len(gains)):
         avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
         avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
-
     if avg_loss == 0:
         return 100.0
     return 100 - (100 / (1 + avg_gain / avg_loss))
@@ -883,10 +856,8 @@ def calc_macd(closes: List[float]) -> Tuple[float, float, float]:
 def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
     if len(candles) < 2:
         return 0.0
-
     trs: List[float] = []
     prev_close = safe_float(candles[0].get("close"))
-
     for c in candles[1:]:
         high = safe_float(c.get("high"))
         low = safe_float(c.get("low"))
@@ -894,8 +865,41 @@ def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(max(tr, 0.0))
         prev_close = close
-
     return avg(trs[-period:]) if trs else 0.0
+
+
+def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
+    cached = get_history_cache(symbol)
+    if cached:
+        return cached
+
+    stock_client = get_stock_rest_client()
+    to_date = now_taipei().strftime("%Y-%m-%d")
+    from_date = (now_taipei() - timedelta(days=HISTORICAL_K_CALENDAR_DAYS)).strftime("%Y-%m-%d")
+
+    resp = stock_client.historical.candles(
+        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
+    )
+    rows = extract_rows(resp)
+    candles: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        candles.append({
+            "date": safe_str(row.get("date")),
+            "open": safe_float(row.get("open")),
+            "high": safe_float(row.get("high")),
+            "low": safe_float(row.get("low")),
+            "close": safe_float(row.get("close")),
+            "volume": safe_int(row.get("volume")),
+            "change": safe_float(row.get("change")),
+        })
+    candles = [x for x in candles if x["close"] > 0]
+    if len(candles) > HISTORICAL_K_CANDLES:
+        candles = candles[-HISTORICAL_K_CANDLES:]
+    data = {"candles": candles}
+    set_history_cache(symbol, data)
+    return data
 
 
 def classify_daily_pattern(
@@ -912,12 +916,10 @@ def classify_daily_pattern(
 ) -> Dict[str, str]:
     day_change_pct = ((close_now - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
     distance_to_high20 = ((high20 - close_now) / high20 * 100) if high20 > 0 else 999.0
-
     above_ma20 = close_now > ma20
     ma5_turn_up = ma5 >= ma10
     ma10_support = ma10 >= ma20
     close_above_ma5 = close_now >= ma5
-
     healthy_momentum = 0.2 <= day_change_pct <= 5.0
     healthy_volume = 0.95 <= vol_ratio5 <= 3.2
     healthy_rsi = 48 <= rsi14 <= 70
@@ -1040,7 +1042,7 @@ def build_historical_reason(
         f" 目前 5 日量比 {vol_ratio5:.2f} 倍，RSI {rsi14:.1f}，MACD Hist {macd_hist:.3f}。"
         f" 股價距離 20 日高點約 {distance_to_high20:.2f}%，近 20 日區間為 "
         f"{format_price_value(low20)} ~ {format_price_value(high20)}。"
-        f" 綜合判斷屬「{pattern_text}」，偏向 2~4 天內可能續強的準備型結構。"
+        f" 綜合判斷屬「{pattern_text}」，較偏向 2~4 天內可能續強的準備型結構，而非已經爆衝末端。"
     )
 
 
@@ -1107,7 +1109,6 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "優先找回測不破或隔日量穩續強切入，不追單日急拉。",
             "risk_note": "若次日直接爆量長紅，代表追價溫度升高，應縮小部位避免買在短線高潮。",
         }
-
     if signal in {"整理待發", "溫和轉強"}:
         return {
             "operation_rating": "B+",
@@ -1116,8 +1117,7 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "等待量增突破或回測守住 MA20 後進場。",
             "risk_note": "若量能遲遲不出來，容易繼續橫盤拖時間。",
         }
-
-    if signal == "偏弱觀察":
+    if signal in {"偏弱觀察"}:
         return {
             "operation_rating": "D",
             "operation_bias": "保守",
@@ -1125,7 +1125,6 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "先等站回 MA20 與量能回升再看。",
             "risk_note": "弱勢股不適合拿來做 2~4 天主攻。",
         }
-
     return {
         "operation_rating": "C",
         "operation_bias": "中性",
@@ -1192,6 +1191,12 @@ def calc_potential_recommendation_score(
     return round(max(score, 0.0), 2)
 
 
+def calc_distance_pct(ceiling: float, value: float) -> float:
+    if ceiling <= 0 or value <= 0:
+        return 999.0
+    return ((ceiling - value) / ceiling) * 100
+
+
 def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str, Any]:
     try:
         symbol = safe_str(base_stock.get("symbol"))
@@ -1211,11 +1216,11 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         volumes = [safe_int(x.get("volume")) for x in analysis_candles]
         reference_candles = completed_candles_for_reference(analysis_candles, base_stock)
         reference_volumes = [safe_int(x.get("volume")) for x in reference_candles]
-
         close_now = closes[-1]
         vol_now = volumes[-1]
         projected_vol_now = estimate_full_day_volume(vol_now)
-
+        snapshot_price = safe_float(base_stock.get("price"))
+        snapshot_volume = safe_int(base_stock.get("volume"))
         snapshot_recommendation_score = safe_float(
             base_stock.get("snapshot_recommendation_score")
             or base_stock.get("recommendation_score")
@@ -1228,7 +1233,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         ma60 = avg(closes[-60:]) if len(closes) >= 60 else avg(closes)
         avg_vol5 = avg(reference_volumes[-5:])
         avg_vol20 = avg(reference_volumes[-20:])
-
         high20 = max(safe_float(x.get("high")) for x in reference_candles[-20:]) if reference_candles else max(
             safe_float(x.get("high")) for x in analysis_candles[-20:]
         )
@@ -1241,7 +1245,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         low60 = min(safe_float(x.get("low")) for x in reference_candles[-60:]) if reference_candles else min(
             safe_float(x.get("low")) for x in analysis_candles
         )
-
         rsi14 = calc_rsi(closes, 14)
         macd_line, signal_line, macd_hist = calc_macd(closes)
         atr14 = calc_atr(analysis_candles, 14)
@@ -1252,7 +1255,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         premium_to_ma60_pct = ((close_now - ma60) / ma60 * 100) if ma60 > 0 else 0.0
         distance_to_high20 = calc_distance_pct(high20, close_now)
         distance_to_high60 = calc_distance_pct(high60, close_now)
-
         pattern_info = classify_daily_pattern(
             close_now=close_now,
             prev_close=prev_close,
@@ -1283,7 +1285,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             macd_hist=macd_hist,
             pattern_text=pattern_info["pattern"],
         )
-
         technical_comment = build_historical_technical_comment(
             ma5=ma5,
             ma10=ma10,
@@ -1298,7 +1299,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             low20=low20,
             atr14=atr14,
         )
-
         plan = build_historical_trade_plan(
             price=close_now,
             ma5=ma5,
@@ -1308,7 +1308,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             atr14=atr14,
             signal=pattern_info["signal"],
         )
-
         strategy = build_historical_strategy(pattern_info["signal"])
         risk_reward = calc_risk_reward(plan["entry_price"], plan["target_price"], plan["stop_loss"])
 
@@ -1362,22 +1361,16 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "distance_to_high20_pct": round(distance_to_high20, 2),
             "distance_to_high60_pct": round(distance_to_high60, 2),
         })
-
         merged["price"] = round(close_now, 2)
         merged["volume"] = vol_now
-
         if safe_float(merged.get("prev_close")) <= 0 and prev_close > 0:
             merged["prev_close"] = round(prev_close, 2)
-
         return merged
 
     except Exception:
         return base_stock
 
 
-# =========================
-# Snapshot Fetch
-# =========================
 def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[Dict[str, Any]]:
     if not isinstance(row, dict):
         return None
@@ -1463,6 +1456,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         max(momentum_score + position_score + amplitude_score + liquidity_score + structure_bonus - weakness_penalty - overheat_penalty, 0),
         2
     )
+    base_recommendation_score = score
 
     signal_info = build_signal_and_reason(
         price=price,
@@ -1474,7 +1468,6 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         open_price=open_price,
         previous_close=previous_close,
     )
-
     final_reason = enrich_reason_with_context(
         base_reason=signal_info["reason"],
         price=price,
@@ -1485,9 +1478,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         volume=volume,
         previous_close=previous_close,
     )
-
     plan = build_trade_plan(price=price, high_price=high_price, low_price=low_price, signal=signal_info["signal"])
-
     strategy_info = build_strategy_and_risk(
         signal=signal_info["signal"],
         price=price,
@@ -1497,11 +1488,12 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         volume=volume,
         previous_close=previous_close,
     )
-
     risk_reward = calc_risk_reward(plan["entry_price"], plan["target_price"], plan["stop_loss"])
 
     rating_bonus_map = {"A": 12, "B+": 8, "C": 3, "D": 0}
-    recommendation_score = round(score + rating_bonus_map.get(strategy_info["operation_rating"], 0), 2)
+    recommendation_score = round(
+        base_recommendation_score + rating_bonus_map.get(strategy_info["operation_rating"], 0), 2
+    )
 
     return {
         "market": market_label,
@@ -1540,6 +1532,186 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     }
 
 
+
+
+# =========================
+# Validation Tracking
+# =========================
+def load_validation_store() -> Dict[str, Any]:
+    try:
+        if not os.path.exists(VALIDATION_STORE_PATH):
+            return {"runs": {}}
+        with open(VALIDATION_STORE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"runs": {}}
+        if not isinstance(data.get("runs"), dict):
+            data["runs"] = {}
+        return data
+    except Exception:
+        return {"runs": {}}
+
+
+def save_validation_store(store: Dict[str, Any]) -> None:
+    directory = os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH))
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp_path = f"{VALIDATION_STORE_PATH}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, VALIDATION_STORE_PATH)
+
+
+def get_validation_run(date_key: str) -> Optional[Dict[str, Any]]:
+    store = load_validation_store()
+    run = store.get("runs", {}).get(date_key)
+    return run if isinstance(run, dict) else None
+
+
+def build_validation_item(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    return {
+        "rank": rank,
+        "market": stock.get("market", ""),
+        "symbol": stock.get("symbol", ""),
+        "name": stock.get("name", ""),
+        "recommendation_score": stock.get("recommendation_score", stock.get("score", 0)),
+        "signal": stock.get("signal", ""),
+        "operation_rating": stock.get("operation_rating", ""),
+        "entry_price_plan": stock.get("entry_price", ""),
+        "target_price_plan": stock.get("target_price", ""),
+        "stop_loss_plan": stock.get("stop_loss", ""),
+        "risk_reward_plan": stock.get("risk_reward", ""),
+        "start_close_price": stock.get("price", 0),
+        "entry_date": "",
+        "entry_open_price": 0,
+        "latest_price": stock.get("price", 0),
+        "latest_change_pct": 0,
+        "max_high_pct": 0,
+        "max_drawdown_pct": 0,
+        "hit_target": False,
+        "hit_stop": False,
+        "observations": {},
+        "horizon_returns": {},
+    }
+
+
+def create_validation_run(date_key: str, recommendations: List[Dict[str, Any]], last_update: str) -> Dict[str, Any]:
+    items = [build_validation_item(stock, index + 1) for index, stock in enumerate(recommendations[:10])]
+    run = {
+        "date": date_key,
+        "created_at": format_dt_taipei(now_taipei()),
+        "last_update": last_update,
+        "status": "tracking" if items else "empty",
+        "message": "已固定保存收盤推薦10檔，後續只追蹤這批股票。",
+        "items": items,
+    }
+    store = load_validation_store()
+    store.setdefault("runs", {})[date_key] = run
+    save_validation_store(store)
+    return run
+
+
+def update_validation_run_tracking(run: Dict[str, Any], stocks: List[Dict[str, Any]], data_date: str, last_update: str) -> Dict[str, Any]:
+    date_key = normalize_date_key(data_date)
+    if not date_key:
+        return run
+
+    stock_map = {safe_str(s.get("symbol")): s for s in stocks if safe_str(s.get("symbol"))}
+    changed = False
+
+    for item in run.get("items", []):
+        stock = stock_map.get(safe_str(item.get("symbol")))
+        if not stock:
+            continue
+
+        price = safe_float(stock.get("price"))
+        open_price = safe_float(stock.get("open")) or price
+        high_price = safe_float(stock.get("high")) or price
+        low_price = safe_float(stock.get("low")) or price
+        close_price = price
+        observations = item.setdefault("observations", {})
+        observations[date_key] = {
+            "date": date_key,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price,
+            "volume": safe_int(stock.get("volume")),
+            "last_update": last_update,
+        }
+
+        if not item.get("entry_date") and date_key > safe_str(run.get("date")):
+            item["entry_date"] = date_key
+            item["entry_open_price"] = open_price
+
+        entry_price = safe_float(item.get("entry_open_price"))
+        if entry_price > 0:
+            tracked = [observations[k] for k in sorted(observations) if k >= safe_str(item.get("entry_date"))]
+            highs = [safe_float(x.get("high")) for x in tracked]
+            lows = [safe_float(x.get("low")) for x in tracked]
+            item["latest_price"] = close_price
+            item["latest_change_pct"] = round(((close_price - entry_price) / entry_price) * 100, 2)
+            item["max_high_pct"] = round(((max(highs) - entry_price) / entry_price) * 100, 2) if highs else 0
+            item["max_drawdown_pct"] = round(((min(lows) - entry_price) / entry_price) * 100, 2) if lows else 0
+            target_high = parse_range_bounds(safe_str(item.get("target_price_plan")), 0.0)[1]
+            stop_loss = safe_float(item.get("stop_loss_plan"))
+            item["hit_target"] = target_high > 0 and bool(highs) and max(highs) >= target_high
+            item["hit_stop"] = stop_loss > 0 and bool(lows) and min(lows) <= stop_loss
+            horizon_returns: Dict[str, Any] = {}
+            for horizon in VALIDATION_HORIZONS:
+                if len(tracked) >= horizon:
+                    horizon_close = safe_float(tracked[horizon - 1].get("close"))
+                    horizon_returns[str(horizon)] = round(((horizon_close - entry_price) / entry_price) * 100, 2)
+            item["horizon_returns"] = horizon_returns
+        changed = True
+
+    if changed:
+        run["last_update"] = last_update
+        run["status"] = "tracking"
+        run["message"] = "驗證樣本已固定；追蹤資料會依每日行情快照更新。"
+        store = load_validation_store()
+        store.setdefault("runs", {})[safe_str(run.get("date"))] = run
+        save_validation_store(store)
+    return run
+
+
+def get_or_create_validation_run(date_key: str, all_stocks: List[Dict[str, Any]], data_date: str, last_update: str, recommendations: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    target_date = normalize_date_key(date_key) or VALIDATION_START_DATE
+    run = get_validation_run(target_date)
+    if run is None and normalize_date_key(data_date) == target_date and recommendations:
+        run = create_validation_run(target_date, recommendations, last_update)
+    if run is not None:
+        return update_validation_run_tracking(run, all_stocks, data_date, last_update)
+    return {
+        "date": target_date,
+        "created_at": "",
+        "last_update": last_update,
+        "status": "missing",
+        "message": f"尚未保存 {target_date} 的固定驗證樣本。請在該日收盤後呼叫 /stocks 或 /validation 建立名單。",
+        "items": [],
+    }
+
+
+def summarize_validation_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    items = run.get("items", []) if isinstance(run.get("items"), list) else []
+    entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
+    latest_returns = [safe_float(x.get("latest_change_pct")) for x in entered]
+    wins = [x for x in entered if safe_float(x.get("latest_change_pct")) > 0]
+    hit_targets = [x for x in entered if x.get("hit_target")]
+    hit_stops = [x for x in entered if x.get("hit_stop")]
+    return {
+        "count": len(items),
+        "entered_count": len(entered),
+        "avg_latest_return_pct": round(avg(latest_returns), 2) if latest_returns else 0,
+        "win_rate_pct": round((len(wins) / len(entered)) * 100, 2) if entered else 0,
+        "hit_target_count": len(hit_targets),
+        "hit_stop_count": len(hit_stops),
+    }
+
+
+# =========================
+# Market Data（只抓上市 + 上櫃）
+# =========================
 def fetch_snapshot_rows_by_type(
     stock_client, market: str, market_label: str, quote_type: str,
 ) -> List[Dict[str, Any]]:
@@ -1596,7 +1768,6 @@ def get_all_stocks_raw() -> Dict[str, Any]:
 
 def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
     now = now_taipei()
-
     if (
         not force_refresh
         and _CACHE["stocks"] is not None
@@ -1617,6 +1788,32 @@ def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
     _CACHE["last_update"] = result["last_update"]
     _CACHE["message"] = result.get("message", "")
     return result
+
+
+def get_cached_recommendations(
+    stocks: List[Dict[str, Any]],
+    data_date: str,
+    last_update: str,
+    top_n: int = 10,
+) -> List[Dict[str, Any]]:
+    if not should_settle_recommendations():
+        return []
+
+    cached_items = _RECOMMENDATION_CACHE.get("items")
+    if (
+        isinstance(cached_items, list)
+        and _RECOMMENDATION_CACHE.get("data_date") == data_date
+        and _RECOMMENDATION_CACHE.get("last_update") == last_update
+        and _RECOMMENDATION_CACHE.get("top_n") == top_n
+    ):
+        return cached_items
+
+    items = build_recommendations(stocks, top_n=top_n)
+    _RECOMMENDATION_CACHE["items"] = items
+    _RECOMMENDATION_CACHE["data_date"] = data_date
+    _RECOMMENDATION_CACHE["last_update"] = last_update
+    _RECOMMENDATION_CACHE["top_n"] = top_n
+    return items
 
 
 # =========================
@@ -1672,7 +1869,6 @@ def filter_stocks(
 
 def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: str = "desc") -> List[Dict[str, Any]]:
     reverse = sort_dir.lower() != "asc"
-
     allowed = {
         "score": "score",
         "recommendation_score": "recommendation_score",
@@ -1685,7 +1881,6 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
         "name": "name",
         "operation_rating": "operation_rating",
     }
-
     key = allowed.get(sort_by, "score")
 
     if key == "operation_rating":
@@ -1697,7 +1892,6 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
 
 def build_market_proxy_context(stocks: List[Dict[str, Any]]) -> Dict[str, Any]:
     universe = [s for s in stocks if is_main_board_stock(s)]
-
     if not universe:
         return {
             "regime": "中性",
@@ -1709,17 +1903,16 @@ def build_market_proxy_context(stocks: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     advance_count = sum(1 for s in universe if safe_float(s.get("change_percent")) > 0)
     strong_count = sum(
-        1 for s in universe
-        if safe_str(s.get("signal")) in {"量增轉強", "整理待發", "穩步走高", "突破前夕", "溫和轉強"}
+        1
+        for s in universe
+        if safe_str(s.get("signal")) in {"量增轉強", "整理待發", "穩步走高"}
     )
-
     total_trade_value = sum(max(safe_int(s.get("trade_value")), 0) for s in universe)
     up_trade_value = sum(
         max(safe_int(s.get("trade_value")), 0)
         for s in universe
         if safe_float(s.get("change_percent")) > 0
     )
-
     advance_ratio = advance_count / len(universe)
     strong_ratio = strong_count / len(universe)
     avg_change = avg([safe_float(s.get("change_percent")) for s in universe])
@@ -1745,10 +1938,8 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
     price = safe_float(stock.get("price"))
     volume = safe_int(stock.get("volume"))
     trade_value = max(safe_int(stock.get("trade_value")), 0)
-
     signal = safe_str(stock.get("signal"))
     rating = safe_str(stock.get("operation_rating"))
-
     rsi14 = safe_float(stock.get("rsi14_value"))
     vol_ratio5 = safe_float(stock.get("vol_ratio5_value"))
     atr14_pct = safe_float(stock.get("atr14_pct"))
@@ -1770,7 +1961,6 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
         market_score += 11
     else:
         market_score += 4
-
     if advance_ratio >= 0.5:
         market_score += 4
     if up_trade_ratio >= 0.52:
@@ -1808,7 +1998,6 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
     quality_score += score_band(volume, 800, 60000, 5000, 14)
     quality_score += score_band(trade_value, 50_000_000, 6_000_000_000, 500_000_000, 12)
     quality_score += score_band(price, 8, 500, 60, 6)
-
     if atr14_pct <= 7.5:
         quality_score += 6
     elif atr14_pct <= 10.5:
@@ -1841,7 +2030,6 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
     leadership_ok = leadership_score >= 28
     quality_ok = quality_score >= 18
     value_ok = valuation_proxy_score >= 16 and overheat_penalty <= 12
-
     framework_pass = (
         environment_ok
         and leadership_ok
@@ -1871,7 +2059,6 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
 
 def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
     market_context = build_market_proxy_context(stocks)
-
     candidates = [
         s for s in stocks
         if is_main_board_stock(s)
@@ -1891,17 +2078,14 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
         ),
         reverse=True,
     )
-
     seed_items = candidates[:RECOMMENDATION_SEED_LIMIT]
 
     result_map: Dict[str, Dict[str, Any]] = {}
-
     with ThreadPoolExecutor(max_workers=6) as executor:
         future_to_symbol = {
             executor.submit(build_historical_analysis_for_stock, stock): stock["symbol"]
             for stock in seed_items
         }
-
         for future in as_completed(future_to_symbol):
             symbol = future_to_symbol[future]
             try:
@@ -1912,16 +2096,16 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
                     result_map[symbol] = original
 
     analyzed = list(result_map.values())
-
     analyzed_with_proxy: List[Dict[str, Any]] = []
     for stock in analyzed:
         proxy_info = build_book_proxy_selection(stock, market_context)
         merged = dict(stock)
         merged.update(proxy_info)
         analyzed_with_proxy.append(merged)
+    analyzed = analyzed_with_proxy
 
     analyzed = [
-        s for s in analyzed_with_proxy
+        s for s in analyzed
         if s.get("signal") in {"突破前夕", "量增轉強", "整理待發", "溫和轉強"}
         and safe_float(s.get("recommendation_score")) >= 30
         and safe_str(s.get("operation_rating")) in {"A", "B+"}
@@ -1941,36 +2125,7 @@ def build_recommendations(stocks: List[Dict[str, Any]], top_n: int = 10) -> List
         ),
         reverse=True,
     )
-
     return analyzed[:top_n]
-
-
-def get_cached_recommendations(
-    stocks: List[Dict[str, Any]],
-    data_date: str,
-    last_update: str,
-    top_n: int = 10,
-) -> List[Dict[str, Any]]:
-    if not should_settle_recommendations():
-        return []
-
-    cached_items = _RECOMMENDATION_CACHE.get("items")
-
-    if (
-        isinstance(cached_items, list)
-        and _RECOMMENDATION_CACHE.get("data_date") == data_date
-        and _RECOMMENDATION_CACHE.get("last_update") == last_update
-        and _RECOMMENDATION_CACHE.get("top_n") == top_n
-    ):
-        return cached_items
-
-    items = build_recommendations(stocks, top_n=top_n)
-    _RECOMMENDATION_CACHE["items"] = items
-    _RECOMMENDATION_CACHE["data_date"] = data_date
-    _RECOMMENDATION_CACHE["last_update"] = last_update
-    _RECOMMENDATION_CACHE["top_n"] = top_n
-
-    return items
 
 
 def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[str, Any]]:
@@ -2063,454 +2218,6 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================
-# Validation
-# =========================
-def validation_date_key_to_label(date_key: str) -> str:
-    key = normalize_date_key(date_key)
-    if len(key) != 8:
-        return safe_str(date_key)
-    return f"{key[:4]}/{key[4:6]}/{key[6:8]}"
-
-
-def candle_date_key(candle: Dict[str, Any]) -> str:
-    return normalize_date_key(candle.get("date"))
-
-
-def find_candle_index_by_date(candles: List[Dict[str, Any]], date_key: str) -> int:
-    target = normalize_date_key(date_key)
-    for i, candle in enumerate(candles):
-        if candle_date_key(candle) == target:
-            return i
-    return -1
-
-
-def calc_validation_return(entry_price: float, close_price: float) -> Optional[float]:
-    if entry_price <= 0 or close_price <= 0:
-        return None
-    return round(((close_price - entry_price) / entry_price) * 100, 2)
-
-
-def avg_optional(values: List[Optional[float]]) -> Optional[float]:
-    nums = [safe_float(x) for x in values if x is not None]
-    if not nums:
-        return None
-    return round(avg(nums), 2)
-
-
-def win_rate_optional(values: List[Optional[float]]) -> Optional[float]:
-    nums = [safe_float(x) for x in values if x is not None]
-    if not nums:
-        return None
-    winners = len([x for x in nums if x > 0])
-    return round((winners / len(nums)) * 100, 2)
-
-
-def build_historical_stock_at_date(
-    base_stock: Dict[str, Any],
-    target_date: str = VALIDATION_START_DATE,
-) -> Optional[Dict[str, Any]]:
-    symbol = safe_str(base_stock.get("symbol"))
-    if not symbol:
-        return None
-
-    data = fetch_symbol_daily_candles(symbol)
-    candles = data.get("candles", [])
-
-    idx = find_candle_index_by_date(candles, target_date)
-    if idx < 34:
-        return None
-
-    analysis_candles = candles[: idx + 1]
-    close_now = safe_float(analysis_candles[-1].get("close"))
-    prev_close = safe_float(analysis_candles[-2].get("close")) if len(analysis_candles) >= 2 else 0.0
-
-    if close_now <= 0 or prev_close <= 0:
-        return None
-
-    closes = [safe_float(x.get("close")) for x in analysis_candles]
-    volumes = [safe_int(x.get("volume")) for x in analysis_candles]
-    vol_now = volumes[-1]
-
-    ma5 = avg(closes[-5:])
-    ma10 = avg(closes[-10:])
-    ma20 = avg(closes[-20:])
-    ma60 = avg(closes[-60:]) if len(closes) >= 60 else avg(closes)
-
-    avg_vol5 = avg(volumes[-6:-1]) if len(volumes) >= 6 else avg(volumes[-5:])
-    avg_vol20 = avg(volumes[-21:-1]) if len(volumes) >= 21 else avg(volumes[-20:])
-
-    high20 = max(safe_float(x.get("high")) for x in analysis_candles[-20:])
-    low20 = min(safe_float(x.get("low")) for x in analysis_candles[-20:])
-
-    high60 = max(safe_float(x.get("high")) for x in analysis_candles[-60:]) if len(analysis_candles) >= 60 else max(
-        safe_float(x.get("high")) for x in analysis_candles
-    )
-    low60 = min(safe_float(x.get("low")) for x in analysis_candles[-60:]) if len(analysis_candles) >= 60 else min(
-        safe_float(x.get("low")) for x in analysis_candles
-    )
-
-    rsi14 = calc_rsi(closes, 14)
-    macd_line, signal_line, macd_hist = calc_macd(closes)
-    atr14 = calc_atr(analysis_candles, 14)
-    vol_ratio5 = (vol_now / avg_vol5) if avg_vol5 > 0 else 1.0
-
-    pattern_info = classify_daily_pattern(
-        close_now=close_now,
-        prev_close=prev_close,
-        ma5=ma5,
-        ma10=ma10,
-        ma20=ma20,
-        high20=high20,
-        low20=low20,
-        vol_ratio5=vol_ratio5,
-        rsi14=rsi14,
-        macd_hist=macd_hist,
-    )
-
-    recommendation_score = calc_potential_recommendation_score(
-        close_now=close_now,
-        prev_close=prev_close,
-        ma5=ma5,
-        ma10=ma10,
-        ma20=ma20,
-        high20=high20,
-        low20=low20,
-        vol_now=vol_now,
-        avg_vol5=avg_vol5,
-        rsi14=rsi14,
-        macd_hist=macd_hist,
-    )
-
-    strategy = build_historical_strategy(pattern_info["signal"])
-
-    plan = build_historical_trade_plan(
-        price=close_now,
-        ma5=ma5,
-        ma20=ma20,
-        high20=high20,
-        low20=low20,
-        atr14=atr14,
-        signal=pattern_info["signal"],
-    )
-
-    risk_reward = calc_risk_reward(plan["entry_price"], plan["target_price"], plan["stop_loss"])
-
-    day_change_pct = ((close_now - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-    atr14_pct = ((atr14 / close_now) * 100) if close_now > 0 else 0.0
-    premium_to_ma20_pct = ((close_now - ma20) / ma20 * 100) if ma20 > 0 else 0.0
-    premium_to_ma60_pct = ((close_now - ma60) / ma60 * 100) if ma60 > 0 else 0.0
-    distance_to_high20 = calc_distance_pct(high20, close_now)
-    distance_to_high60 = calc_distance_pct(high60, close_now)
-
-    reason = build_historical_reason(
-        name=safe_str(base_stock.get("name")),
-        close_now=close_now,
-        prev_close=prev_close,
-        ma5=ma5,
-        ma10=ma10,
-        ma20=ma20,
-        high20=high20,
-        low20=low20,
-        vol_now=vol_now,
-        avg_vol5=avg_vol5,
-        rsi14=rsi14,
-        macd_line=macd_line,
-        signal_line=signal_line,
-        macd_hist=macd_hist,
-        pattern_text=pattern_info["pattern"],
-    )
-
-    technical_comment = build_historical_technical_comment(
-        ma5=ma5,
-        ma10=ma10,
-        ma20=ma20,
-        avg_vol5=avg_vol5,
-        avg_vol20=avg_vol20,
-        rsi14=rsi14,
-        macd_line=macd_line,
-        signal_line=signal_line,
-        macd_hist=macd_hist,
-        high20=high20,
-        low20=low20,
-        atr14=atr14,
-    )
-
-    return {
-        "market": base_stock.get("market", ""),
-        "symbol": symbol,
-        "name": base_stock.get("name", symbol),
-        "price": round(close_now, 2),
-        "change": round(close_now - prev_close, 2),
-        "change_percent": round(day_change_pct, 2),
-        "volume": vol_now,
-        "trade_value": safe_int(base_stock.get("trade_value")),
-        "score": recommendation_score,
-        "recommendation_score": recommendation_score,
-        "prev_close": round(prev_close, 2),
-        "open": round(safe_float(analysis_candles[-1].get("open")), 2),
-        "high": round(safe_float(analysis_candles[-1].get("high")), 2),
-        "low": round(safe_float(analysis_candles[-1].get("low")), 2),
-        "update_time": validation_date_key_to_label(target_date) + " 13:30:00",
-        "category": price_category(close_now),
-        "signal": pattern_info["signal"],
-        "trend_type": pattern_info["trend_type"],
-        "reason": reason,
-        "technical_comment": technical_comment,
-        "operation_rating": strategy["operation_rating"],
-        "operation_bias": strategy["operation_bias"],
-        "operation_style": strategy["operation_style"],
-        "strategy_action": strategy["strategy_action"],
-        "entry_price": plan["entry_price"],
-        "target_price": plan["target_price"],
-        "stop_loss": plan["stop_loss"],
-        "risk_reward": risk_reward,
-        "risk_note": strategy["risk_note"],
-        "analysis_source": "validation_rebuild_20260427",
-        "ma20_value": round(ma20, 2),
-        "ma60_value": round(ma60, 2),
-        "high20_value": round(high20, 2),
-        "high60_value": round(high60, 2),
-        "low20_value": round(low20, 2),
-        "low60_value": round(low60, 2),
-        "rsi14_value": round(rsi14, 2),
-        "vol_ratio5_value": round(vol_ratio5, 2),
-        "projected_volume": vol_now,
-        "atr14_pct": round(atr14_pct, 2),
-        "premium_to_ma20_pct": round(premium_to_ma20_pct, 2),
-        "premium_to_ma60_pct": round(premium_to_ma60_pct, 2),
-        "distance_to_high20_pct": round(distance_to_high20, 2),
-        "distance_to_high60_pct": round(distance_to_high60, 2),
-    }
-
-
-def build_validation_start_recommendations(all_stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    universe = [
-        s for s in all_stocks
-        if is_main_board_stock(s)
-        and is_valid_main_board_symbol(safe_str(s.get("symbol")), safe_str(s.get("name")))
-    ]
-
-    universe.sort(
-        key=lambda x: (
-            safe_int(x.get("trade_value")),
-            safe_int(x.get("volume")),
-            safe_float(x.get("price")),
-        ),
-        reverse=True,
-    )
-
-    seed = universe[:VALIDATION_SEED_LIMIT]
-
-    analyzed: List[Dict[str, Any]] = []
-
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        future_to_symbol = {
-            executor.submit(build_historical_stock_at_date, stock, VALIDATION_START_DATE): stock.get("symbol")
-            for stock in seed
-        }
-
-        for future in as_completed(future_to_symbol):
-            try:
-                item = future.result()
-                if item:
-                    analyzed.append(item)
-            except Exception:
-                continue
-
-    market_context = build_market_proxy_context(analyzed)
-
-    with_proxy: List[Dict[str, Any]] = []
-    for stock in analyzed:
-        proxy = build_book_proxy_selection(stock, market_context)
-        merged = dict(stock)
-        merged.update(proxy)
-        with_proxy.append(merged)
-
-    candidates = [
-        s for s in with_proxy
-        if safe_str(s.get("signal")) in VALIDATION_ALLOWED_SIGNALS
-        and safe_str(s.get("operation_rating")) in VALIDATION_ALLOWED_RATINGS
-        and safe_float(s.get("recommendation_score")) >= 30
-        and (
-            safe_float(s.get("book_selection_score")) >= BOOK_PROXY_STRONG_SELECTION_SCORE
-            or bool(s.get("book_framework_pass"))
-        )
-    ]
-
-    if len(candidates) < VALIDATION_TOP_N:
-        candidates = [
-            s for s in with_proxy
-            if safe_str(s.get("signal")) in VALIDATION_ALLOWED_SIGNALS
-            and safe_str(s.get("operation_rating")) in VALIDATION_ALLOWED_RATINGS
-            and safe_float(s.get("recommendation_score")) >= 20
-        ]
-
-    candidates.sort(
-        key=lambda x: (
-            safe_float(x.get("book_selection_score")),
-            safe_float(x.get("recommendation_score")),
-            1 if x.get("signal") == "突破前夕" else 0,
-            1 if x.get("operation_rating") == "A" else 0,
-            safe_int(x.get("volume")),
-        ),
-        reverse=True,
-    )
-
-    return candidates[:VALIDATION_TOP_N]
-
-
-def build_validation_sample(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
-    symbol = safe_str(stock.get("symbol"))
-    data = fetch_symbol_daily_candles(symbol)
-    candles = data.get("candles", [])
-
-    start_idx = find_candle_index_by_date(candles, VALIDATION_START_DATE)
-    entry_idx = start_idx + 1 if start_idx >= 0 and start_idx + 1 < len(candles) else -1
-
-    recommendation_close = safe_float(stock.get("price"))
-
-    entry_candle = candles[entry_idx] if entry_idx >= 0 else {}
-    entry_date = candle_date_key(entry_candle) if entry_candle else VALIDATION_ENTRY_DATE
-    entry_open = safe_float(entry_candle.get("open"))
-
-    latest_candle = candles[-1] if candles else {}
-    latest_date = candle_date_key(latest_candle)
-    latest_close = safe_float(latest_candle.get("close"))
-
-    returns_by_day: Dict[int, Optional[float]] = {}
-    tracked_candles: List[Dict[str, Any]] = []
-
-    if entry_idx >= 0 and entry_open > 0:
-        for day in VALIDATION_FORWARD_DAYS:
-            target_idx = entry_idx + day - 1
-            if target_idx < len(candles):
-                c = candles[target_idx]
-                returns_by_day[day] = calc_validation_return(entry_open, safe_float(c.get("close")))
-            else:
-                returns_by_day[day] = None
-
-        last_target_idx = min(len(candles) - 1, entry_idx + max(VALIDATION_FORWARD_DAYS) - 1)
-        tracked_candles = candles[entry_idx: last_target_idx + 1]
-
-    highs = [safe_float(x.get("high")) for x in tracked_candles if safe_float(x.get("high")) > 0]
-    lows = [safe_float(x.get("low")) for x in tracked_candles if safe_float(x.get("low")) > 0]
-
-    max_return_pct = round(((max(highs) - entry_open) / entry_open) * 100, 2) if highs and entry_open > 0 else None
-    max_drawdown_pct = round(((min(lows) - entry_open) / entry_open) * 100, 2) if lows and entry_open > 0 else None
-
-    target_low, _ = parse_range_bounds(safe_str(stock.get("target_price")), 0.0)
-    stop_loss = safe_float(stock.get("stop_loss"), 0.0)
-
-    target_hit = bool(highs and target_low > 0 and max(highs) >= target_low)
-    stop_hit = bool(lows and stop_loss > 0 and min(lows) <= stop_loss)
-
-    return {
-        "rank": rank,
-        "symbol": symbol,
-        "name": stock.get("name", ""),
-        "market": stock.get("market", ""),
-        "signal": stock.get("signal", ""),
-        "operation_rating": stock.get("operation_rating", ""),
-        "recommendation_score": stock.get("recommendation_score", 0),
-        "book_selection_score": stock.get("book_selection_score", 0),
-        "recommendation_date": VALIDATION_START_DATE,
-        "recommendation_close": round(recommendation_close, 2),
-        "entry_date": entry_date,
-        "entry_open": round(entry_open, 2),
-        "latest_date": latest_date,
-        "latest_close": round(latest_close, 2) if latest_close > 0 else 0,
-        "return_1d": returns_by_day.get(1),
-        "return_2d": returns_by_day.get(2),
-        "return_3d": returns_by_day.get(3),
-        "return_5d": returns_by_day.get(5),
-        "return_10d": returns_by_day.get(10),
-        "max_return_pct": max_return_pct,
-        "max_drawdown_pct": max_drawdown_pct,
-        "target_hit": target_hit,
-        "stop_hit": stop_hit,
-        "entry_price": stock.get("entry_price", ""),
-        "target_price": stock.get("target_price", ""),
-        "stop_loss": stock.get("stop_loss", ""),
-        "risk_reward": stock.get("risk_reward", ""),
-    }
-
-
-def build_validation_summary(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
-    entered = [s for s in samples if safe_float(s.get("entry_open")) > 0]
-
-    return {
-        "sample_count": len(samples),
-        "entered_count": len(entered),
-        "avg_return_1d": avg_optional([s.get("return_1d") for s in entered]),
-        "avg_return_2d": avg_optional([s.get("return_2d") for s in entered]),
-        "avg_return_3d": avg_optional([s.get("return_3d") for s in entered]),
-        "avg_return_5d": avg_optional([s.get("return_5d") for s in entered]),
-        "avg_return_10d": avg_optional([s.get("return_10d") for s in entered]),
-        "win_rate_1d": win_rate_optional([s.get("return_1d") for s in entered]),
-        "win_rate_2d": win_rate_optional([s.get("return_2d") for s in entered]),
-        "win_rate_3d": win_rate_optional([s.get("return_3d") for s in entered]),
-        "win_rate_5d": win_rate_optional([s.get("return_5d") for s in entered]),
-        "win_rate_10d": win_rate_optional([s.get("return_10d") for s in entered]),
-    }
-
-
-def build_validation_payload(force_refresh: bool = False) -> Dict[str, Any]:
-    now = now_taipei()
-
-    cached_payload = _VALIDATION_CACHE.get("payload")
-    fetched_at = _VALIDATION_CACHE.get("fetched_at")
-
-    if (
-        not force_refresh
-        and isinstance(cached_payload, dict)
-        and isinstance(fetched_at, datetime)
-        and (now - fetched_at).total_seconds() < 15 * 60
-    ):
-        return cached_payload
-
-    result = get_cached_all_stocks(force_refresh=force_refresh)
-    all_stocks = result.get("stocks", [])
-
-    start_recommendations = build_validation_start_recommendations(all_stocks)
-
-    samples = [
-        build_validation_sample(stock, idx + 1)
-        for idx, stock in enumerate(start_recommendations)
-    ]
-
-    summary = build_validation_summary(samples)
-
-    if samples:
-        status = "ready"
-        message = (
-            "已重建 2026/04/27 收盤推薦10檔，並使用 2026/04/28 開盤價作為驗證進場價。"
-            "後續績效以每個交易日收盤價計算，目標/停損則用追蹤期間高低價判斷。"
-        )
-    else:
-        status = "waiting_start_sample"
-        message = "尚未成功重建 2026/04/27 收盤推薦樣本；請確認歷史K線是否包含 2026/04/27 與 2026/04/28。"
-
-    payload = {
-        "success": True,
-        "start_date": VALIDATION_START_DATE,
-        "start_label": VALIDATION_START_LABEL,
-        "entry_rule": "2026/04/27 收盤後推薦，2026/04/28 開盤價視為實際進場價。",
-        "status": status,
-        "message": message,
-        "last_update": format_dt_taipei(now),
-        "samples": samples,
-        "summary": summary,
-    }
-
-    _VALIDATION_CACHE["payload"] = payload
-    _VALIDATION_CACHE["last_update"] = payload["last_update"]
-    _VALIDATION_CACHE["signature"] = f"{VALIDATION_START_DATE}:{len(samples)}:{payload['last_update']}"
-    _VALIDATION_CACHE["fetched_at"] = now
-
-    return payload
-
-
-# =========================
 # Startup
 # =========================
 @app.on_event("startup")
@@ -2536,36 +2243,46 @@ def health():
 
 
 @app.get("/validation")
-def get_validation(force_refresh: bool = Query(False)):
+def get_validation(
+    date: str = Query(VALIDATION_START_DATE),
+    force_refresh: bool = Query(False),
+):
     try:
-        return build_validation_payload(force_refresh=force_refresh)
+        result = get_cached_all_stocks(force_refresh=force_refresh)
+        all_stocks = result["stocks"]
+        market_status = get_market_status_text()
+        recs: List[Dict[str, Any]] = []
+        if normalize_date_key(result["data_date"]) == normalize_date_key(date) and should_settle_recommendations(market_status):
+            recs = get_cached_recommendations(
+                all_stocks,
+                data_date=result["data_date"],
+                last_update=result["last_update"],
+                top_n=10,
+            )
+        run = get_or_create_validation_run(
+            date,
+            all_stocks,
+            data_date=result["data_date"],
+            last_update=result["last_update"],
+            recommendations=recs,
+        )
+        return {
+            "success": True,
+            "market_status": market_status,
+            "data_date": result["data_date"],
+            "last_update": result["last_update"],
+            "validation": run,
+            "summary": summarize_validation_run(run),
+        }
     except Exception as e:
         return JSONResponse(
             status_code=500,
             content={
                 "success": False,
-                "start_date": VALIDATION_START_DATE,
-                "start_label": VALIDATION_START_LABEL,
-                "entry_rule": "2026/04/27 收盤後推薦，2026/04/28 開盤價視為實際進場價。",
-                "status": "error",
-                "message": str(e),
                 "error": str(e),
                 "trace": traceback.format_exc(),
-                "samples": [],
-                "summary": {
-                    "sample_count": 0,
-                    "entered_count": 0,
-                    "avg_return_1d": None,
-                    "avg_return_2d": None,
-                    "avg_return_3d": None,
-                    "avg_return_5d": None,
-                    "avg_return_10d": None,
-                    "win_rate_1d": None,
-                    "win_rate_2d": None,
-                    "win_rate_3d": None,
-                    "win_rate_5d": None,
-                    "win_rate_10d": None,
-                },
+                "validation": None,
+                "summary": {},
             },
         )
 
@@ -2586,7 +2303,6 @@ def get_stocks(
     try:
         result = get_cached_all_stocks(force_refresh=force_refresh)
         all_stocks = result["stocks"]
-
         market_status = get_market_status_text()
         recommendation_info = build_recommendation_settlement_info(market_status)
 
@@ -2598,14 +2314,12 @@ def get_stocks(
             price_min=price_min,
             price_max=price_max,
         )
-
         filtered = sort_stocks(filtered, sort_by=sort_by, sort_dir=sort_dir)
 
         total_filtered = len(filtered)
         paged = filtered[offset: offset + limit]
 
-        recs: List[Dict[str, Any]] = []
-
+        recs = []
         if (
             offset == 0
             and safe_str(market).lower() == "all"
@@ -2621,11 +2335,18 @@ def get_stocks(
                 last_update=result["last_update"],
                 top_n=10,
             )
+            if recs:
+                get_or_create_validation_run(
+                    VALIDATION_START_DATE,
+                    all_stocks,
+                    data_date=result["data_date"],
+                    last_update=result["last_update"],
+                    recommendations=recs,
+                )
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
         focused = find_focused_stock(filtered, q)
-
         if focused:
             focused = build_historical_analysis_for_stock(focused)
             symbol = focused.get("symbol", "")
@@ -2653,7 +2374,6 @@ def get_stocks(
             "focused_stock": build_focused_analysis(focused) if focused else None,
             "stocks": [clean_stock_output(x) for x in paged],
         }
-
     except Exception as e:
         return JSONResponse(
             status_code=500,
