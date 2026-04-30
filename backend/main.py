@@ -1639,43 +1639,77 @@ def update_validation_run_tracking(run: Dict[str, Any], stocks: List[Dict[str, A
 
     stock_map = {safe_str(s.get("symbol")): s for s in stocks if safe_str(s.get("symbol"))}
     changed = False
+    run_date = normalize_date_key(run.get("date"))
 
     for item in run.get("items", []):
-        stock = stock_map.get(safe_str(item.get("symbol")))
-        if not stock:
+        symbol = safe_str(item.get("symbol"))
+        stock = stock_map.get(symbol)
+        if not symbol:
             continue
 
-        price = safe_float(stock.get("price"))
-        open_price = safe_float(stock.get("open")) or price
-        high_price = safe_float(stock.get("high")) or price
-        low_price = safe_float(stock.get("low")) or price
-        close_price = price
         start_close_price = safe_float(item.get("start_close_price"))
+        observations = item.setdefault("observations", {})
 
-        item["current_price"] = close_price
-        item["current_day_change_pct"] = round(safe_float(stock.get("change_percent")), 2)
-        if start_close_price > 0:
-            item["return_from_start_close_pct"] = round(
-                ((close_price - start_close_price) / start_close_price) * 100,
-                2,
+        candles: List[Dict[str, Any]] = []
+        try:
+            candles = fetch_symbol_daily_candles(symbol).get("candles", [])
+        except Exception:
+            candles = []
+
+        historical_observations: List[Dict[str, Any]] = []
+        for index, candle in enumerate(candles):
+            current_candle_date = candle_date_key(candle)
+            if not current_candle_date or current_candle_date < run_date or current_candle_date > date_key:
+                continue
+            previous_close = safe_float(candles[index - 1].get("close")) if index > 0 else 0
+            historical_observations.append(
+                build_observation_from_candle(candle, start_close_price, last_update, previous_close)
             )
 
-        observations = item.setdefault("observations", {})
-        observations[date_key] = {
-            "date": date_key,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price,
-            "volume": safe_int(stock.get("volume")),
-            "day_change_pct": round(safe_float(stock.get("change_percent")), 2),
-            "return_from_start_close_pct": item.get("return_from_start_close_pct", 0),
-            "last_update": last_update,
-        }
+        if historical_observations:
+            for observation in historical_observations:
+                observations[observation["date"]] = observation
 
-        if not item.get("entry_date") and date_key > safe_str(run.get("date")):
-            item["entry_date"] = date_key
-            item["entry_open_price"] = open_price
+            latest_observation = historical_observations[-1]
+            close_price = safe_float(latest_observation.get("close"))
+            item["current_price"] = close_price
+            item["current_day_change_pct"] = round(safe_float(latest_observation.get("day_change_pct")), 2)
+            item["return_from_start_close_pct"] = latest_observation.get("return_from_start_close_pct", 0)
+
+            if not item.get("entry_date"):
+                entry_candidates = [x for x in historical_observations if safe_str(x.get("date")) > run_date]
+                if entry_candidates:
+                    entry_observation = entry_candidates[0]
+                    item["entry_date"] = entry_observation["date"]
+                    item["entry_open_price"] = safe_float(entry_observation.get("open"))
+
+        elif stock:
+            price = safe_float(stock.get("price"))
+            open_price = safe_float(stock.get("open")) or price
+            high_price = safe_float(stock.get("high")) or price
+            low_price = safe_float(stock.get("low")) or price
+            close_price = price
+
+            item["current_price"] = close_price
+            item["current_day_change_pct"] = round(safe_float(stock.get("change_percent")), 2)
+            if start_close_price > 0:
+                item["return_from_start_close_pct"] = round(
+                    ((close_price - start_close_price) / start_close_price) * 100,
+                    2,
+                )
+
+            observations[date_key] = {
+                "date": date_key,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": safe_int(stock.get("volume")),
+                "day_change_pct": round(safe_float(stock.get("change_percent")), 2),
+                "return_from_start_close_pct": item.get("return_from_start_close_pct", 0),
+                "last_update": last_update,
+                "source": "settled_snapshot",
+            }
 
         entry_price = safe_float(item.get("entry_open_price"))
         if entry_price > 0:
@@ -1692,8 +1726,8 @@ def update_validation_run_tracking(run: Dict[str, Any], stocks: List[Dict[str, A
             item["hit_stop"] = stop_loss > 0 and bool(lows) and min(lows) <= stop_loss
             horizon_returns: Dict[str, Any] = {}
             for horizon in VALIDATION_HORIZONS:
-                if len(tracked) >= horizon:
-                    horizon_close = safe_float(tracked[horizon - 1].get("close"))
+                if len(tracked) > horizon:
+                    horizon_close = safe_float(tracked[horizon].get("close"))
                     horizon_returns[str(horizon)] = round(((horizon_close - entry_price) / entry_price) * 100, 2)
             item["horizon_returns"] = horizon_returns
         changed = True
@@ -1728,6 +1762,34 @@ def get_or_create_validation_run(date_key: str, all_stocks: List[Dict[str, Any]]
         "status": "missing",
         "message": f"尚未保存 {target_date or current_data_date} 的固定驗證樣本。系統會從部署後每個收盤日開始自動保存推薦10檔。{hint}",
         "items": [],
+    }
+
+
+def candle_date_key(candle: Dict[str, Any]) -> str:
+    return normalize_date_key(candle.get("date"))
+
+
+def build_observation_from_candle(
+    candle: Dict[str, Any],
+    start_close_price: float,
+    last_update: str,
+    previous_close: float = 0.0,
+) -> Dict[str, Any]:
+    close_price = safe_float(candle.get("close"))
+    day_change_pct = ((close_price - previous_close) / previous_close) * 100 if previous_close > 0 else 0
+    return {
+        "date": candle_date_key(candle),
+        "open": safe_float(candle.get("open")),
+        "high": safe_float(candle.get("high")),
+        "low": safe_float(candle.get("low")),
+        "close": close_price,
+        "volume": safe_int(candle.get("volume")),
+        "day_change_pct": round(day_change_pct, 2),
+        "return_from_start_close_pct": round(((close_price - start_close_price) / start_close_price) * 100, 2)
+        if start_close_price > 0 and close_price > 0
+        else 0,
+        "last_update": last_update,
+        "source": "historical_k",
     }
 
 
@@ -2316,7 +2378,6 @@ def get_validation(
         current_data_date = normalize_date_key(result["data_date"])
         target_date = resolve_validation_date(date, current_data_date)
         recs: List[Dict[str, Any]] = []
-        update_all_validation_runs_tracking(all_stocks, result["data_date"], result["last_update"])
 
         if current_data_date and should_settle_recommendations(market_status):
             recs = get_cached_recommendations(
@@ -2427,7 +2488,6 @@ def get_stocks(
         all_stocks = result["stocks"]
         market_status = get_market_status_text()
         recommendation_info = build_recommendation_settlement_info(market_status)
-        update_all_validation_runs_tracking(all_stocks, result["data_date"], result["last_update"])
 
         filtered = filter_stocks(
             all_stocks,
