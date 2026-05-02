@@ -63,10 +63,12 @@ type BackendCategory = {
 };
 
 type ValidationItem = {
-  rank: number;
+  rank?: number;
   market?: string;
   symbol: string;
   name: string;
+  score?: number;
+  price?: number;
   recommendation_score?: number;
   signal?: string;
   operation_rating?: string;
@@ -161,8 +163,8 @@ const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 const BACKEND_BASE = `${API_BASE}/stocks`;
 const VALIDATION_BASE = `${API_BASE}/validation`;
 const VALIDATION_HISTORY_BASE = `${API_BASE}/validation/history`;
-const VALIDATION_START_DATE = "latest";
-const VALIDATION_START_LABEL = "最近收盤日";
+const VALIDATION_START_DATE = "20260427";
+const VALIDATION_START_LABEL = "2026/04/27";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -650,32 +652,37 @@ export default function Home() {
       const res = await fetch(`${VALIDATION_BASE}?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ValidationResponse = await res.json();
-      if (!data.success) throw new Error(data.error || data.message || "\u8f09\u5165\u9a57\u8b49\u8cc7\u6599\u5931\u6557");
+      if (!data.success) throw new Error(data.error || data.message || "載入驗證資料失敗");
       setValidationRun(data.validation || null);
       setValidationSummary(data.summary || {});
+      return data;
     } catch (err) {
       setValidationRun({
         date: VALIDATION_START_DATE,
         status: "error",
-        message: err instanceof Error ? err.message : "\u8f09\u5165\u9a57\u8b49\u8cc7\u6599\u5931\u6557",
+        message: err instanceof Error ? err.message : "載入驗證資料失敗",
         items: [],
       });
       setValidationSummary({});
+      return null;
     } finally {
       setValidationLoading(false);
     }
   }
 
-  async function fetchValidationHistorySafe() {
+  async function fetchValidationHistorySafe(options?: { forceRefresh?: boolean }) {
     try {
       const params = new URLSearchParams({ limit: "120", include_items: "true" });
+      if (options?.forceRefresh) params.set("force_refresh", "true");
       const res = await fetch(`${VALIDATION_HISTORY_BASE}?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ValidationHistoryResponse = await res.json();
       if (!data.success) throw new Error(data.error || data.message || "載入推薦紀錄失敗");
       setValidationHistory(data.runs || []);
+      return data;
     } catch {
       setValidationHistory([]);
+      return null;
     }
   }
 
@@ -701,7 +708,7 @@ export default function Home() {
     }
 
     await fetchValidationRunSafe({ forceRefresh: options?.forceRefresh });
-    await fetchValidationHistorySafe();
+    await fetchValidationHistorySafe({ forceRefresh: true });
 
     initialLoadedRef.current = true;
     setLoading(false);
@@ -766,8 +773,7 @@ export default function Home() {
   }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
 
   const validationStartStocks = validationRun?.items || [];
-  const isValidationStartReady =
-    validationRun?.status === "tracking" && validationStartStocks.length > 0;
+  const isValidationStartReady = validationRun?.status === "tracking" && validationStartStocks.length > 0;
   const validationDisplayDate = formatDateString(validationRun?.date || VALIDATION_START_DATE);
 
   const toggleRecommendationsPanel = () => {
@@ -778,13 +784,12 @@ export default function Home() {
   };
 
   const panelStyle: React.CSSProperties = {
-    background:
-      "linear-gradient(180deg, rgba(16, 31, 55, 0.96) 0%, rgba(9, 20, 39, 0.98) 100%)",
-    border: "1px solid rgba(88, 166, 255, 0.18)",
-    borderRadius: "20px",
-    padding: isMobile ? "16px" : "22px",
+    background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
+    border: "1px solid rgba(80, 140, 220, 0.22)",
+    borderRadius: "22px",
+    padding: isMobile ? "18px" : "24px",
     minHeight: isMobile ? "auto" : "540px",
-    boxShadow: "0 18px 46px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.04)",
+    boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
     overflow: "hidden",
   };
 
@@ -799,20 +804,16 @@ export default function Home() {
     <main
       style={{
         minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top left, rgba(42, 113, 214, 0.22) 0%, transparent 34%), linear-gradient(180deg, #06111f 0%, #081a30 45%, #06111f 100%)",
+        background: "linear-gradient(180deg, #08264d 0%, #0a2d5e 100%)",
         color: "#ffffff",
       }}
     >
       <div
         style={{
           width: "100%",
-          borderBottom: "1px solid rgba(88, 166, 255, 0.16)",
-          background: "rgba(6, 17, 31, 0.86)",
-          backdropFilter: "blur(16px)",
-          position: "sticky",
-          top: 0,
-          zIndex: 20,
+          borderBottom: "1px solid rgba(80, 140, 220, 0.15)",
+          background: "rgba(7, 33, 70, 0.55)",
+          backdropFilter: "blur(6px)",
         }}
       >
         <div
@@ -835,13 +836,13 @@ export default function Home() {
                 fontWeight: 900,
                 lineHeight: 1,
                 letterSpacing: "1px",
-                color: "#58a6ff",
+                color: "#5ea4ff",
               }}
             >
               TWSTOCK
             </div>
             <div style={{ fontSize: isMobile ? "20px" : "24px", opacity: 0.95, fontWeight: 700 }}>
-- 專業交易選股終端
+              - 即時選股系統
             </div>
           </div>
 
@@ -958,7 +959,7 @@ export default function Home() {
         style={{
           maxWidth: "1400px",
           margin: "0 auto",
-          padding: isMobile ? "18px 16px 24px" : "24px 32px 34px",
+          padding: isMobile ? "18px 16px 24px" : "26px 36px",
         }}
       >
         {error && (
@@ -1001,7 +1002,7 @@ export default function Home() {
                   收盤推薦追蹤驗證
                 </h2>
                 <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
-                  系統會每天收盤後保存推薦10檔；此頁預設顯示最近一個已保存收盤日的追蹤結果。
+                  新版驗證固定追蹤 {VALIDATION_START_LABEL} 收盤推薦10檔；後續交易日只更新這批名單的真實表現。
                 </div>
               </div>
 
@@ -1035,7 +1036,7 @@ export default function Home() {
                   value: isValidationStartReady ? `${validationStartStocks.length} 檔` : "等待起始樣本",
                   detail: isValidationStartReady
                     ? `已固定保存 ${validationDisplayDate} 收盤推薦，後續只追蹤這批樣本。`
-                    : validationRun?.message || `系統會從每個收盤日開始自動保存推薦10檔，盤中名單不列入。`,
+                    : validationRun?.message || `新版驗證從 ${VALIDATION_START_LABEL} 收盤後推薦開始，盤中名單不列入。`,
                 },
                 {
                   title: "進場口徑",
@@ -1046,7 +1047,7 @@ export default function Home() {
                   title: "追蹤週期",
                   value: validationSummary.count ? `${formatSigned(validationSummary.avg_return_from_start_close_pct)}%` : "1 / 2 / 3 / 5 / 10日",
                   detail: validationSummary.entered_count
-                    ? `收盤追蹤勝率 ${formatSigned(validationSummary.start_close_win_rate_pct)}%，進場勝率 ${formatSigned(validationSummary.win_rate_pct)}%，達標 ${validationSummary.hit_target_count || 0} 檔。`
+                    ? `收盤起算勝率 ${formatSigned(validationSummary.start_close_win_rate_pct)}%，進場勝率 ${formatSigned(validationSummary.win_rate_pct)}%，達標 ${validationSummary.hit_target_count || 0} 檔。`
                     : "後續會累積每個交易日的真實追蹤結果。",
                 },
               ].map((item) => (
@@ -1104,7 +1105,7 @@ export default function Home() {
                       ? "讀取驗證資料中"
                       : isValidationStartReady
                         ? `${validationDisplayDate} 已列入待驗證`
-                        : `尚未讀到固定推薦樣本`}
+                        : `尚未讀到 ${VALIDATION_START_LABEL} 起始樣本`}
                   </div>
                 </div>
                 <div style={{ color: "#cfe3ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 800 }}>
@@ -1115,7 +1116,7 @@ export default function Home() {
               <div style={{ color: "#dce9ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700, marginBottom: "14px" }}>
                 {isValidationStartReady
                   ? validationRun?.message || "起始推薦已固定保存；隔日開盤價出現後，會開始累積 1 / 2 / 3 / 5 / 10 日結果。"
-                  : validationRun?.message || `目前還沒有任何已保存的收盤後推薦名單。`}
+                  : validationRun?.message || `目前還沒有讀到 ${VALIDATION_START_LABEL} 的收盤後推薦名單。`}
               </div>
 
               {isValidationStartReady && (
@@ -1149,11 +1150,11 @@ export default function Home() {
                           {stock.rank || index + 1}. {stock.symbol} {stock.name}
                         </div>
                         <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
-                          {stock.recommendation_score || 0}
+                          {stock.recommendation_score || stock.score || 0}
                         </div>
                       </div>
                       <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
-                        訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)} ｜ 現價：{formatPrice(stock.current_price || stock.latest_price)}
+                        訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price || stock.price)} ｜ 現價：{formatPrice(stock.current_price || stock.latest_price)}
                       </div>
                       <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
                         {stock.entry_open_price
@@ -1262,7 +1263,7 @@ export default function Home() {
 
               <button
                 type="button"
-                onClick={fetchValidationHistorySafe}
+                onClick={() => fetchValidationHistorySafe({ forceRefresh: true })}
                 style={{
                   border: "1px solid rgba(120, 205, 255, 0.28)",
                   borderRadius: "12px",
@@ -1289,7 +1290,7 @@ export default function Home() {
                   fontWeight: 900,
                 }}
               >
-                目前尚未保存任何收盤推薦紀錄。收盤後按更新，或呼叫 /validation，即會開始累積。
+                目前尚未保存任何收盤推薦紀錄。收盤後按更新，或呼叫 `/validation`，即會開始累積。
               </div>
             ) : (
               <div style={{ display: "grid", gap: "16px" }}>
@@ -1383,44 +1384,11 @@ export default function Home() {
 
         {activeScreen === "screener" && (
           <>
-          <section
-            style={{
-              display: "grid",
-              gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0, 1fr))",
-              gap: "14px",
-              marginBottom: "18px",
-            }}
-          >
-            {[
-              { label: "市場狀態", value: marketStatus },
-              { label: "資料日期", value: formatDateString(dataDate) },
-              { label: "全市場檔數", value: formatNumber(allTotal) },
-              { label: "目前列表", value: `${formatNumber(total)} 檔` },
-            ].map((item) => (
-              <div
-                key={item.label}
-                style={{
-                  borderRadius: "16px",
-                  padding: "14px 16px",
-                  background: "linear-gradient(180deg, rgba(16,31,55,0.92) 0%, rgba(8,20,38,0.96) 100%)",
-                  border: "1px solid rgba(88,166,255,0.14)",
-                  boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
-                }}
-              >
-                <div style={{ color: "#8b949e", fontSize: "12px", fontWeight: 900, marginBottom: "8px", letterSpacing: "0.08em" }}>
-                  {item.label}
-                </div>
-                <div style={{ color: "#e6edf3", fontSize: "22px", fontWeight: 900 }}>
-                  {item.value}
-                </div>
-              </div>
-            ))}
-          </section>
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: isMobile ? "1fr" : "minmax(290px, 340px) minmax(0, 1fr)",
-            gap: "18px",
+            gridTemplateColumns: isMobile ? "1fr" : "minmax(320px, 390px) minmax(0, 1fr)",
+            gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
           }}
@@ -1435,10 +1403,7 @@ export default function Home() {
                 marginBottom: "18px",
               }}
             >
-              <div>
-                <div style={{ color: "#8b949e", fontSize: "12px", fontWeight: 900, letterSpacing: "0.08em", marginBottom: "6px" }}>FILTER</div>
-                <h2 style={{ fontSize: "22px", fontWeight: 900, margin: 0 }}>價格分類</h2>
-              </div>
+              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>價格分類</h2>
             </div>
             <div style={{ marginBottom: "20px" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
@@ -1456,16 +1421,16 @@ export default function Home() {
                       style={{
                         minWidth: isMobile ? "calc(50% - 6px)" : "118px",
                         border: "none",
-                        borderRadius: "12px",
-                        padding: "13px 14px",
-                        fontSize: "14px",
-                        fontWeight: 900,
+                        borderRadius: "14px",
+                        padding: "14px 14px",
+                        fontSize: "15px",
+                        fontWeight: 800,
                         cursor: "pointer",
                         color: "#fff",
                         background: active
-                          ? "linear-gradient(180deg, #f0b90b 0%, #c98a00 100%)"
-                          : "linear-gradient(180deg, rgba(25, 52, 87, 0.92) 0%, rgba(12, 30, 55, 0.92) 100%)",
-                        boxShadow: active ? "0 10px 24px rgba(240, 185, 11, 0.20)" : "inset 0 1px 0 rgba(255,255,255,0.04)",
+                          ? "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)"
+                          : "linear-gradient(180deg, #2a67b8 0%, #1e4f93 100%)",
+                        boxShadow: active ? "0 8px 22px rgba(80, 150, 255, 0.22)" : "none",
                       }}
                     >
                       {item.label} ({categoryCounts[item.key] || 0})
@@ -1484,15 +1449,15 @@ export default function Home() {
               placeholder="搜尋股票代號 / 名稱"
               style={{
                 width: "100%",
-                height: "48px",
-                borderRadius: "12px",
-                border: "1px solid rgba(88, 166, 255, 0.14)",
+                height: "46px",
+                borderRadius: "14px",
+                border: "none",
                 outline: "none",
                 padding: "0 16px",
                 fontSize: "15px",
                 marginBottom: "18px",
-                background: "rgba(255,255,255,0.92)",
-                color: "#06111f",
+                background: "#e8edf5",
+                color: "#123",
               }}
             />
 
@@ -1546,8 +1511,7 @@ export default function Home() {
               }}
             >
               <div>
-                <div style={{ color: "#f0b90b", fontSize: "12px", fontWeight: 900, letterSpacing: "0.08em", marginBottom: "6px" }}>TOP PICKS</div>
-                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 收盤推薦10檔</h2>
+                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 推薦10檔</h2>
                 {recommendationMessage && (
                   <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginTop: "6px" }}>
                     {recommendationMessage}
@@ -1605,18 +1569,18 @@ export default function Home() {
                       }}
                       style={{
                         background: isSelected
-                          ? "linear-gradient(180deg, rgba(30, 64, 112, 0.92) 0%, rgba(13, 31, 57, 0.96) 100%)"
-                          : "linear-gradient(180deg, rgba(16, 34, 61, 0.92) 0%, rgba(9, 22, 42, 0.96) 100%)",
+                          ? "rgba(71, 126, 214, 0.48)"
+                          : "rgba(40, 87, 150, 0.45)",
                         border: isSelected
-                          ? "1px solid rgba(240, 185, 11, 0.50)"
-                          : "1px solid rgba(88, 166, 255, 0.16)",
-                        borderRadius: "16px",
+                          ? "1px solid rgba(120, 180, 255, 0.52)"
+                          : "1px solid rgba(86, 145, 228, 0.22)",
+                        borderRadius: "18px",
                         padding: "16px 18px",
                         marginBottom: "12px",
                         cursor: "pointer",
                         boxShadow: isSelected
-                          ? "0 0 0 1px rgba(240,185,11,0.18), 0 16px 34px rgba(0,0,0,0.30)"
-                          : "0 8px 20px rgba(0,0,0,0.16)",
+                          ? "0 0 0 1px rgba(120,180,255,0.25), 0 12px 24px rgba(0,0,0,0.18)"
+                          : "none",
                         transition: "0.2s ease",
                       }}
                     >
@@ -1636,7 +1600,7 @@ export default function Home() {
                               fontSize: isMobile ? "20px" : "22px",
                               fontWeight: 900,
                               marginBottom: "10px",
-                              color: "#e6edf3",
+                              color: "#7fb6ff",
                             }}
                           >
                             {stock.symbol} {stock.name}
@@ -1707,13 +1671,13 @@ export default function Home() {
 
                         <div
                           style={{
-                            color: "#f0b90b",
+                            color: "#ffd95f",
                             fontSize: "18px",
                             fontWeight: 900,
                             whiteSpace: "nowrap",
                           }}
                         >
-                          推薦 {stock.recommendation_score || 0}
+                          推薦 {stock.recommendation_score || stock.score || 0}
                           {stock.book_selection_score ? ` / 代理 ${stock.book_selection_score.toFixed(1)}` : ""}
                         </div>
                       </div>
@@ -1760,8 +1724,8 @@ export default function Home() {
           <section
             style={{
               marginBottom: "22px",
-              background: "linear-gradient(180deg, rgba(14, 32, 59, 0.98) 0%, rgba(8, 20, 38, 0.98) 100%)",
-              border: "1px solid rgba(240,185,11,0.22)",
+              background: "linear-gradient(180deg, #102f63 0%, #0c2955 100%)",
+              border: "1px solid rgba(100,160,255,0.25)",
               borderRadius: "22px",
               padding: isMobile ? "18px" : "24px",
               boxShadow: "0 10px 28px rgba(0,0,0,0.12)",
@@ -2160,26 +2124,25 @@ export default function Home() {
 }
 
 const activeActionBtn: React.CSSProperties = {
-  border: "1px solid rgba(240,185,11,0.46)",
-  borderRadius: "12px",
+  border: "none",
+  borderRadius: "14px",
   padding: "12px 16px",
-  fontSize: "14px",
-  fontWeight: 900,
+  fontSize: "15px",
+  fontWeight: 800,
   cursor: "pointer",
-  color: "#06111f",
-  background: "linear-gradient(180deg, #f0b90b 0%, #c98a00 100%)",
-  boxShadow: "0 10px 24px rgba(240,185,11,0.18)",
+  color: "#fff",
+  background: "linear-gradient(180deg, #61a8ff 0%, #3e7fe0 100%)",
 };
 
 const normalActionBtn: React.CSSProperties = {
-  border: "1px solid rgba(88,166,255,0.16)",
-  borderRadius: "12px",
+  border: "none",
+  borderRadius: "14px",
   padding: "12px 16px",
-  fontSize: "14px",
-  fontWeight: 900,
+  fontSize: "15px",
+  fontWeight: 800,
   cursor: "pointer",
-  color: "#c9d1d9",
-  background: "rgba(15, 38, 69, 0.88)",
+  color: "#fff",
+  background: "#184889",
 };
 
 const pageBtnStyle: React.CSSProperties = {
@@ -2190,7 +2153,7 @@ const pageBtnStyle: React.CSSProperties = {
   fontSize: "14px",
   fontWeight: 800,
   color: "#fff",
-  background: "rgba(15, 38, 69, 0.88)",
+  background: "#184889",
 };
 
 const thStyle: React.CSSProperties = {
@@ -2224,8 +2187,8 @@ const analysisTagStyle: React.CSSProperties = {
 };
 
 const metricCardStyle: React.CSSProperties = {
-  background: "rgba(255,255,255,0.045)",
-  border: "1px solid rgba(88,166,255,0.12)",
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "16px",
   padding: "14px 16px",
 };
@@ -2266,8 +2229,8 @@ const analysisBlockTextStyle: React.CSSProperties = {
 };
 
 const tradePlanCardStyle: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(240,185,11,0.13) 0%, rgba(15,38,69,0.76) 100%)",
-  border: "1px solid rgba(240,185,11,0.18)",
+  background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
+  border: "1px solid rgba(108,162,255,0.16)",
   borderRadius: "16px",
   padding: "14px 16px",
 };
@@ -2285,3 +2248,4 @@ const tradePlanValueStyle: React.CSSProperties = {
   fontWeight: 900,
   lineHeight: 1.6,
 };
+
