@@ -163,8 +163,8 @@ const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 const BACKEND_BASE = `${API_BASE}/stocks`;
 const VALIDATION_BASE = `${API_BASE}/validation`;
 const VALIDATION_HISTORY_BASE = `${API_BASE}/validation/history`;
-const VALIDATION_START_DATE = "20260427";
-const VALIDATION_START_LABEL = "2026/04/27";
+const VALIDATION_START_DATE = "latest";
+const VALIDATION_START_LABEL = "最近收盤日";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -1002,7 +1002,7 @@ export default function Home() {
                   收盤推薦追蹤驗證
                 </h2>
                 <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
-                  新版驗證固定追蹤 {VALIDATION_START_LABEL} 收盤推薦10檔；後續交易日只更新這批名單的真實表現。
+                  新版驗證預設讀取{VALIDATION_START_LABEL}的收盤推薦10檔；後續交易日只更新該批名單的真實表現。
                 </div>
               </div>
 
@@ -1036,7 +1036,7 @@ export default function Home() {
                   value: isValidationStartReady ? `${validationStartStocks.length} 檔` : "等待起始樣本",
                   detail: isValidationStartReady
                     ? `已固定保存 ${validationDisplayDate} 收盤推薦，後續只追蹤這批樣本。`
-                    : validationRun?.message || `新版驗證從 ${VALIDATION_START_LABEL} 收盤後推薦開始，盤中名單不列入。`,
+                    : validationRun?.message || `新版驗證會自動讀取${VALIDATION_START_LABEL}的收盤推薦，盤中名單不列入。`,
                 },
                 {
                   title: "進場口徑",
@@ -1105,7 +1105,7 @@ export default function Home() {
                       ? "讀取驗證資料中"
                       : isValidationStartReady
                         ? `${validationDisplayDate} 已列入待驗證`
-                        : `尚未讀到 ${VALIDATION_START_LABEL} 起始樣本`}
+                        : `尚未讀到${VALIDATION_START_LABEL}樣本`}
                   </div>
                 </div>
                 <div style={{ color: "#cfe3ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 800 }}>
@@ -1116,7 +1116,7 @@ export default function Home() {
               <div style={{ color: "#dce9ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700, marginBottom: "14px" }}>
                 {isValidationStartReady
                   ? validationRun?.message || "起始推薦已固定保存；隔日開盤價出現後，會開始累積 1 / 2 / 3 / 5 / 10 日結果。"
-                  : validationRun?.message || `目前還沒有讀到 ${VALIDATION_START_LABEL} 的收盤後推薦名單。`}
+                  : validationRun?.message || `目前還沒有讀到${VALIDATION_START_LABEL}的收盤後推薦名單。`}
               </div>
 
               {isValidationStartReady && (
