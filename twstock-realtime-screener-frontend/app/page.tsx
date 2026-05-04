@@ -205,9 +205,6 @@ function formatDateString(dateText?: string) {
   return dateText;
 }
 
-function normalizeDateKey(dateText?: string) {
-  return String(dateText || "").replace(/\D/g, "").slice(0, 8);
-}
 
 function getMarketLightColor(status?: string) {
   if (!status) return "#f59e0b";
@@ -376,14 +373,6 @@ export default function Home() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  async function fetchRecommendations() {
-    const requestId = ++recommendationsRequestIdRef.current;
-    const params = new URLSearchParams({
-      limit: "30",
-      offset: "0",
-      sort_by: "recommendation_score",
-      sort_dir: "desc",
-    });
     const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
     const data: ApiResponse = await res.json();
     if (!data.success) throw new Error(data.error || data.message || "取得推薦資料失敗");
@@ -402,117 +391,7 @@ export default function Home() {
     setRecommendationMessage(data.recommendation_message || "");
   }
 
-  async function fetchPagedStocks(
-    override?: Partial<{
-      category: CategoryKey;
-      page: number;
-      rank: RankType;
-      keyword: string;
-    }>,
-    options?: {
-      forceRefresh?: boolean;
-      manageLoading?: boolean;
-    }
-  ) {
-    const requestId = ++pagedRequestIdRef.current;
-    const manageLoading = options?.manageLoading ?? true;
 
-    if (manageLoading) setLoading(true);
-    setError("");
-
-    try {
-      const category = override?.category ?? selectedCategory;
-      const page = override?.page ?? currentPage;
-      const rank = override?.rank ?? rankType;
-      const keyword = override?.keyword ?? debouncedSearchTerm;
-
-      const categoryQuery = getCategoryQuery(category);
-      const sortQuery = getSortQuery(rank);
-
-      const params = new URLSearchParams({
-        limit: String(ITEMS_PER_PAGE),
-        offset: String((page - 1) * ITEMS_PER_PAGE),
-        sort_by: sortQuery.sort_by,
-        sort_dir: sortQuery.sort_dir,
-      });
-
-      if (keyword) params.set("q", keyword);
-      if (options?.forceRefresh) params.set("force_refresh", "true");
-      if (categoryQuery.market) params.set("market", categoryQuery.market);
-      if (categoryQuery.price_min !== undefined) {
-        params.set("price_min", String(categoryQuery.price_min));
-      }
-      if (categoryQuery.price_max !== undefined) {
-        params.set("price_max", String(categoryQuery.price_max));
-      }
-
-      const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data: ApiResponse = await res.json();
-      if (requestId !== pagedRequestIdRef.current) return;
-      if (!data.success) throw new Error(data.error || data.message || "取得資料失敗");
-
-      const safeStocks = (data.stocks || []).map(normalizeStock);
-      setStocks(safeStocks);
-      setTotal(Number(data.total || 0));
-
-      if (data.all_total !== undefined) setAllTotal(Number(data.all_total));
-      if (data.categories) setBackendCategories(data.categories);
-      if (Array.isArray(data.recommendations) && !keyword && category === "all") {
-        setRecommendations((data.recommendations || []).map(normalizeStock).slice(0, 10));
-        setRecommendationStatus(data.recommendation_status || "");
-        setRecommendationMessage(data.recommendation_message || "");
-      }
-
-      setMarketStatus(data.market_status || "-");
-      setDataDate(
-        data.data_date ||
-          data.source_summary?.twse_data_date ||
-          data.source_summary?.tpex_data_date ||
-          "-"
-      );
-      setLastUpdate(data.last_update || new Date().toLocaleString("zh-TW"));
-
-      if (data.focused_stock) {
-        setFocusedStock(data.focused_stock);
-      } else if (!manualSelectedSymbol && !keyword) {
-        setFocusedStock(null);
-      }
-    } catch (err) {
-      if (requestId !== pagedRequestIdRef.current) return;
-      setError(err instanceof Error ? err.message : "載入失敗");
-    } finally {
-      if (manageLoading && requestId === pagedRequestIdRef.current) {
-        setLoading(false);
-      }
-    }
-  }
-
-  async function fetchAllData(options?: { forceRefresh?: boolean }) {
-    try {
-      setLoading(true);
-      setError("");
-      await fetchPagedStocks(
-        {
-          category: selectedCategory,
-          page: currentPage,
-          rank: rankType,
-          keyword: debouncedSearchTerm,
-        },
-        {
-          forceRefresh: options?.forceRefresh,
-          manageLoading: false,
-        }
-      );
-      await fetchRecommendations();
-      initialLoadedRef.current = true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "載入失敗");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   async function fetchRecommendationsSafe(options?: { forceRefresh?: boolean }) {
     const requestId = ++recommendationsRequestIdRef.current;
@@ -978,257 +857,151 @@ export default function Home() {
         )}
 
         {activeScreen === "validation" && (
-          <section
-            style={{
-              ...panelStyle,
-              minHeight: isMobile ? "auto" : "680px",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: isMobile ? "flex-start" : "center",
-                gap: "14px",
-                flexDirection: isMobile ? "column" : "row",
-                marginBottom: "18px",
-              }}
-            >
+          <section style={{ ...panelStyle, minHeight: isMobile ? "auto" : "auto" }}>
+            {/* 標題列 */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", gap: "14px", flexDirection: isMobile ? "column" : "row", marginBottom: "20px" }}>
               <div>
-                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
-                  新版驗證系統
-                </div>
-                <h2 style={{ fontSize: isMobile ? "26px" : "32px", fontWeight: 900, margin: 0 }}>
-                  收盤推薦追蹤驗證
+                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "6px" }}>收盤推薦追蹤驗證</div>
+                <h2 style={{ fontSize: isMobile ? "24px" : "30px", fontWeight: 900, margin: 0 }}>
+                  {validationDisplayDate} 推薦10檔追蹤
                 </h2>
-                <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
-                  新版驗證預設讀取{VALIDATION_START_LABEL}的收盤推薦10檔；後續交易日只更新該批名單的真實表現。
-                </div>
               </div>
-
-              <div
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: "999px",
-                  background: "rgba(255, 217, 95, 0.14)",
-                  border: "1px solid rgba(255, 217, 95, 0.28)",
-                  color: "#ffd95f",
-                  fontSize: "13px",
-                  fontWeight: 900,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                追蹤日 {validationDisplayDate}
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ padding: "8px 14px", borderRadius: "999px", background: "rgba(255,217,95,0.14)", border: "1px solid rgba(255,217,95,0.28)", color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
+                  起始日 {validationDisplayDate}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fetchValidationRunSafe({ forceRefresh: true })}
+                  disabled={validationLoading}
+                  style={{ border: "1px solid rgba(120,205,255,0.28)", borderRadius: "12px", padding: "8px 14px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, fontSize: "13px", cursor: validationLoading ? "not-allowed" : "pointer", opacity: validationLoading ? 0.6 : 1 }}
+                >
+                  {validationLoading ? "更新中" : "更新"}
+                </button>
               </div>
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: isMobile ? "1fr" : "repeat(3, minmax(0, 1fr))",
-                gap: "14px",
-                marginBottom: "18px",
-              }}
-            >
+            {/* 摘要統計 */}
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,minmax(0,1fr))", gap: "12px", marginBottom: "20px" }}>
               {[
-                {
-                  title: "驗證起點",
-                  value: isValidationStartReady ? `${validationStartStocks.length} 檔` : "等待起始樣本",
-                  detail: isValidationStartReady
-                    ? `已固定保存 ${validationDisplayDate} 收盤推薦，後續只追蹤這批樣本。`
-                    : validationRun?.message || `新版驗證會自動讀取${VALIDATION_START_LABEL}的收盤推薦，盤中名單不列入。`,
-                },
-                {
-                  title: "進場口徑",
-                  value: validationSummary.entered_count ? `${validationSummary.entered_count} 檔已進場` : "隔日開盤",
-                  detail: "以隔天開盤價作為可執行進場價，避免用收盤價高估績效。",
-                },
-                {
-                  title: "追蹤週期",
-                  value: validationSummary.count ? `${formatSigned(validationSummary.avg_return_from_start_close_pct)}%` : "1 / 2 / 3 / 5 / 10日",
-                  detail: validationSummary.entered_count
-                    ? `收盤起算勝率 ${formatSigned(validationSummary.start_close_win_rate_pct)}%，進場勝率 ${formatSigned(validationSummary.win_rate_pct)}%，達標 ${validationSummary.hit_target_count || 0} 檔。`
-                    : "後續會累積每個交易日的真實追蹤結果。",
-                },
+                { label: "追蹤檔數", value: `${validationSummary.count || 0} 檔` },
+                { label: "已進場", value: validationSummary.entered_count ? `${validationSummary.entered_count} 檔` : "等隔日開盤" },
+                { label: "進場平均報酬", value: validationSummary.entered_count ? `${formatSigned(validationSummary.avg_latest_return_pct)}%` : "-" },
+                { label: "進場勝率", value: validationSummary.entered_count ? `${formatSigned(validationSummary.win_rate_pct)}%` : "-" },
               ].map((item) => (
-                <div
-                  key={item.title}
-                  style={{
-                    borderRadius: "18px",
-                    padding: "16px",
-                    background: "rgba(20, 58, 112, 0.52)",
-                    border: "1px solid rgba(120, 180, 255, 0.16)",
-                  }}
-                >
-                  <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "10px" }}>
-                    {item.title}
-                  </div>
-                  <div style={{ color: "#ffffff", fontSize: "24px", fontWeight: 900, marginBottom: "8px" }}>
-                    {item.value}
-                  </div>
-                  <div style={{ color: "#cfe3ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 700 }}>
-                    {item.detail}
-                  </div>
+                <div key={item.label} style={{ borderRadius: "16px", padding: "14px 16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
+                  <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>{item.label}</div>
+                  <div style={{ color: "#ffffff", fontSize: "22px", fontWeight: 900 }}>{item.value}</div>
                 </div>
               ))}
             </div>
 
-            <div
-              style={{
-                borderRadius: "20px",
-                padding: isMobile ? "16px" : "20px",
-                background: isValidationStartReady
-                  ? "linear-gradient(180deg, rgba(58,168,89,0.14) 0%, rgba(20,58,112,0.48) 100%)"
-                  : "linear-gradient(180deg, rgba(255,217,95,0.12) 0%, rgba(20,58,112,0.42) 100%)",
-                border: isValidationStartReady
-                  ? "1px solid rgba(126,231,135,0.24)"
-                  : "1px solid rgba(255,217,95,0.22)",
-                marginBottom: "18px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: isMobile ? "flex-start" : "center",
-                  gap: "12px",
-                  flexDirection: isMobile ? "column" : "row",
-                  marginBottom: "14px",
-                }}
-              >
-                <div>
-                  <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>
-                    起始樣本狀態
-                  </div>
-                  <div style={{ color: isValidationStartReady ? "#7ee787" : "#ffd95f", fontSize: "24px", fontWeight: 900 }}>
-                    {validationLoading
-                      ? "讀取驗證資料中"
-                      : isValidationStartReady
-                        ? `${validationDisplayDate} 已列入待驗證`
-                        : `尚未讀到${VALIDATION_START_LABEL}樣本`}
-                  </div>
-                </div>
-                <div style={{ color: "#cfe3ff", fontSize: "13px", lineHeight: 1.7, fontWeight: 800 }}>
-                  驗證日：{validationDisplayDate} ｜ 更新：{validationRun?.last_update || lastUpdate}
-                </div>
+            {/* 狀態訊息 */}
+            {!isValidationStartReady && (
+              <div style={{ borderRadius: "16px", padding: "14px 16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontSize: "14px", fontWeight: 800, marginBottom: "16px" }}>
+                {validationLoading ? "讀取驗證資料中..." : validationRun?.message || "等待收盤後推薦資料..."}
               </div>
+            )}
 
-              <div style={{ color: "#dce9ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700, marginBottom: "14px" }}>
-                {isValidationStartReady
-                  ? validationRun?.message || "起始推薦已固定保存；隔日開盤價出現後，會開始累積 1 / 2 / 3 / 5 / 10 日結果。"
-                  : validationRun?.message || `目前還沒有讀到${VALIDATION_START_LABEL}的收盤後推薦名單。`}
-              </div>
+            {/* 10 檔追蹤卡片 */}
+            {isValidationStartReady && (
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,minmax(0,1fr))", gap: "12px" }}>
+                {validationStartStocks.map((stock, index) => {
+                  const entered = !!stock.entry_open_price;
+                  const hitTarget = stock.hit_target;
+                  const hitStop = stock.hit_stop;
+                  const returnColor = (n?: number) => !n ? "#cfe3ff" : n > 0 ? "#7ee787" : "#ff7c7c";
+                  const horizonKeys = Object.keys(stock.horizon_returns || {}).sort((a, b) => Number(a) - Number(b));
 
-              {isValidationStartReady && (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
-                    gap: "10px",
-                  }}
-                >
-                  {validationStartStocks.map((stock, index) => (
+                  return (
                     <div
-                      key={`${stock.symbol}-start-validation`}
+                      key={stock.symbol}
                       style={{
-                        borderRadius: "16px",
-                        padding: "12px 14px",
-                        background: "rgba(255,255,255,0.05)",
-                        border: "1px solid rgba(255,255,255,0.08)",
+                        borderRadius: "18px",
+                        padding: "16px",
+                        background: hitTarget ? "rgba(58,168,89,0.12)" : hitStop ? "rgba(255,80,80,0.1)" : "rgba(20,58,112,0.52)",
+                        border: hitTarget ? "1px solid rgba(126,231,135,0.3)" : hitStop ? "1px solid rgba(255,100,100,0.3)" : "1px solid rgba(120,180,255,0.16)",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: "10px",
-                          marginBottom: "8px",
-                        }}
-                      >
-                        <div style={{ color: "#ffffff", fontSize: "17px", fontWeight: 900 }}>
+                      {/* 股票名稱列 */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                        <div style={{ color: "#ffffff", fontSize: "16px", fontWeight: 900 }}>
                           {stock.rank || index + 1}. {stock.symbol} {stock.name}
                         </div>
-                        <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
-                          {stock.recommendation_score || stock.score || 0}
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                          {hitTarget && <span style={{ background: "rgba(126,231,135,0.2)", border: "1px solid rgba(126,231,135,0.4)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 900, color: "#7ee787" }}>達標</span>}
+                          {hitStop && <span style={{ background: "rgba(255,100,100,0.2)", border: "1px solid rgba(255,100,100,0.4)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 900, color: "#ff7c7c" }}>停損</span>}
+                          <span style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>{stock.recommendation_score?.toFixed(1) || 0}</span>
                         </div>
                       </div>
-                      <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
-                        訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price || stock.price)} ｜ 現價：{formatPrice(stock.current_price || stock.latest_price)}
+
+                      {/* 訊號 / 評級 */}
+                      <div style={{ display: "flex", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+                        <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "3px 8px", fontSize: "11px", fontWeight: 800, color: "#ff9c9c" }}>{stock.signal || "-"}</span>
+                        <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "3px 8px", fontSize: "11px", fontWeight: 800, color: getRatingColor(stock.operation_rating) }}>評級 {stock.operation_rating || "-"}</span>
                       </div>
-                      <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
-                        {stock.entry_open_price
-                          ? `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 進場起算 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}%`
-                          : `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 尚未記錄隔日開盤價`}
+
+                      {/* 價格資訊 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "8px", marginBottom: "10px" }}>
+                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px 10px" }}>
+                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "4px" }}>推薦收盤</div>
+                          <div style={{ color: "#fff", fontSize: "15px", fontWeight: 900 }}>{formatPrice(stock.start_close_price)}</div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px 10px" }}>
+                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "4px" }}>{entered ? "進場開盤" : "現價"}</div>
+                          <div style={{ color: "#fff", fontSize: "15px", fontWeight: 900 }}>
+                            {entered ? formatPrice(stock.entry_open_price) : formatPrice(stock.current_price)}
+                          </div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px 10px" }}>
+                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "4px" }}>收盤起算</div>
+                          <div style={{ color: returnColor(stock.return_from_start_close_pct), fontSize: "15px", fontWeight: 900 }}>
+                            {formatSigned(stock.return_from_start_close_pct)}%
+                          </div>
+                        </div>
                       </div>
+
+                      {/* 進場後績效 */}
+                      {entered ? (
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "8px", marginBottom: horizonKeys.length ? "10px" : "0" }}>
+                          <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px 10px" }}>
+                            <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "4px" }}>進場報酬</div>
+                            <div style={{ color: returnColor(stock.latest_change_pct), fontSize: "15px", fontWeight: 900 }}>{formatSigned(stock.latest_change_pct)}%</div>
+                          </div>
+                          <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px 10px" }}>
+                            <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "4px" }}>最大漲幅</div>
+                            <div style={{ color: "#7ee787", fontSize: "15px", fontWeight: 900 }}>{formatSigned(stock.max_high_pct)}%</div>
+                          </div>
+                          <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px 10px" }}>
+                            <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "4px" }}>最大回撤</div>
+                            <div style={{ color: "#ff7c7c", fontSize: "15px", fontWeight: 900 }}>{formatSigned(stock.max_drawdown_pct)}%</div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ color: "#9fc7f5", fontSize: "12px", fontWeight: 700 }}>
+                          等隔日開盤後記錄進場價，開始計算報酬
+                        </div>
+                      )}
+
+                      {/* Horizon 報酬 */}
+                      {horizonKeys.length > 0 && (
+                        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+                          {horizonKeys.map((h) => {
+                            const val = stock.horizon_returns?.[h];
+                            return (
+                              <div key={h} style={{ background: "rgba(0,0,0,0.25)", borderRadius: "8px", padding: "4px 10px", textAlign: "center" }}>
+                                <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900 }}>{h}日</div>
+                                <div style={{ color: returnColor(val), fontSize: "13px", fontWeight: 900 }}>{formatSigned(val)}%</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: isMobile ? "1fr" : "1.1fr 0.9fr",
-                gap: "16px",
-                alignItems: "stretch",
-              }}
-            >
-              <div
-                style={{
-                  borderRadius: "20px",
-                  padding: isMobile ? "16px" : "20px",
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                }}
-              >
-                <div style={{ color: "#dff1ff", fontSize: "20px", fontWeight: 900, marginBottom: "12px" }}>
-                  接下來新版驗證會看什麼
-                </div>
-                {[
-                  "每天收盤後保存推薦10檔與當天完整日K。",
-                  "隔天記錄實際開盤價，作為真實可進場價。",
-                  "追蹤是否碰到目標價、是否跌破停損、最大順向報酬與最大逆向回撤。",
-                  "用累積的每日推薦紀錄驗證，不再用同一檔歷史K硬回推。",
-                ].map((text) => (
-                  <div
-                    key={text}
-                    style={{
-                      display: "flex",
-                      gap: "10px",
-                      color: "#dce9ff",
-                      fontSize: "14px",
-                      lineHeight: 1.8,
-                      fontWeight: 700,
-                      marginBottom: "10px",
-                    }}
-                  >
-                    <span style={{ color: "#7ee787", fontWeight: 900 }}>•</span>
-                    <span>{text}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-
-              <div
-                style={{
-                  borderRadius: "20px",
-                  padding: isMobile ? "16px" : "20px",
-                  background: "linear-gradient(180deg, rgba(255,217,95,0.14) 0%, rgba(20,58,112,0.42) 100%)",
-                  border: "1px solid rgba(255,217,95,0.22)",
-                }}
-              >
-                <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900, marginBottom: "10px" }}>
-                  目前狀態
-                </div>
-                <div style={{ color: "#ffffff", fontSize: "26px", fontWeight: 900, marginBottom: "10px" }}>
-                  每日推薦自動歸檔
-                </div>
-                <div style={{ color: "#e6f0ff", fontSize: "14px", lineHeight: 1.8, fontWeight: 700 }}>
-                  後端會把每天收盤後推薦10檔保存成固定樣本；之後驗證頁可依日期讀取，不再因為修改驗證日期而找不到先前資料。
-                </div>
-              </div>
-            </div>
+            )}
           </section>
         )}
 
