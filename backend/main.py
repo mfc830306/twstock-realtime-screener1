@@ -52,10 +52,11 @@ HISTORICAL_K_CALENDAR_DAYS = 400
 RECOMMENDATION_SEED_LIMIT = 80
 BOOK_PROXY_MIN_SELECTION_SCORE = 58.0
 BOOK_PROXY_STRONG_SELECTION_SCORE = 68.0
-VALIDATION_START_DATE = os.getenv("VALIDATION_START_DATE", "latest")
+
+# 驗證系統設定
 VALIDATION_STORE_PATH = os.getenv(
     "VALIDATION_STORE_PATH",
-    os.path.join(os.getcwd(), "validation_runs_20260502.json"),
+    os.path.join(os.getcwd(), "validation_runs.json"),
 )
 VALIDATION_HORIZONS = [1, 2, 3, 5, 10]
 
@@ -136,10 +137,6 @@ def normalize_date_key(v: Any) -> str:
 def positive_min(values: List[float], default: float = 0.0) -> float:
     positives = [x for x in values if x > 0]
     return min(positives) if positives else default
-
-
-def build_signal_rating_key(signal: Any, rating: Any) -> str:
-    return f"{safe_str(signal)}|{safe_str(rating)}"
 
 
 def resolve_cert_path() -> Optional[str]:
@@ -373,6 +370,12 @@ def merge_stock_lists(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 continue
             dedup[symbol] = item
     return list(dedup.values())
+
+
+def calc_pct(base: float, price: float) -> float:
+    if base <= 0 or price <= 0:
+        return 0.0
+    return round(((price - base) / base) * 100, 2)
 
 
 # =========================
@@ -1127,8 +1130,7 @@ def build_historical_strategy(signal: str) -> Dict[str, str]:
             "strategy_action": "先等站回 MA20 與量能回升再看。",
             "risk_note": "弱勢股不適合拿來做 2~4 天主攻。",
         }
-    return {
-        "operation_rating": "C",
+    return {        "operation_rating": "C",
         "operation_bias": "中性",
         "operation_style": "等待確認",
         "strategy_action": "先觀察，等更完整轉強條件出現。",
@@ -1221,8 +1223,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         close_now = closes[-1]
         vol_now = volumes[-1]
         projected_vol_now = estimate_full_day_volume(vol_now)
-        snapshot_price = safe_float(base_stock.get("price"))
-        snapshot_volume = safe_int(base_stock.get("volume"))
         snapshot_recommendation_score = safe_float(
             base_stock.get("snapshot_recommendation_score")
             or base_stock.get("recommendation_score")
@@ -1455,10 +1455,10 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         overheat_penalty += 6
 
     score = round(
-        max(momentum_score + position_score + amplitude_score + liquidity_score + structure_bonus - weakness_penalty - overheat_penalty, 0),
-        2
+        max(momentum_score + position_score + amplitude_score + liquidity_score
+            + structure_bonus - weakness_penalty - overheat_penalty, 0),
+        2,
     )
-    base_recommendation_score = score
 
     signal_info = build_signal_and_reason(
         price=price,
@@ -1494,7 +1494,7 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 
     rating_bonus_map = {"A": 12, "B+": 8, "C": 3, "D": 0}
     recommendation_score = round(
-        base_recommendation_score + rating_bonus_map.get(strategy_info["operation_rating"], 0), 2
+        score + rating_bonus_map.get(strategy_info["operation_rating"], 0), 2
     )
 
     return {
@@ -1535,8 +1535,17 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 
 
 # =========================
-# Validation Tracking
+# 驗證系統（簡化版）
+#
+# 設計原則：
+#   - 每個收盤日保存推薦10檔，結構簡單
+#   - 每筆 item 只記錄 daily_closes: {date: close_price}
+#   - entry_date = 推薦日後第一個交易日，entry_open_price = 那天的開盤
+#   - horizon_returns[N] = 以 entry_open_price 為基準，
+#     持有N天後（跳過進場日本身）的收盤報酬
+#     即 sorted_closes[N]，其中 sorted_closes[0] = 進場日收盤
 # =========================
+
 def load_validation_store() -> Dict[str, Any]:
     try:
         if not os.path.exists(VALIDATION_STORE_PATH):
@@ -1562,229 +1571,155 @@ def save_validation_store(store: Dict[str, Any]) -> None:
     os.replace(tmp_path, VALIDATION_STORE_PATH)
 
 
-def get_validation_run(date_key: str) -> Optional[Dict[str, Any]]:
-    store = load_validation_store()
-    run = store.get("runs", {}).get(normalize_date_key(date_key))
-    return run if isinstance(run, dict) else None
-
-
 def get_latest_validation_date() -> str:
     store = load_validation_store()
     runs = store.get("runs", {})
-    if not isinstance(runs, dict) or not runs:
+    if not runs:
         return ""
-    valid_dates = [normalize_date_key(key) for key in runs.keys()]
-    valid_dates = [key for key in valid_dates if key]
-    return max(valid_dates) if valid_dates else ""
+    valid = [normalize_date_key(k) for k in runs if normalize_date_key(k)]
+    return max(valid) if valid else ""
 
 
-def resolve_validation_date(date_key: str, fallback_date: str = "") -> str:
-    raw = safe_str(date_key).lower()
-    if raw in ("", "latest", "current", "auto"):
-        return get_latest_validation_date() or normalize_date_key(fallback_date)
-    return normalize_date_key(date_key) or normalize_date_key(fallback_date)
-
-
-def calc_pct_from_base(base_price: float, price: float) -> float:
-    if base_price <= 0 or price <= 0:
-        return 0.0
-    return round(((price - base_price) / base_price) * 100, 2)
-
-
-def candle_date_key(candle: Dict[str, Any]) -> str:
-    return normalize_date_key(candle.get("date"))
-
-
-def build_observation_from_candle(
-    candle: Dict[str, Any],
-    start_close_price: float,
-    last_update: str,
-    previous_close: float = 0.0,
-) -> Dict[str, Any]:
-    close_price = safe_float(candle.get("close"))
-    day_change_pct = calc_pct_from_base(previous_close, close_price) if previous_close > 0 else 0.0
-    return {
-        "date": candle_date_key(candle),
-        "open": safe_float(candle.get("open")),
-        "high": safe_float(candle.get("high")),
-        "low": safe_float(candle.get("low")),
-        "close": close_price,
-        "volume": safe_int(candle.get("volume")),
-        "day_change_pct": round(day_change_pct, 2),
-        "return_from_start_close_pct": calc_pct_from_base(start_close_price, close_price),
-        "last_update": last_update,
-        "source": "historical_k",
-    }
-
-
-def build_observation_from_snapshot(
-    stock: Dict[str, Any],
+def create_validation_run(
     date_key: str,
-    start_close_price: float,
+    recommendations: List[Dict[str, Any]],
     last_update: str,
 ) -> Dict[str, Any]:
-    price = safe_float(stock.get("price"))
-    open_price = safe_float(stock.get("open")) or price
-    high_price = safe_float(stock.get("high")) or max(price, open_price)
-    low_price = safe_float(stock.get("low")) or positive_min([price, open_price], price)
-    return {
-        "date": date_key,
-        "open": open_price,
-        "high": high_price,
-        "low": low_price,
-        "close": price,
-        "volume": safe_int(stock.get("volume")),
-        "day_change_pct": round(safe_float(stock.get("change_percent")), 2),
-        "return_from_start_close_pct": calc_pct_from_base(start_close_price, price),
-        "last_update": last_update,
-        "source": "settled_snapshot",
-    }
+    """
+    盤後建立新的驗證 run，保存推薦10檔基本資料。
+    daily_closes 初始為空，等隔日開盤後才開始填入。
+    """
+    items = []
+    for i, stock in enumerate(recommendations[:10]):
+        items.append({
+            "rank": i + 1,
+            "symbol": stock.get("symbol", ""),
+            "name": stock.get("name", ""),
+            "market": stock.get("market", ""),
+            "signal": stock.get("signal", ""),
+            "operation_rating": stock.get("operation_rating", ""),
+            "recommendation_score": stock.get("recommendation_score", stock.get("score", 0)),
+            "start_close_price": safe_float(stock.get("price")),
+            "entry_price_plan": stock.get("entry_price", ""),
+            "target_price_plan": stock.get("target_price", ""),
+            "stop_loss_plan": stock.get("stop_loss", ""),
+            # 進場資訊：等隔日才填
+            "entry_date": "",
+            "entry_open_price": 0.0,
+            # 每日收盤追蹤：{ "20260505": 855.0, ... }，從推薦日後第一天開始
+            "daily_closes": {},
+            # 計算結果
+            "current_price": safe_float(stock.get("price")),
+            "current_day_change_pct": safe_float(stock.get("change_percent")),
+            "return_from_start_close_pct": 0.0,
+            "latest_change_pct": 0.0,
+            "max_high_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "hit_target": False,
+            "hit_stop": False,
+            "horizon_returns": {},
+        })
 
-
-def build_validation_item(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
-    start_close_price = safe_float(stock.get("price"))
-    return {
-        "rank": rank,
-        "market": stock.get("market", ""),
-        "symbol": stock.get("symbol", ""),
-        "name": stock.get("name", ""),
-        "recommendation_score": stock.get("recommendation_score", stock.get("score", 0)),
-        "signal": stock.get("signal", ""),
-        "operation_rating": stock.get("operation_rating", ""),
-        "entry_price_plan": stock.get("entry_price", ""),
-        "target_price_plan": stock.get("target_price", ""),
-        "stop_loss_plan": stock.get("stop_loss", ""),
-        "risk_reward_plan": stock.get("risk_reward", ""),
-        "start_close_price": start_close_price,
-        "current_price": start_close_price,
-        "current_day_change_pct": safe_float(stock.get("change_percent")),
-        "return_from_start_close_pct": 0.0,
-        "entry_date": "",
-        "entry_open_price": 0.0,
-        "latest_price": start_close_price,
-        "latest_change_pct": 0.0,
-        "max_high_pct": 0.0,
-        "max_drawdown_pct": 0.0,
-        "hit_target": False,
-        "hit_stop": False,
-        "observations": {},
-        "horizon_returns": {},
-    }
-
-
-def create_validation_run(date_key: str, recommendations: List[Dict[str, Any]], last_update: str) -> Dict[str, Any]:
-    fixed_date_key = normalize_date_key(date_key)
-    items = [build_validation_item(stock, index + 1) for index, stock in enumerate(recommendations[:10])]
     run = {
-        "date": fixed_date_key,
+        "date": date_key,
         "created_at": format_dt_taipei(now_taipei()),
         "last_update": last_update,
-        "status": "tracking" if items else "empty",
-        "message": "已固定保存收盤推薦10檔，後續只追蹤這批股票。",
+        "status": "tracking",
+        "message": "已保存收盤推薦10檔，等隔日開盤後開始追蹤。",
         "items": items,
     }
     store = load_validation_store()
-    store.setdefault("runs", {})[fixed_date_key] = run
+    store.setdefault("runs", {})[date_key] = run
     save_validation_store(store)
     return run
 
 
-def update_validation_run_tracking(
+def update_validation_run(
     run: Dict[str, Any],
-    stocks: List[Dict[str, Any]],
-    data_date: str,
+    today_date: str,
+    stock_map: Dict[str, Any],
     last_update: str,
 ) -> Dict[str, Any]:
-    current_date_key = normalize_date_key(data_date)
+    """
+    每次呼叫 /validation 時更新追蹤資料。
+    邏輯：
+      1. 若今天是推薦日後第一個交易日且 entry 尚未設定
+         → 記錄 entry_date = today, entry_open_price = today 開盤價
+      2. 記錄今天收盤價到 daily_closes
+      3. 重新計算所有績效指標
+    """
     run_date = normalize_date_key(run.get("date"))
-    if not current_date_key or not run_date or current_date_key < run_date:
+    if not run_date or today_date <= run_date:
         return run
 
-    stock_map = {safe_str(s.get("symbol")): s for s in stocks if safe_str(s.get("symbol"))}
     changed = False
-
     for item in run.get("items", []):
-        if not isinstance(item, dict):
-            continue
         symbol = safe_str(item.get("symbol"))
         if not symbol:
             continue
 
-        start_close_price = safe_float(item.get("start_close_price"))
-        observations = item.setdefault("observations", {})
-        if not isinstance(observations, dict):
-            observations = {}
-            item["observations"] = observations
-
-        try:
-            candles = fetch_symbol_daily_candles(symbol).get("candles", [])
-        except Exception:
-            candles = []
-
-        for index, candle in enumerate(candles):
-            candle_key = candle_date_key(candle)
-            if not candle_key or candle_key < run_date or candle_key > current_date_key:
-                continue
-            previous_close = safe_float(candles[index - 1].get("close")) if index > 0 else 0.0
-            observation = build_observation_from_candle(candle, start_close_price, last_update, previous_close)
-            if observation["date"]:
-                observations[observation["date"]] = observation
-
         stock = stock_map.get(symbol)
-        if stock and current_date_key >= run_date:
-            snapshot_observation = build_observation_from_snapshot(
-                stock=stock,
-                date_key=current_date_key,
-                start_close_price=start_close_price,
-                last_update=last_update,
-            )
-            if safe_float(snapshot_observation.get("close")) > 0:
-                # Always overlay the latest snapshot so today's settled quote is not skipped
-                # when historical K has not yet included the current date.
-                observations[current_date_key] = snapshot_observation
-
-        sorted_dates = sorted(k for k in observations.keys() if run_date <= normalize_date_key(k) <= current_date_key)
-        if not sorted_dates:
+        if not stock:
             continue
 
-        latest_observation = observations[sorted_dates[-1]]
-        latest_close = safe_float(latest_observation.get("close"))
-        item["current_price"] = latest_close
-        item["latest_price"] = latest_close
-        item["current_day_change_pct"] = round(safe_float(latest_observation.get("day_change_pct")), 2)
-        item["return_from_start_close_pct"] = round(
-            safe_float(latest_observation.get("return_from_start_close_pct")),
-            2,
-        )
+        price = safe_float(stock.get("price"))
+        open_price = safe_float(stock.get("open")) or price
+        if price <= 0:
+            continue
 
-        if not safe_str(item.get("entry_date")):
-            entry_dates = [date_key for date_key in sorted_dates if date_key > run_date]
-            if entry_dates:
-                entry_observation = observations[entry_dates[0]]
-                item["entry_date"] = entry_dates[0]
-                item["entry_open_price"] = safe_float(entry_observation.get("open"))
+        # 步驟一：設定進場日（推薦日後第一個出現的交易日）
+        if not item.get("entry_date"):
+            item["entry_date"] = today_date
+            item["entry_open_price"] = open_price
+            changed = True
 
-        entry_date = safe_str(item.get("entry_date"))
+        # 步驟二：記錄今天收盤（若尚未記錄）
+        daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
+        if today_date not in daily_closes:
+            daily_closes[today_date] = price
+            changed = True
+
+        # 步驟三：更新即時狀態
+        start_close = safe_float(item.get("start_close_price"))
+        item["current_price"] = price
+        item["current_day_change_pct"] = round(safe_float(stock.get("change_percent")), 2)
+        if start_close > 0:
+            item["return_from_start_close_pct"] = calc_pct(start_close, price)
+
+        # 步驟四：計算進場後績效
         entry_price = safe_float(item.get("entry_open_price"))
-        if entry_date and entry_price > 0:
-            tracked_dates = [date_key for date_key in sorted_dates if date_key >= entry_date]
-            tracked = [observations[date_key] for date_key in tracked_dates]
-            highs = [safe_float(x.get("high")) for x in tracked if safe_float(x.get("high")) > 0]
-            lows = [safe_float(x.get("low")) for x in tracked if safe_float(x.get("low")) > 0]
-            item["latest_change_pct"] = calc_pct_from_base(entry_price, latest_close)
-            item["max_high_pct"] = calc_pct_from_base(entry_price, max(highs)) if highs else 0.0
-            item["max_drawdown_pct"] = calc_pct_from_base(entry_price, min(lows)) if lows else 0.0
+        entry_date = safe_str(item.get("entry_date"))
+        if entry_price > 0 and entry_date:
+            # sorted_closes: 進場日及之後的每日收盤，按日期排序
+            # sorted_closes[0] = 進場日收盤
+            # sorted_closes[N] = 持有N天後的收盤
+            sorted_closes = [
+                v for k, v in sorted(daily_closes.items()) if k >= entry_date
+            ]
 
+            if sorted_closes:
+                latest_close = sorted_closes[-1]
+                item["latest_change_pct"] = calc_pct(entry_price, latest_close)
+
+            # max_high / max_drawdown 從 daily_closes 中找最高最低
+            closes_after_entry = [v for k, v in daily_closes.items() if k >= entry_date]
+            if closes_after_entry:
+                item["max_high_pct"] = calc_pct(entry_price, max(closes_after_entry))
+                item["max_drawdown_pct"] = calc_pct(entry_price, min(closes_after_entry))
+
+            # hit_target / hit_stop
             target_high = parse_range_bounds(safe_str(item.get("target_price_plan")), 0.0)[1]
             stop_loss = safe_float(item.get("stop_loss_plan"))
-            item["hit_target"] = target_high > 0 and bool(highs) and max(highs) >= target_high
-            item["hit_stop"] = stop_loss > 0 and bool(lows) and min(lows) <= stop_loss
+            if closes_after_entry:
+                item["hit_target"] = target_high > 0 and max(closes_after_entry) >= target_high
+                item["hit_stop"] = stop_loss > 0 and min(closes_after_entry) <= stop_loss
 
+            # horizon_returns[N] = 持有N天後的收盤報酬
+            # sorted_closes[0] = 進場日，sorted_closes[N] = 持有N天後
             horizon_returns: Dict[str, float] = {}
             for horizon in VALIDATION_HORIZONS:
-                if len(tracked) >= horizon:
-                    horizon_close = safe_float(tracked[horizon - 1].get("close"))
-                    horizon_returns[str(horizon)] = calc_pct_from_base(entry_price, horizon_close)
+                if len(sorted_closes) > horizon:
+                    horizon_returns[str(horizon)] = calc_pct(entry_price, sorted_closes[horizon])
             item["horizon_returns"] = horizon_returns
 
         changed = True
@@ -1792,55 +1727,32 @@ def update_validation_run_tracking(
     if changed:
         run["last_update"] = last_update
         run["status"] = "tracking"
-        run["message"] = "驗證樣本已固定；追蹤資料會依每日行情快照與歷史K更新。"
+        run["message"] = "追蹤中；每次呼叫 /validation 自動更新當日資料。"
         store = load_validation_store()
-        store.setdefault("runs", {})[safe_str(run.get("date"))] = run
+        store.setdefault("runs", {})[run_date] = run
         save_validation_store(store)
+
     return run
 
 
-def get_or_create_validation_run(
-    date_key: str,
-    all_stocks: List[Dict[str, Any]],
-    data_date: str,
+def update_all_runs(
+    today_date: str,
+    stock_map: Dict[str, Any],
     last_update: str,
-    recommendations: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    target_date = resolve_validation_date(date_key, data_date)
-    current_data_date = normalize_date_key(data_date)
-    run = get_validation_run(target_date)
-
-    if run is None and current_data_date == target_date and recommendations:
-        run = create_validation_run(target_date, recommendations, last_update)
-
-    if run is not None:
-        return update_validation_run_tracking(run, all_stocks, data_date, last_update)
-
-    latest_date = get_latest_validation_date()
-    hint = f"目前最新保存日為 {latest_date}。" if latest_date else "目前尚未保存任何收盤推薦。"
-    return {
-        "date": target_date or current_data_date,
-        "created_at": "",
-        "last_update": last_update,
-        "status": "missing",
-        "message": f"尚未保存 {target_date or current_data_date} 的固定驗證樣本。系統會從收盤日開始自動保存推薦10檔。{hint}",
-        "items": [],
-    }
-
-
-def update_all_validation_runs_tracking(all_stocks: List[Dict[str, Any]], data_date: str, last_update: str) -> None:
+) -> None:
+    """更新所有歷史 run，只在 /validation 呼叫。"""
     store = load_validation_store()
     runs = store.get("runs", {})
     if not isinstance(runs, dict):
         return
     for date_key, run in list(runs.items()):
         if isinstance(run, dict):
-            runs[date_key] = update_validation_run_tracking(run, all_stocks, data_date, last_update)
+            runs[date_key] = update_validation_run(run, today_date, stock_map, last_update)
     store["runs"] = runs
     save_validation_store(store)
 
 
-def summarize_validation_run(run: Dict[str, Any]) -> Dict[str, Any]:
+def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
     items = run.get("items", []) if isinstance(run.get("items"), list) else []
     entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
     latest_returns = [safe_float(x.get("latest_change_pct")) for x in entered]
@@ -1849,6 +1761,25 @@ def summarize_validation_run(run: Dict[str, Any]) -> Dict[str, Any]:
     start_wins = [x for x in items if safe_float(x.get("return_from_start_close_pct")) > 0]
     hit_targets = [x for x in entered if x.get("hit_target")]
     hit_stops = [x for x in entered if x.get("hit_stop")]
+
+    # horizon 統計
+    horizon_summary: Dict[str, Any] = {}
+    for h in VALIDATION_HORIZONS:
+        h_key = str(h)
+        h_returns = [
+            safe_float(x.get("horizon_returns", {}).get(h_key))
+            for x in entered
+            if x.get("horizon_returns", {}).get(h_key) is not None
+        ]
+        if h_returns:
+            horizon_summary[h_key] = {
+                "count": len(h_returns),
+                "avg_return_pct": round(avg(h_returns), 2),
+                "win_rate_pct": round(
+                    sum(1 for r in h_returns if r > 0) / len(h_returns) * 100, 2
+                ),
+            }
+
     return {
         "count": len(items),
         "entered_count": len(entered),
@@ -1858,11 +1789,12 @@ def summarize_validation_run(run: Dict[str, Any]) -> Dict[str, Any]:
         "start_close_win_rate_pct": round((len(start_wins) / len(items)) * 100, 2) if items else 0.0,
         "hit_target_count": len(hit_targets),
         "hit_stop_count": len(hit_stops),
+        "horizon_summary": horizon_summary,
     }
 
 
 # =========================
-# Market Data（只抓上市 + 上櫃）
+# Market Data
 # =========================
 def fetch_snapshot_rows_by_type(
     stock_client, market: str, market_label: str, quote_type: str,
@@ -2045,26 +1977,12 @@ def sort_stocks(stocks: List[Dict[str, Any]], sort_by: str = "score", sort_dir: 
 def build_market_proxy_context(stocks: List[Dict[str, Any]]) -> Dict[str, Any]:
     universe = [s for s in stocks if is_main_board_stock(s)]
     if not universe:
-        return {
-            "regime": "中性",
-            "advance_ratio": 0.5,
-            "avg_change": 0.0,
-            "strong_ratio": 0.0,
-            "up_trade_ratio": 0.5,
-        }
+        return {"regime": "中性", "advance_ratio": 0.5, "avg_change": 0.0, "strong_ratio": 0.0, "up_trade_ratio": 0.5}
 
     advance_count = sum(1 for s in universe if safe_float(s.get("change_percent")) > 0)
-    strong_count = sum(
-        1
-        for s in universe
-        if safe_str(s.get("signal")) in {"量增轉強", "整理待發", "穩步走高"}
-    )
+    strong_count = sum(1 for s in universe if safe_str(s.get("signal")) in {"量增轉強", "整理待發", "穩步走高"})
     total_trade_value = sum(max(safe_int(s.get("trade_value")), 0) for s in universe)
-    up_trade_value = sum(
-        max(safe_int(s.get("trade_value")), 0)
-        for s in universe
-        if safe_float(s.get("change_percent")) > 0
-    )
+    up_trade_value = sum(max(safe_int(s.get("trade_value")), 0) for s in universe if safe_float(s.get("change_percent")) > 0)
     advance_ratio = advance_count / len(universe)
     strong_ratio = strong_count / len(universe)
     avg_change = avg([safe_float(s.get("change_percent")) for s in universe])
@@ -2129,12 +2047,10 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
         leadership_score += 12
     elif signal == "溫和轉強":
         leadership_score += 10
-
     if rating == "A":
         leadership_score += 10
     elif rating == "B+":
         leadership_score += 6
-
     if price > safe_float(stock.get("ma20_value")) > 0:
         leadership_score += 8
     if price > safe_float(stock.get("ma60_value")) > 0:
@@ -2174,8 +2090,7 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
         overheat_penalty += 5
 
     selection_score = round(
-        max(market_score + leadership_score + quality_score + valuation_proxy_score - overheat_penalty, 0.0),
-        2,
+        max(market_score + leadership_score + quality_score + valuation_proxy_score - overheat_penalty, 0.0), 2,
     )
 
     environment_ok = regime != "保守" or (signal in {"突破前夕", "量增轉強"} and rating == "A")
@@ -2183,10 +2098,7 @@ def build_book_proxy_selection(stock: Dict[str, Any], market_context: Dict[str, 
     quality_ok = quality_score >= 18
     value_ok = valuation_proxy_score >= 16 and overheat_penalty <= 12
     framework_pass = (
-        environment_ok
-        and leadership_ok
-        and quality_ok
-        and value_ok
+        environment_ok and leadership_ok and quality_ok and value_ok
         and selection_score >= BOOK_PROXY_MIN_SELECTION_SCORE
     )
 
@@ -2396,49 +2308,68 @@ def health():
 
 @app.get("/validation")
 def get_validation(
-    date: str = Query(VALIDATION_START_DATE),
+    date: str = Query("latest"),
     force_refresh: bool = Query(False),
 ):
+    """
+    驗證追蹤端點。
+    - 收盤後自動保存當日推薦10檔（若尚未保存）
+    - 更新所有歷史 run 的追蹤資料
+    - 返回指定日期（或最新）的驗證結果
+    """
     try:
         result = get_cached_all_stocks(force_refresh=force_refresh)
         all_stocks = result["stocks"]
         market_status = get_market_status_text()
-        current_data_date = normalize_date_key(result["data_date"])
-        target_date = resolve_validation_date(date, current_data_date)
-        recs: List[Dict[str, Any]] = []
+        today_date = normalize_date_key(result["data_date"])
+        stock_map = {safe_str(s.get("symbol")): s for s in all_stocks if safe_str(s.get("symbol"))}
 
-        if current_data_date and should_settle_recommendations(market_status):
-            recs = get_cached_recommendations(
-                all_stocks,
-                data_date=result["data_date"],
-                last_update=result["last_update"],
-                top_n=10,
-            )
-            if recs:
-                get_or_create_validation_run(
-                    current_data_date,
+        # 收盤後：保存今日推薦（若尚未保存）
+        if should_settle_recommendations(market_status):
+            store = load_validation_store()
+            if today_date and today_date not in store.get("runs", {}):
+                recs = get_cached_recommendations(
                     all_stocks,
                     data_date=result["data_date"],
                     last_update=result["last_update"],
-                    recommendations=recs,
+                    top_n=10,
                 )
-                if safe_str(date).lower() in ("", "latest", "current", "auto"):
-                    target_date = current_data_date
+                if recs:
+                    create_validation_run(today_date, recs, result["last_update"])
 
-        run = get_or_create_validation_run(
-            target_date,
-            all_stocks,
-            data_date=result["data_date"],
-            last_update=result["last_update"],
-            recommendations=recs if target_date == current_data_date else None,
-        )
+            # 更新所有 run（只在 /validation 做，不在 /stocks 做）
+            update_all_runs(today_date, stock_map, result["last_update"])
+
+        # 決定要返回哪一天的 run
+        store = load_validation_store()
+        runs = store.get("runs", {})
+
+        raw_date = safe_str(date).lower()
+        if raw_date in ("", "latest", "current", "auto"):
+            target_date = get_latest_validation_date()
+        else:
+            target_date = normalize_date_key(date)
+
+        run = runs.get(target_date)
+        if run is None:
+            latest = get_latest_validation_date()
+            hint = f"目前最新保存日為 {latest}。" if latest else "目前尚未保存任何推薦紀錄。"
+            run = {
+                "date": target_date or today_date,
+                "created_at": "",
+                "last_update": result["last_update"],
+                "status": "missing",
+                "message": f"尚未保存 {target_date or today_date} 的推薦樣本。收盤後呼叫 /validation 即自動保存。{hint}",
+                "items": [],
+            }
+
         return {
             "success": True,
             "market_status": market_status,
             "data_date": result["data_date"],
             "last_update": result["last_update"],
             "validation": run,
-            "summary": summarize_validation_run(run),
+            "summary": summarize_run(run),
         }
     except Exception as e:
         return JSONResponse(
@@ -2457,17 +2388,8 @@ def get_validation(
 def get_validation_history(
     limit: int = Query(60, ge=1, le=365),
     include_items: bool = Query(True),
-    force_refresh: bool = Query(False),
 ):
     try:
-        if force_refresh:
-            result = get_cached_all_stocks(force_refresh=True)
-            update_all_validation_runs_tracking(
-                result["stocks"],
-                data_date=result["data_date"],
-                last_update=result["last_update"],
-            )
-
         store = load_validation_store()
         runs = store.get("runs", {})
         if not isinstance(runs, dict):
@@ -2478,13 +2400,13 @@ def get_validation_history(
             run = runs.get(date_key)
             if not isinstance(run, dict):
                 continue
-            row = {
+            row: Dict[str, Any] = {
                 "date": run.get("date", date_key),
                 "created_at": run.get("created_at", ""),
                 "last_update": run.get("last_update", ""),
                 "status": run.get("status", ""),
                 "message": run.get("message", ""),
-                "summary": summarize_validation_run(run),
+                "summary": summarize_run(run),
             }
             if include_items:
                 row["items"] = run.get("items", [])
@@ -2555,20 +2477,13 @@ def get_stocks(
                 last_update=result["last_update"],
                 top_n=10,
             )
+            # 盤後時順便保存今日推薦（若尚未保存）
+            # 不做 update_all_runs，那只在 /validation 做
             if recs:
-                get_or_create_validation_run(
-                    result["data_date"],
-                    all_stocks,
-                    data_date=result["data_date"],
-                    last_update=result["last_update"],
-                    recommendations=recs,
-                )
-        elif offset == 0 and not q.strip() and should_settle_recommendations(market_status):
-            update_all_validation_runs_tracking(
-                all_stocks,
-                data_date=result["data_date"],
-                last_update=result["last_update"],
-            )
+                today_date = normalize_date_key(result["data_date"])
+                store = load_validation_store()
+                if today_date and today_date not in store.get("runs", {}):
+                    create_validation_run(today_date, recs, result["last_update"])
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
