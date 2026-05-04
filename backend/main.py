@@ -2,6 +2,7 @@ import os
 import math
 import json
 import traceback
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -54,6 +55,12 @@ BOOK_PROXY_MIN_SELECTION_SCORE = 58.0
 BOOK_PROXY_STRONG_SELECTION_SCORE = 68.0
 
 # 驗證系統設定
+# 使用 Upstash Redis 持久化（免費）
+# 需在 Render 設定環境變數：UPSTASH_REDIS_REST_URL、UPSTASH_REDIS_REST_TOKEN
+# 若未設定則 fallback 到本地 JSON（部署會清空）
+UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL", "").strip()
+UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "").strip()
+UPSTASH_REDIS_KEY = "twstock:validation_runs"
 VALIDATION_STORE_PATH = os.getenv(
     "VALIDATION_STORE_PATH",
     os.path.join(os.getcwd(), "validation_runs.json"),
@@ -1546,7 +1553,44 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
 #     即 sorted_closes[N]，其中 sorted_closes[0] = 進場日收盤
 # =========================
 
+def _upstash_command(*args: Any) -> Any:
+    """呼叫 Upstash Redis REST API，傳入 Redis 指令陣列，例如 ("GET", key)。"""
+    if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
+        return None
+    try:
+        body = json.dumps(list(args)).encode("utf-8")
+        req = urllib.request.Request(
+            UPSTASH_REDIS_REST_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            return result.get("result")
+    except Exception:
+        return None
+
+
 def load_validation_store() -> Dict[str, Any]:
+    # 優先從 Upstash Redis 讀取
+    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+        try:
+            raw = _upstash_command("GET", UPSTASH_REDIS_KEY)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    if not isinstance(data.get("runs"), dict):
+                        data["runs"] = {}
+                    return data
+        except Exception:
+            pass
+        return {"runs": {}}
+
+    # Fallback：本地 JSON（部署後會清空）
     try:
         if not os.path.exists(VALIDATION_STORE_PATH):
             return {"runs": {}}
@@ -1562,13 +1606,25 @@ def load_validation_store() -> Dict[str, Any]:
 
 
 def save_validation_store(store: Dict[str, Any]) -> None:
-    directory = os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH))
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    tmp_path = f"{VALIDATION_STORE_PATH}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(store, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, VALIDATION_STORE_PATH)
+    # 優先寫入 Upstash Redis
+    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+        try:
+            _upstash_command("SET", UPSTASH_REDIS_KEY, json.dumps(store, ensure_ascii=False))
+        except Exception:
+            pass
+        return
+
+    # Fallback：本地 JSON
+    try:
+        directory = os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        tmp_path = f"{VALIDATION_STORE_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, VALIDATION_STORE_PATH)
+    except Exception:
+        pass
 
 
 def get_latest_validation_date() -> str:
@@ -2304,6 +2360,25 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/admin/reset-validation")
+def reset_validation(secret: str = Query("")):
+    """
+    清空所有驗證資料（月底用）。
+    需帶上 ADMIN_SECRET：POST /admin/reset-validation?secret=你的密碼
+    """
+    admin_secret = os.getenv("ADMIN_SECRET", "").strip()
+    if not admin_secret or secret != admin_secret:
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    try:
+        if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+            _upstash_command("DEL", UPSTASH_REDIS_KEY)
+        else:
+            save_validation_store({"runs": {}})
+        return {"success": True, "message": "驗證資料已清空，下次收盤後重新累積。"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
 @app.get("/validation")
