@@ -633,6 +633,39 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     update_time_raw = row.get("lastUpdated") or row.get("time") or 0
     update_time_str = micros_to_taipei_str(update_time_raw)
     category = price_category(price)
+    # 快速快照評分（給列表用，非完整技術分析）
+    close_position = calc_position_ratio(price, high_price, low_price)
+    amplitude_pct  = calc_amplitude_pct(high_price, low_price, previous_close)
+    signal_info    = build_signal_and_reason(
+        price=price, change=change, change_percent=change_percent,
+        volume=volume, high_price=high_price, low_price=low_price,
+        open_price=open_price, previous_close=previous_close,
+    )
+    signal = signal_info["signal"]
+
+    # 簡易快照評分
+    snap_score = round(max(
+        score_band(change_percent, 0.3, 4.5, 2.0, 30)
+        + score_band(close_position, 0.4, 0.85, 0.65, 20)
+        + score_band(amplitude_pct, 0.8, 6.0, 3.0, 15)
+        + score_band(volume, 1000, 50000, 8000, 20)
+        + (10 if price >= open_price else 0)
+        - (15 if change_percent >= 5 else 0)
+        - (10 if close_position >= 0.9 else 0)
+    , 0.0), 1)
+
+    # 快速評級
+    if signal in {"量增轉強", "整理待發"} and snap_score >= 55:
+        op_rating = "A"
+    elif signal in {"穩步走高"} and snap_score >= 45:
+        op_rating = "B+"
+    elif signal in {"短線過熱", "偏弱整理"}:
+        op_rating = "D"
+    else:
+        op_rating = "C"
+
+    plan = build_fixed_trade_plan(price)
+
     return {
         "market": market_label,
         "symbol": symbol,
@@ -649,21 +682,21 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         "update_time": update_time_str,
         "update_time_raw": update_time_raw,
         "category": category,
-        "signal": "",
-        "trend_type": "",
-        "reason": "",
-        "technical_comment": "",
-        "operation_rating": "",
-        "operation_bias": "",
-        "operation_style": "",
-        "strategy_action": "",
-        "entry_price": "隔日開盤",
-        "target_price": "",
-        "stop_loss": "",
-        "risk_reward": "",
-        "risk_note": "",
-        "score": 0,
-        "recommendation_score": 0,
+        "signal": signal,
+        "trend_type": signal,
+        "reason": signal_info["reason"],
+        "technical_comment": f"收盤位置 {close_position:.0%}；振幅 {amplitude_pct:.1f}%；量 {volume:,} 張",
+        "operation_rating": op_rating,
+        "operation_bias": "偏多觀察" if op_rating in {"A", "B+"} else "觀察",
+        "operation_style": "2~3天短線",
+        "strategy_action": f"收盤後評估，目標 {plan['target_price']}，停損 {plan['stop_loss']}",
+        "entry_price": plan["entry_price"],
+        "target_price": plan["target_price"],
+        "stop_loss": plan["stop_loss"],
+        "risk_reward": "固定 2.5% 停損 / 5~6% 停利",
+        "risk_note": f"跌破 {plan['stop_loss']} 停損",
+        "score": snap_score,
+        "recommendation_score": snap_score,
         "setup_score": 0,
         "analysis_source": "snapshot",
     }
