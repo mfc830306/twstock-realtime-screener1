@@ -182,7 +182,6 @@ const BACKEND_BASE = `${API_BASE}/stocks`;
 const VALIDATION_BASE = `${API_BASE}/validation`;
 const VALIDATION_HISTORY_BASE = `${API_BASE}/validation/history`;
 const VALIDATION_START_DATE = "latest";
-const VALIDATION_START_LABEL = "最近收盤日";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
