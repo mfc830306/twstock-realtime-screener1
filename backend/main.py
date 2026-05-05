@@ -1660,6 +1660,7 @@ def create_validation_run(
     date_key: str,
     recommendations: List[Dict[str, Any]],
     last_update: str,
+    store: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     items = []
     for i, stock in enumerate(recommendations[:10]):
@@ -1710,10 +1711,27 @@ def create_validation_run(
         "message": "已保存收盤推薦10檔，等隔日開盤後開始追蹤。",
         "items": items,
     }
-    store = load_validation_store()
+    if store is None:
+        store = load_validation_store()
     store.setdefault("runs", {})[date_key] = run
     save_validation_store(store)
     return run
+
+
+def try_create_validation_run_if_missing(
+    date_key: str,
+    recommendations: List[Dict[str, Any]],
+    last_update: str,
+) -> None:
+    if not date_key or not recommendations:
+        return
+    try:
+        store = load_validation_store()
+        runs = store.setdefault("runs", {})
+        if date_key not in runs:
+            create_validation_run(date_key, recommendations, last_update, store=store)
+    except Exception as exc:
+        print(f"⚠️ validation archive skipped: {exc}")
 
 
 def update_validation_run(
@@ -2081,9 +2099,7 @@ def get_stocks(
             # 不做 update_all_runs，那只在 /validation 做
             if recs:
                 today_date = normalize_date_key(result["data_date"])
-                store = load_validation_store()
-                if today_date and today_date not in store.get("runs", {}):
-                    create_validation_run(today_date, recs, result["last_update"])
+                try_create_validation_run_if_missing(today_date, recs, result["last_update"])
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
