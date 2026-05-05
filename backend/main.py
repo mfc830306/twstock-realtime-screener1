@@ -1090,37 +1090,67 @@ def build_technical_reason(
     ma_cross: Dict[str, Any],
     change_pct: float,
 ) -> str:
-    lines = [f"【{name} 技術分析 | {stock_type} | 評分 {setup_score}分】"]
+    def pct_gap(value: float, base: float) -> float:
+        return ((value - base) / base * 100) if base > 0 else 0.0
 
-    # 均線
-    ma_desc = f"MA5 {format_price_value(ma5)} / MA10 {format_price_value(ma10)} / MA20 {format_price_value(ma20)}"
-    lines.append(f"均線結構：{ma_desc}，現價 {format_price_value(close)}（" + ("站上5/10日線 ✓" if close > ma10 else "需關注") + "）")
+    ma5_gap = pct_gap(close, ma5)
+    ma10_gap = pct_gap(close, ma10)
+    ma_gap = pct_gap(ma5, ma10)
+    vol_ratio = safe_float(vol_pattern.get("vol_ratio"), 1.0)
+    candle_name = safe_str(candle_pattern.get("pattern"), "無明顯型態")
+    candle_bias = safe_str(candle_pattern.get("bias"), "中性")
+    cross_name = safe_str(ma_cross.get("cross"), "無")
+    cross_days = safe_int(ma_cross.get("days_ago"))
 
-    # MACD
-    if prev_macd_hist < 0 and macd_hist >= 0:
-        lines.append(f"MACD：由負翻正（Hist {prev_macd_hist:.3f} → {macd_hist:.3f}），動能轉折訊號最強。")
-    elif prev_macd_hist < 0 and macd_hist > prev_macd_hist:
-        lines.append(f"MACD：負值縮小中（Hist {prev_macd_hist:.3f} → {macd_hist:.3f}），動能持續改善。")
-    elif macd_hist > 0 and macd_hist > prev_macd_hist:
-        lines.append(f"MACD：正值擴大（Hist {macd_hist:.3f}），多方動能持續。")
+    if stock_type == "準備轉強":
+        thesis = "短線核心假設是轉折初期，重點在隔日能否守住5日線並延續量能。"
+    elif stock_type == "續攻型":
+        thesis = "短線核心假設是趨勢延續，適合觀察回測不破後的續攻力道。"
+    elif stock_type == "轉強觀察":
+        thesis = "短線核心假設是結構改善但尚未完全確認，適合放入觀察名單而非追價。"
     else:
-        lines.append(f"MACD：Hist {macd_hist:.3f}，動能待確認。")
+        thesis = "短線核心假設仍需隔日量價確認，先以風險控管為主。"
 
-    # 量能
-    lines.append(f"量能：{vol_pattern['pattern']}（量比 {vol_pattern.get('vol_ratio', 0):.2f} 倍）。")
+    lines = [
+        f"【{name} 技術評估｜{stock_type}｜{setup_score:.1f}分】{thesis}",
+        (
+            f"均線位置：收盤 {format_price_value(close)}，高於MA5 {ma5_gap:+.2f}%、"
+            f"高於MA10 {ma10_gap:+.2f}%；MA5相對MA10 {ma_gap:+.2f}%，"
+            f"{'短均線已轉多' if ma5 >= ma10 else '短均線接近轉多但仍需確認'}。"
+        ),
+    ]
 
-    # K棒
-    if candle_pattern["pattern"] != "無明顯型態":
-        lines.append(f"K棒型態：{candle_pattern['pattern']}（{candle_pattern['bias']}）。")
+    if prev_macd_hist < 0 and macd_hist >= 0:
+        macd_text = f"MACD柱狀體由負翻正（{prev_macd_hist:.3f} → {macd_hist:.3f}），屬動能轉折訊號。"
+    elif prev_macd_hist < 0 and macd_hist > prev_macd_hist:
+        macd_text = f"MACD仍在零軸下但負值收斂（{prev_macd_hist:.3f} → {macd_hist:.3f}），空方動能正在減弱。"
+    elif macd_hist > 0 and macd_hist > prev_macd_hist:
+        macd_text = f"MACD柱狀體維持正值且擴大（{prev_macd_hist:.3f} → {macd_hist:.3f}），多方動能延續。"
+    else:
+        macd_text = f"MACD柱狀體 {macd_hist:.3f}，動能尚未明確轉強，需降低追價意願。"
+    lines.append(macd_text)
 
-    # 均線交叉
-    if ma_cross["cross"] != "無":
-        lines.append(f"均線交叉：{ma_cross['cross']}（{ma_cross['days_ago']} 天前）。")
+    volume_text = f"量能：{safe_str(vol_pattern.get('pattern'), '量能待確認')}，量比 {vol_ratio:.2f} 倍"
+    if vol_ratio > 3:
+        volume_text += "，量能偏熱，隔日若開高量縮需小心短線獲利了結。"
+    elif vol_ratio >= 1.3:
+        volume_text += "，屬有效放量但未失控。"
+    else:
+        volume_text += "，量能尚可但不是主動攻擊型。"
+    lines.append(volume_text)
 
-    # RSI
-    lines.append(f"RSI(14)：{rsi14:.1f}{'（健康動能區）' if 50 <= rsi14 <= 70 else '（注意過熱）' if rsi14 > 70 else ''}。")
+    if candle_name != "無明顯型態":
+        lines.append(f"K棒：{candle_name}（{candle_bias}），今日漲幅 {change_pct:+.2f}%，型態偏向短線承接轉強。")
+    else:
+        lines.append(f"K棒：未出現特殊反轉型態，今日漲幅 {change_pct:+.2f}%，需觀察隔日是否續量站穩。")
 
-    return "".join(lines)
+    if cross_name != "無":
+        lines.append(f"均線交叉：{cross_name}發生於近 {cross_days} 天內，作為短線趨勢切換參考。")
+
+    rsi_note = "健康動能區" if 50 <= rsi14 <= 70 else "偏熱需控追價" if rsi14 > 70 else "動能仍偏保守"
+    lines.append(f"風險控管：RSI(14) {rsi14:.1f}（{rsi_note}）；若隔日跌回MA10或量縮開高走低，應視為轉強失敗。")
+
+    return " ".join(lines)
 
 
 def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str, Any]:
@@ -1276,6 +1306,47 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         return base_stock
 
 
+def build_snapshot_fallback_reason(stock: Dict[str, Any], score: float) -> str:
+    name = safe_str(stock.get("name"), safe_str(stock.get("symbol")))
+    signal = safe_str(stock.get("signal"), "收盤快照候選")
+    rating = safe_str(stock.get("operation_rating"), "-")
+    price = safe_float(stock.get("price"))
+    change_pct = safe_float(stock.get("change_percent"))
+    open_price = safe_float(stock.get("open")) or price
+    high_price = safe_float(stock.get("high")) or price
+    low_price = safe_float(stock.get("low")) or price
+    prev_close = safe_float(stock.get("prev_close"))
+    volume = safe_int(stock.get("volume"))
+    close_position = calc_position_ratio(price, high_price, low_price)
+    amplitude_pct = calc_amplitude_pct(high_price, low_price, prev_close)
+    red_k = price >= open_price if open_price > 0 else False
+
+    position_note = (
+        "收在日內高檔，代表尾盤承接力較強"
+        if close_position >= 0.68
+        else "收在日內中段偏上，尚未形成過熱追價"
+        if close_position >= 0.5
+        else "收盤位置仍不算強，隔日需要補量確認"
+    )
+    volume_note = (
+        "量能活絡但未失控"
+        if 500 <= volume <= 30000
+        else "量能偏大，需留意隔日是否轉成震盪"
+        if volume > 30000
+        else "量能仍偏低，適合小心觀察"
+    )
+    k_note = "收紅K，短線買盤佔優" if red_k else "未收紅K，隔日需先確認開盤承接"
+
+    return (
+        f"【{name} 收盤快照評估｜{signal}｜評級 {rating}｜分數 {score:.1f}】"
+        f"因完整歷史K技術名單不足，此檔以收盤快照條件列入補位觀察。"
+        f"今日漲幅 {change_pct:+.2f}%，振幅 {amplitude_pct:.2f}%，收盤位置 {close_position:.0%}，{position_note}。"
+        f"{k_note}；成交量 {format_number(volume)} 張，{volume_note}。"
+        "操作上不建議直接追高，隔日若開盤守住今日中段並維持量能，才視為有效續強；"
+        "若開高走低或跌破今日低點，應從推薦觀察名單中降級。"
+    )
+
+
 def build_recommendations(
     stocks: List[Dict[str, Any]],
     top_n: int = 10,
@@ -1397,10 +1468,7 @@ def build_recommendations(
             fallback["recommendation_score"] = score
             fallback["stock_type"] = fallback.get("stock_type") or "收盤快照候選"
             fallback["analysis_source"] = fallback.get("analysis_source") or "snapshot_fallback"
-            fallback["reason"] = (
-                safe_str(fallback.get("reason"))
-                + " 歷史K技術名單不足時，先以收盤快照強勢條件納入推薦觀察。"
-            ).strip()
+            fallback["reason"] = build_snapshot_fallback_reason(fallback, score)
             snapshot_fallback.append(fallback)
     snapshot_fallback.sort(key=rank_key, reverse=True)
     add_unique(recommendations, snapshot_fallback)
