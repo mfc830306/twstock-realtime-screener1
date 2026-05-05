@@ -1,8 +1,6 @@
 import os
 import math
-import json
 import traceback
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -47,17 +45,6 @@ CACHE_SECONDS = 60
 TZ_TAIPEI = timezone(timedelta(hours=8))
 RECOMMENDATION_SEED_LIMIT = 120
 
-# 驗證系統設定
-# 使用 Upstash Redis 持久化（免費）
-# 需在 Render 設定環境變數：UPSTASH_REDIS_REST_URL、UPSTASH_REDIS_REST_TOKEN
-# 若未設定則 fallback 到本地 JSON（部署會清空）
-UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL", "").strip()
-UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "").strip()
-UPSTASH_REDIS_KEY = "twstock:validation_runs"
-VALIDATION_STORE_PATH = os.getenv(
-    "VALIDATION_STORE_PATH",
-    os.path.join(os.getcwd(), "validation_runs.json"),
-)
 
 
 # =========================
@@ -687,6 +674,24 @@ def get_cached_recommendations(
     _RECOMMENDATION_CACHE["last_update"] = last_update
     _RECOMMENDATION_CACHE["top_n"]       = top_n
     return items
+
+
+def get_recommendations_safe(
+    stocks: List[Dict[str, Any]],
+    data_date: str,
+    last_update: str,
+    top_n: int = 10,
+) -> Tuple[List[Dict[str, Any]], str]:
+    try:
+        return get_cached_recommendations(
+            stocks,
+            data_date=data_date,
+            last_update=last_update,
+            top_n=top_n,
+        ), ""
+    except Exception as exc:
+        print(f"recommendation build skipped: {exc}")
+        return [], f"推薦10檔暫時無法計算：{exc}"
 
 
 # =========================
@@ -1567,332 +1572,6 @@ def startup_event():
 
 
 # =========================
-# Upstash Redis + Validation Store
-# =========================
-
-def _upstash_command(*args: Any, raise_on_error: bool = False) -> Any:
-    if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
-        return None
-    try:
-        body = json.dumps(list(args)).encode("utf-8")
-        req = urllib.request.Request(
-            UPSTASH_REDIS_REST_URL,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            if isinstance(result, dict) and result.get("error"):
-                raise RuntimeError(str(result.get("error")))
-            return result.get("result")
-    except Exception as exc:
-        if raise_on_error:
-            raise RuntimeError(f"Upstash command failed: {args[0] if args else 'UNKNOWN'}") from exc
-        return None
-
-
-def load_validation_store() -> Dict[str, Any]:
-    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
-        try:
-            raw = _upstash_command("GET", UPSTASH_REDIS_KEY, raise_on_error=True)
-            if not raw:
-                return {"runs": {}}
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise RuntimeError("validation store payload is not a JSON object")
-            if not isinstance(data.get("runs"), dict):
-                data["runs"] = {}
-            return data
-        except Exception as exc:
-            raise RuntimeError("讀取驗證資料失敗，已停止寫入以避免覆蓋歷史紀錄") from exc
-    try:
-        if not os.path.exists(VALIDATION_STORE_PATH):
-            return {"runs": {}}
-        with open(VALIDATION_STORE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {"runs": {}}
-        if not isinstance(data.get("runs"), dict):
-            data["runs"] = {}
-        return data
-    except Exception as exc:
-        raise RuntimeError("讀取本地驗證資料失敗，已停止寫入以避免覆蓋歷史紀錄") from exc
-
-
-def save_validation_store(store: Dict[str, Any]) -> None:
-    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
-        try:
-            _upstash_command(
-                "SET",
-                UPSTASH_REDIS_KEY,
-                json.dumps(store, ensure_ascii=False),
-                raise_on_error=True,
-            )
-        except Exception as exc:
-            raise RuntimeError("寫入驗證資料失敗") from exc
-        return
-    try:
-        directory = os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH))
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        tmp_path = f"{VALIDATION_STORE_PATH}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, VALIDATION_STORE_PATH)
-    except Exception as exc:
-        raise RuntimeError("寫入本地驗證資料失敗") from exc
-
-
-def get_latest_validation_date() -> str:
-    store = load_validation_store()
-    runs = store.get("runs", {})
-    if not runs:
-        return ""
-    valid = [normalize_date_key(k) for k in runs if normalize_date_key(k)]
-    return max(valid) if valid else ""
-
-
-def create_validation_run(
-    date_key: str,
-    recommendations: List[Dict[str, Any]],
-    last_update: str,
-    store: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    items = []
-    for i, stock in enumerate(recommendations[:10]):
-        start_price = safe_float(stock.get("price"))
-        plan = build_fixed_trade_plan(start_price)
-        items.append({
-            "rank": i + 1,
-            "symbol": stock.get("symbol", ""),
-            "name": stock.get("name", ""),
-            "market": stock.get("market", ""),
-            "signal": stock.get("signal", ""),
-            "stock_type": stock.get("stock_type", stock.get("signal", "")),
-            "operation_rating": stock.get("operation_rating", ""),
-            "recommendation_score": safe_float(stock.get("setup_score", stock.get("score", 0))),
-            "setup_score": safe_float(stock.get("setup_score", 0)),
-            "start_close_price": start_price,
-            "take_profit_pct": TAKE_PROFIT_PCT * 100,
-            "stop_loss_pct": STOP_LOSS_PCT * 100,
-            "max_hold_days": MAX_HOLD_DAYS,
-            "target_price_plan": plan["target_price"],
-            "stop_loss_plan": plan["stop_loss"],
-            "candlestick_pattern": stock.get("candlestick_pattern", ""),
-            "ma_cross": stock.get("ma_cross", ""),
-            "vol_pattern": stock.get("vol_pattern", ""),
-            "entry_date": "",
-            "entry_open_price": 0.0,
-            "daily_closes": {},
-            "daily_highs": {},
-            "daily_lows": {},
-            "current_price": start_price,
-            "current_day_change_pct": safe_float(stock.get("change_percent")),
-            "return_from_start_close_pct": 0.0,
-            "latest_change_pct": 0.0,
-            "max_high_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "hit_target": False,
-            "hit_stop": False,
-            "status_detail": "等待進場",
-            "is_closed": False,
-            "trading_days_held": 0,
-            "horizon_returns": {},
-        })
-    run = {
-        "date": date_key,
-        "created_at": format_dt_taipei(now_taipei()),
-        "last_update": last_update,
-        "status": "tracking",
-        "message": "已保存收盤推薦10檔，等隔日開盤後開始追蹤。",
-        "items": items,
-    }
-    if store is None:
-        store = load_validation_store()
-    store.setdefault("runs", {})[date_key] = run
-    save_validation_store(store)
-    return run
-
-
-def try_create_validation_run_if_missing(
-    date_key: str,
-    recommendations: List[Dict[str, Any]],
-    last_update: str,
-) -> None:
-    if not date_key or not recommendations:
-        return
-    try:
-        store = load_validation_store()
-        runs = store.setdefault("runs", {})
-        if date_key not in runs:
-            create_validation_run(date_key, recommendations, last_update, store=store)
-    except Exception as exc:
-        print(f"⚠️ validation archive skipped: {exc}")
-
-
-def update_validation_run(
-    run: Dict[str, Any],
-    today_date: str,
-    stock_map: Dict[str, Any],
-    last_update: str,
-) -> Dict[str, Any]:
-    run_date = normalize_date_key(run.get("date"))
-    if not run_date or today_date <= run_date:
-        return run
-    changed = False
-    for item in run.get("items", []):
-        symbol = safe_str(item.get("symbol"))
-        if not symbol:
-            continue
-        stock = stock_map.get(symbol)
-        if not stock:
-            continue
-        price = safe_float(stock.get("price"))
-        open_price = safe_float(stock.get("open")) or price
-        high_price = max(
-            [x for x in [safe_float(stock.get("high")), price, open_price] if x > 0],
-            default=price,
-        )
-        low_price = positive_min(
-            [safe_float(stock.get("low")), price, open_price],
-            min(price, open_price) if price > 0 and open_price > 0 else price,
-        )
-        if price <= 0:
-            continue
-        if not item.get("entry_date"):
-            item["entry_date"] = today_date
-            item["entry_open_price"] = open_price
-            changed = True
-        daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
-        daily_highs: Dict[str, float] = item.setdefault("daily_highs", {})
-        daily_lows: Dict[str, float] = item.setdefault("daily_lows", {})
-        if today_date not in daily_closes:
-            daily_closes[today_date] = price
-            changed = True
-        if today_date not in daily_highs:
-            daily_highs[today_date] = high_price
-            changed = True
-        if today_date not in daily_lows:
-            daily_lows[today_date] = low_price
-            changed = True
-        start_close = safe_float(item.get("start_close_price"))
-        item["current_price"] = price
-        item["current_day_change_pct"] = round(safe_float(stock.get("change_percent")), 2)
-        if start_close > 0:
-            item["return_from_start_close_pct"] = calc_pct(start_close, price)
-        entry_price = safe_float(item.get("entry_open_price"))
-        entry_date  = safe_str(item.get("entry_date"))
-        if entry_price > 0 and entry_date:
-            tracked_dates = [k for k in sorted(daily_closes) if k >= entry_date]
-            sorted_closes = [daily_closes[k] for k in tracked_dates]
-            if sorted_closes:
-                item["latest_change_pct"] = calc_pct(entry_price, sorted_closes[-1])
-            highs_after = [daily_highs.get(k, daily_closes[k]) for k in tracked_dates]
-            lows_after = [daily_lows.get(k, daily_closes[k]) for k in tracked_dates]
-            if highs_after:
-                item["max_high_pct"] = calc_pct(entry_price, max(highs_after))
-            if lows_after:
-                item["max_drawdown_pct"] = calc_pct(entry_price, min(lows_after))
-            target_price = entry_price * (1 + TAKE_PROFIT_PCT)
-            stop_price   = entry_price * (1 - STOP_LOSS_PCT)
-            hit_target, hit_stop = False, False
-            for k in tracked_dates:
-                day_high = daily_highs.get(k, daily_closes[k])
-                day_low = daily_lows.get(k, daily_closes[k])
-                # 沒有分時資料時採保守口徑：同日同時觸及停利/停損，先視為停損。
-                if day_low <= stop_price:
-                    hit_stop = True
-                    break
-                if day_high >= target_price:
-                    hit_target = True
-                    break
-            item["hit_target"] = hit_target
-            item["hit_stop"]   = hit_stop
-            trading_days = len(sorted_closes)
-            item["trading_days_held"] = trading_days
-            if hit_target:
-                item["status_detail"] = "達標平倉"
-                item["is_closed"] = True
-            elif hit_stop:
-                item["status_detail"] = "停損平倉"
-                item["is_closed"] = True
-            elif trading_days >= MAX_HOLD_DAYS:
-                item["status_detail"] = "時間到期"
-                item["is_closed"] = True
-            else:
-                item["status_detail"] = "持倉中"
-                item["is_closed"] = False
-            horizon_returns: Dict[str, float] = {}
-            for horizon in [1, 2, 3]:
-                if len(sorted_closes) >= horizon:
-                    horizon_returns[str(horizon)] = calc_pct(entry_price, sorted_closes[horizon - 1])
-            item["horizon_returns"] = horizon_returns
-        changed = True
-    if changed:
-        run["last_update"] = last_update
-        run["status"] = "tracking"
-        run["message"] = "追蹤中；每次呼叫 /validation 自動更新當日資料。"
-        store = load_validation_store()
-        store.setdefault("runs", {})[run_date] = run
-        save_validation_store(store)
-    return run
-
-
-def update_all_runs(
-    today_date: str,
-    stock_map: Dict[str, Any],
-    last_update: str,
-) -> None:
-    store = load_validation_store()
-    runs = store.get("runs", {})
-    if not isinstance(runs, dict):
-        return
-    for date_key, run in list(runs.items()):
-        if isinstance(run, dict):
-            runs[date_key] = update_validation_run(run, today_date, stock_map, last_update)
-    store["runs"] = runs
-    save_validation_store(store)
-
-
-def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
-    items = run.get("items", []) if isinstance(run.get("items"), list) else []
-    entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
-    latest_returns = [safe_float(x.get("latest_change_pct")) for x in entered]
-    start_returns  = [safe_float(x.get("return_from_start_close_pct")) for x in items]
-    wins       = [x for x in entered if safe_float(x.get("latest_change_pct")) > 0]
-    hit_targets = [x for x in entered if x.get("hit_target")]
-    hit_stops   = [x for x in entered if x.get("hit_stop")]
-    horizon_summary: Dict[str, Any] = {}
-    for h in [1, 2, 3]:
-        h_key = str(h)
-        h_returns = [
-            safe_float(x.get("horizon_returns", {}).get(h_key))
-            for x in entered
-            if x.get("horizon_returns", {}).get(h_key) is not None
-        ]
-        if h_returns:
-            horizon_summary[h_key] = {
-                "count": len(h_returns),
-                "avg_return_pct": round(avg(h_returns), 2),
-                "win_rate_pct": round(sum(1 for r in h_returns if r > 0) / len(h_returns) * 100, 2),
-            }
-    return {
-        "count": len(items),
-        "entered_count": len(entered),
-        "avg_latest_return_pct": round(avg(latest_returns), 2) if latest_returns else 0.0,
-        "avg_return_from_start_close_pct": round(avg(start_returns), 2) if start_returns else 0.0,
-        "win_rate_pct": round((len(wins) / len(entered)) * 100, 2) if entered else 0.0,
-        "hit_target_count": len(hit_targets),
-        "hit_stop_count": len(hit_stops),
-        "horizon_summary": horizon_summary,
-    }
-
-
-# =========================
 # Routes
 # =========================
 @app.get("/")
@@ -1903,148 +1582,6 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-@app.post("/admin/reset-validation")
-def reset_validation(secret: str = Query("")):
-    """
-    清空所有驗證資料（月底用）。
-    需帶上 ADMIN_SECRET：POST /admin/reset-validation?secret=你的密碼
-    """
-    admin_secret = os.getenv("ADMIN_SECRET", "").strip()
-    if not admin_secret or secret != admin_secret:
-        return JSONResponse(status_code=403, content={"error": "forbidden"})
-    try:
-        if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
-            _upstash_command("DEL", UPSTASH_REDIS_KEY)
-        else:
-            save_validation_store({"runs": {}})
-        return {"success": True, "message": "驗證資料已清空，下次收盤後重新累積。"}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
-
-
-@app.get("/validation")
-def get_validation(
-    date: str = Query("latest"),
-    force_refresh: bool = Query(False),
-):
-    """
-    驗證追蹤端點。
-    - 收盤後自動保存當日推薦10檔（若尚未保存）
-    - 更新所有歷史 run 的追蹤資料
-    - 返回指定日期（或最新）的驗證結果
-    """
-    try:
-        result = get_cached_all_stocks(force_refresh=force_refresh)
-        all_stocks = result["stocks"]
-        market_status = get_market_status_text()
-        today_date = normalize_date_key(result["data_date"])
-        stock_map = {safe_str(s.get("symbol")): s for s in all_stocks if safe_str(s.get("symbol"))}
-
-        # 收盤後：保存今日推薦（若尚未保存）
-        if should_settle_recommendations(market_status):
-            store = load_validation_store()
-            if today_date and today_date not in store.get("runs", {}):
-                recs = get_cached_recommendations(
-                    all_stocks,
-                    data_date=result["data_date"],
-                    last_update=result["last_update"],
-                    top_n=10,
-                )
-                if recs:
-                    create_validation_run(today_date, recs, result["last_update"])
-
-            # 更新所有 run（只在 /validation 做，不在 /stocks 做）
-            update_all_runs(today_date, stock_map, result["last_update"])
-
-        # 決定要返回哪一天的 run
-        store = load_validation_store()
-        runs = store.get("runs", {})
-
-        raw_date = safe_str(date).lower()
-        if raw_date in ("", "latest", "current", "auto"):
-            target_date = get_latest_validation_date()
-        else:
-            target_date = normalize_date_key(date)
-
-        run = runs.get(target_date)
-        if run is None:
-            latest = get_latest_validation_date()
-            hint = f"目前最新保存日為 {latest}。" if latest else "目前尚未保存任何推薦紀錄。"
-            run = {
-                "date": target_date or today_date,
-                "created_at": "",
-                "last_update": result["last_update"],
-                "status": "missing",
-                "message": f"尚未保存 {target_date or today_date} 的推薦樣本。收盤後呼叫 /validation 即自動保存。{hint}",
-                "items": [],
-            }
-
-        return {
-            "success": True,
-            "market_status": market_status,
-            "data_date": result["data_date"],
-            "last_update": result["last_update"],
-            "validation": run,
-            "summary": summarize_run(run),
-        }
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": str(e),
-                "trace": traceback.format_exc(),
-                "validation": None,
-                "summary": {},
-            },
-        )
-
-
-@app.get("/validation/history")
-def get_validation_history(
-    limit: int = Query(60, ge=1, le=365),
-    include_items: bool = Query(True),
-):
-    try:
-        store = load_validation_store()
-        runs = store.get("runs", {})
-        if not isinstance(runs, dict):
-            runs = {}
-
-        items = []
-        for date_key in sorted(runs.keys(), reverse=True)[:limit]:
-            run = runs.get(date_key)
-            if not isinstance(run, dict):
-                continue
-            row: Dict[str, Any] = {
-                "date": run.get("date", date_key),
-                "created_at": run.get("created_at", ""),
-                "last_update": run.get("last_update", ""),
-                "status": run.get("status", ""),
-                "message": run.get("message", ""),
-                "summary": summarize_run(run),
-            }
-            if include_items:
-                row["items"] = run.get("items", [])
-            items.append(row)
-
-        return {
-            "success": True,
-            "total": len(items),
-            "runs": items,
-        }
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": str(e),
-                "trace": traceback.format_exc(),
-                "runs": [],
-            },
-        )
 
 
 @app.get("/stocks")
@@ -2080,6 +1617,8 @@ def get_stocks(
         paged = filtered[offset: offset + limit]
 
         recs = []
+        rec_error = ""
+        non_blocking_warnings: List[str] = []
         if (
             offset == 0
             and safe_str(market).lower() == "all"
@@ -2089,35 +1628,40 @@ def get_stocks(
             and price_max <= 0
             and should_settle_recommendations(market_status)
         ):
-            recs = get_cached_recommendations(
+            recs, rec_error = get_recommendations_safe(
                 all_stocks,
                 data_date=result["data_date"],
                 last_update=result["last_update"],
                 top_n=10,
             )
-            # 盤後時順便保存今日推薦（若尚未保存）
-            # 不做 update_all_runs，那只在 /validation 做
-            if recs:
-                today_date = normalize_date_key(result["data_date"])
-                try_create_validation_run_if_missing(today_date, recs, result["last_update"])
+            if rec_error:
+                non_blocking_warnings.append(rec_error)
+                recommendation_info["recommendation_status"] = "recommendation_error"
+                recommendation_info["recommendation_message"] = rec_error
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
         focused = find_focused_stock(filtered, q)
         if focused:
-            focused = build_historical_analysis_for_stock(focused)
-            symbol = focused.get("symbol", "")
-            paged = [focused if x.get("symbol") == symbol else x for x in paged]
+            try:
+                focused = build_historical_analysis_for_stock(focused)
+                symbol = focused.get("symbol", "")
+                paged = [focused if x.get("symbol") == symbol else x for x in paged]
+            except Exception as exc:
+                non_blocking_warnings.append(f"個股分析暫時無法計算：{exc}")
 
         twse_total = len([s for s in all_stocks if s.get("market") == "上市"])
         otc_total = len([s for s in all_stocks if s.get("market") == "上櫃"])
+        response_message = result.get("message", "")
+        if non_blocking_warnings:
+            response_message = "；".join([x for x in [response_message, *non_blocking_warnings] if x])
 
         return {
             "success": True,
             "market_status": market_status,
             "data_date": result["data_date"],
             "last_update": result["last_update"],
-            "message": result.get("message", ""),
+            "message": response_message,
             "recommendation_status": recommendation_info["recommendation_status"],
             "recommendation_message": recommendation_info["recommendation_message"],
             "total": total_filtered,
@@ -2144,3 +1688,4 @@ def get_stocks(
                 "focused_stock": None,
             },
         )
+
