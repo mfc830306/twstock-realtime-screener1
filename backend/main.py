@@ -45,7 +45,7 @@ CACHE_SECONDS = 60
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
-RECOMMENDATION_SEED_LIMIT = 80
+RECOMMENDATION_SEED_LIMIT = 120
 
 # 驗證系統設定
 # 使用 Upstash Redis 持久化（免費）
@@ -675,6 +675,7 @@ def get_cached_recommendations(
     cached_items = _RECOMMENDATION_CACHE.get("items")
     if (
         isinstance(cached_items, list)
+        and len(cached_items) > 0
         and _RECOMMENDATION_CACHE.get("data_date")   == data_date
         and _RECOMMENDATION_CACHE.get("last_update") == last_update
         and _RECOMMENDATION_CACHE.get("top_n")       == top_n
@@ -1334,22 +1335,77 @@ def build_recommendations(
                 if original:
                     result_map[symbol] = original
 
-    # 過濾：setup_score >= 65 且型態符合
+    def rank_key(x: Dict[str, Any]) -> Tuple[float, int, int, int]:
+        return (
+            safe_float(x.get("setup_score") or x.get("recommendation_score") or x.get("score")),
+            1 if x.get("stock_type") == "準備轉強" else 0,
+            1 if x.get("operation_rating") in {"A", "B+"} else 0,
+            safe_int(x.get("volume")),
+        )
+
+    def add_unique(target: List[Dict[str, Any]], source: List[Dict[str, Any]]) -> None:
+        seen = {safe_str(item.get("symbol")) for item in target}
+        for item in source:
+            symbol = safe_str(item.get("symbol"))
+            if not symbol or symbol in seen:
+                continue
+            target.append(item)
+            seen.add(symbol)
+            if len(target) >= top_n:
+                break
+
+    # 第一層：嚴格技術條件，符合原本 K棒 + 均線 + 量 + MACD 邏輯。
     qualified = [
         s for s in result_map.values()
         if safe_float(s.get("setup_score")) >= 65
         and s.get("stock_type") in {"準備轉強", "續攻型", "轉強觀察"}
     ]
 
-    qualified.sort(
-        key=lambda x: (
-            safe_float(x.get("setup_score")),
-            1 if x.get("stock_type") == "準備轉強" else 0,
-            safe_int(x.get("volume")),
-        ),
-        reverse=True,
-    )
-    return qualified[:top_n]
+    qualified.sort(key=rank_key, reverse=True)
+    recommendations: List[Dict[str, Any]] = qualified[:top_n]
+
+    if len(recommendations) >= top_n:
+        return recommendations
+
+    # 第二層：技術分數略低但仍在轉強/整理待發區間，避免只有 8~9 檔時整體名單不足。
+    relaxed = [
+        s for s in result_map.values()
+        if safe_float(s.get("setup_score")) >= 50
+        and s.get("stock_type") in {"準備轉強", "續攻型", "轉強觀察", "整理待發"}
+        and s.get("candlestick_pattern") not in {"長上影線", "開高走低黑K", "空方吞噬"}
+        and s.get("ma_cross") != "死亡交叉"
+    ]
+    relaxed.sort(key=rank_key, reverse=True)
+    add_unique(recommendations, relaxed)
+
+    if len(recommendations) >= top_n:
+        return recommendations
+
+    # 第三層：若歷史K資料不足或條件過嚴，至少用收盤快照強勢候選補足畫面與歸檔。
+    snapshot_fallback: List[Dict[str, Any]] = []
+    for stock in candidates:
+        score = safe_float(stock.get("recommendation_score") or stock.get("score"))
+        signal = safe_str(stock.get("signal"))
+        rating = safe_str(stock.get("operation_rating"))
+        if (
+            score >= 45
+            and signal in {"量增轉強", "整理待發", "穩步走高"}
+            and rating in {"A", "B+"}
+        ):
+            fallback = dict(stock)
+            fallback["setup_score"] = safe_float(fallback.get("setup_score")) or score
+            fallback["recommendation_score"] = score
+            fallback["stock_type"] = fallback.get("stock_type") or "收盤快照候選"
+            fallback["analysis_source"] = fallback.get("analysis_source") or "snapshot_fallback"
+            fallback["reason"] = (
+                safe_str(fallback.get("reason"))
+                + " 歷史K技術名單不足時，先以收盤快照強勢條件納入推薦觀察。"
+            ).strip()
+            snapshot_fallback.append(fallback)
+    snapshot_fallback.sort(key=rank_key, reverse=True)
+    add_unique(recommendations, snapshot_fallback)
+
+    return recommendations[:top_n]
 
 
 def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
