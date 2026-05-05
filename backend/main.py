@@ -1285,18 +1285,38 @@ def build_recommendations(
     2. 取前80筆做歷史K分析
     3. setup_score >= 65 且型態符合才進推薦
     """
+    # 基本過濾：價格、量能、漲跌幅範圍
     candidates = [
         s for s in stocks
         if is_main_board_stock(s)
         and safe_float(s.get("price")) >= 8
         and safe_int(s.get("volume")) >= 500
-        and -3.0 <= safe_float(s.get("change_percent")) <= 7.0
+        and safe_int(s.get("volume")) <= 150000  # 排除超大型股（不易轉折）
+        and 0.1 <= safe_float(s.get("change_percent")) <= 6.5  # 今日小漲到適度漲（不追漲停）
     ]
-    # 先按成交量排序取80筆（流動性夠才有意義）
-    candidates.sort(
-        key=lambda x: (safe_int(x.get("volume")), safe_float(x.get("change_percent"))),
-        reverse=True,
-    )
+
+    # 計算技術預篩分數（快速，不跑歷史K）
+    def snapshot_prescore(s: Dict[str, Any]) -> float:
+        chg  = safe_float(s.get("change_percent"))
+        vol  = safe_int(s.get("volume"))
+        high = safe_float(s.get("high"))
+        low  = safe_float(s.get("low"))
+        price = safe_float(s.get("price"))
+        prev  = safe_float(s.get("prev_close"))
+        # 收盤位置（收在高位加分）
+        pos = calc_position_ratio(price, high, low)
+        # 量能合理區間（500~30000張最佳）
+        vol_score = 20 if 500 <= vol <= 30000 else 10 if vol <= 80000 else 0
+        # 漲幅甜蜜區（0.5%~4%）
+        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 6.5 else 0
+        # 收盤偏高
+        pos_score = 15 if pos >= 0.65 else 8 if pos >= 0.45 else 0
+        # 今日收盤 > 開盤（收紅K）
+        open_p = safe_float(s.get("open"))
+        red_score = 10 if price >= open_p > 0 else 0
+        return vol_score + chg_score + pos_score + red_score
+
+    candidates.sort(key=snapshot_prescore, reverse=True)
     seed_items = candidates[:RECOMMENDATION_SEED_LIMIT]
 
     result_map: Dict[str, Dict[str, Any]] = {}
