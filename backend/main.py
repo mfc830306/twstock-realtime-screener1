@@ -592,6 +592,269 @@ def enrich_reason_with_context(
 
 
 # =========================
+# Snapshot 標準化（純資料，不做評分）
+# =========================
+
+def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return None
+    symbol = safe_str(
+        row.get("symbol") or row.get("stockNo") or row.get("stock_no")
+        or row.get("code") or row.get("ticker")
+    )
+    if not symbol:
+        return None
+    name = safe_str(row.get("name") or row.get("stockName") or row.get("stock_name") or symbol)
+    if not is_valid_main_board_symbol(symbol, name):
+        return None
+    price = safe_float(
+        row.get("lastPrice") or row.get("closePrice") or row.get("tradePrice")
+        or row.get("price") or row.get("currentPrice")
+    )
+    if price <= 0:
+        return None
+    change = safe_float(row.get("change") or row.get("priceChange") or row.get("changePrice"))
+    previous_close = safe_float(row.get("previousClose") or row.get("referencePrice"))
+    change_percent = safe_float(row.get("changePercent"))
+    if previous_close <= 0 and price > 0 and change != 0:
+        prev = price - change
+        if prev > 0:
+            previous_close = prev
+    if change_percent == 0 and previous_close > 0 and change != 0:
+        change_percent = (change / previous_close) * 100
+    volume = safe_int(
+        row.get("tradeVolume") or row.get("volume") or row.get("totalVolume")
+        or row.get("accumulatedVolume") or row.get("tradeVolumeAtBid")
+    )
+    trade_value = safe_int(row.get("tradeValue"))
+    open_price  = safe_float(row.get("openPrice"))
+    high_price  = safe_float(row.get("highPrice"))
+    low_price   = safe_float(row.get("lowPrice"))
+    update_time_raw = row.get("lastUpdated") or row.get("time") or 0
+    update_time_str = micros_to_taipei_str(update_time_raw)
+    category = price_category(price)
+    return {
+        "market": market_label,
+        "symbol": symbol,
+        "name": name,
+        "price": round(price, 2),
+        "change": round(change, 2),
+        "change_percent": round(change_percent, 2),
+        "volume": volume,
+        "trade_value": trade_value,
+        "prev_close": round(previous_close, 2) if previous_close > 0 else 0,
+        "open": round(open_price, 2),
+        "high": round(high_price, 2),
+        "low": round(low_price, 2),
+        "update_time": update_time_str,
+        "update_time_raw": update_time_raw,
+        "category": category,
+        "signal": "",
+        "trend_type": "",
+        "reason": "",
+        "technical_comment": "",
+        "operation_rating": "",
+        "operation_bias": "",
+        "operation_style": "",
+        "strategy_action": "",
+        "entry_price": "隔日開盤",
+        "target_price": "",
+        "stop_loss": "",
+        "risk_reward": "",
+        "risk_note": "",
+        "score": 0,
+        "recommendation_score": 0,
+        "setup_score": 0,
+        "analysis_source": "snapshot",
+    }
+
+
+# =========================
+# Market Data
+# =========================
+
+def fetch_snapshot_rows_by_type(
+    stock_client: Any, market: str, market_label: str, quote_type: str,
+) -> List[Dict[str, Any]]:
+    resp = stock_client.snapshot.quotes(market=market, type=quote_type)
+    rows = extract_rows(resp)
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        item = normalize_snapshot_row(row, market_label=market_label)
+        if item:
+            result.append(item)
+    return result
+
+
+def fetch_snapshot_market(market: str, market_label: str) -> List[Dict[str, Any]]:
+    stock_client = get_stock_rest_client()
+    try:
+        return fetch_snapshot_rows_by_type(
+            stock_client=stock_client,
+            market=market,
+            market_label=market_label,
+            quote_type="ALLBUT0999",
+        )
+    except Exception as e:
+        raise Exception(f"{market_label} snapshot 失敗: {e}")
+
+
+def get_all_stocks_raw() -> Dict[str, Any]:
+    all_stocks: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for market_code, market_label in [("TSE", "上市"), ("OTC", "上櫃")]:
+        try:
+            rows = fetch_snapshot_market(market_code, market_label)
+            all_stocks.extend(rows)
+        except Exception as e:
+            errors.append(f"{market_label} 失敗: {e}")
+    stocks = merge_stock_lists(all_stocks)
+    if not stocks:
+        raise Exception("；".join(errors) if errors else "目前無法取得任何市場資料")
+    latest_raw = max((safe_int(s.get("update_time_raw")) for s in stocks), default=0)
+    data_date  = micros_to_date_str(latest_raw)   if latest_raw else now_taipei().strftime("%Y%m%d")
+    last_update = micros_to_taipei_str(latest_raw) if latest_raw else format_dt_taipei(now_taipei())
+    return {
+        "stocks": stocks,
+        "data_date": data_date,
+        "last_update": last_update,
+        "message": "；".join(errors) if errors else "",
+    }
+
+
+def get_cached_all_stocks(force_refresh: bool = False) -> Dict[str, Any]:
+    now = now_taipei()
+    if (
+        not force_refresh
+        and _CACHE["stocks"] is not None
+        and _CACHE["fetched_at"] is not None
+        and (now - _CACHE["fetched_at"]).total_seconds() < CACHE_SECONDS
+    ):
+        return {
+            "stocks":      _CACHE["stocks"],
+            "data_date":   _CACHE["data_date"],
+            "last_update": _CACHE["last_update"],
+            "message":     _CACHE.get("message", ""),
+        }
+    result = get_all_stocks_raw()
+    _CACHE["stocks"]      = result["stocks"]
+    _CACHE["fetched_at"]  = now
+    _CACHE["data_date"]   = result["data_date"]
+    _CACHE["last_update"] = result["last_update"]
+    _CACHE["message"]     = result.get("message", "")
+    return result
+
+
+def get_cached_recommendations(
+    stocks: List[Dict[str, Any]],
+    data_date: str,
+    last_update: str,
+    top_n: int = 10,
+) -> List[Dict[str, Any]]:
+    if not should_settle_recommendations():
+        return []
+    cached_items = _RECOMMENDATION_CACHE.get("items")
+    if (
+        isinstance(cached_items, list)
+        and _RECOMMENDATION_CACHE.get("data_date")   == data_date
+        and _RECOMMENDATION_CACHE.get("last_update") == last_update
+        and _RECOMMENDATION_CACHE.get("top_n")       == top_n
+    ):
+        return cached_items
+    items = build_recommendations(stocks, top_n=top_n)
+    _RECOMMENDATION_CACHE["items"]       = items
+    _RECOMMENDATION_CACHE["data_date"]   = data_date
+    _RECOMMENDATION_CACHE["last_update"] = last_update
+    _RECOMMENDATION_CACHE["top_n"]       = top_n
+    return items
+
+
+# =========================
+# Business Logic
+# =========================
+
+def build_categories(stocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    order = ["0-10", "10-20", "20-50", "50-100", "100-200", "200-500", "500-1000", "1000+"]
+    counts = {k: 0 for k in order}
+    for s in stocks:
+        c = s.get("category", "")
+        if c in counts:
+            counts[c] += 1
+    return [{"key": k, "label": k, "count": counts[k]} for k in order]
+
+
+def filter_stocks(
+    stocks: List[Dict[str, Any]],
+    market: str = "all",
+    category: str = "all",
+    q: str = "",
+    price_min: float = 0.0,
+    price_max: float = 0.0,
+) -> List[Dict[str, Any]]:
+    result = stocks
+    market_lower = safe_str(market).lower()
+    if market_lower in ("all", ""):
+        result = [s for s in result if is_main_board_stock(s)]
+    elif market_lower in ("tse", "上市"):
+        result = [s for s in result if s.get("market") == "上市"]
+    elif market_lower in ("otc", "上櫃"):
+        result = [s for s in result if s.get("market") == "上櫃"]
+    else:
+        result = [s for s in result if is_main_board_stock(s)]
+    if category != "all":
+        result = [s for s in result if s.get("category") == category]
+    if q.strip():
+        qq = q.strip().lower()
+        result = [
+            s for s in result
+            if qq in safe_str(s.get("symbol")).lower() or qq in safe_str(s.get("name")).lower()
+        ]
+    if price_min > 0:
+        result = [s for s in result if safe_float(s.get("price")) >= price_min]
+    if price_max > 0:
+        result = [s for s in result if safe_float(s.get("price")) <= price_max]
+    return result
+
+
+def sort_stocks(
+    stocks: List[Dict[str, Any]],
+    sort_by: str = "setup_score",
+    sort_dir: str = "desc",
+) -> List[Dict[str, Any]]:
+    reverse = sort_dir.lower() != "asc"
+    allowed = {
+        "score": "score",
+        "setup_score": "setup_score",
+        "recommendation_score": "recommendation_score",
+        "price": "price",
+        "change": "change",
+        "change_percent": "change_percent",
+        "volume": "volume",
+    }
+    key = allowed.get(sort_by, "setup_score")
+    return sorted(stocks, key=lambda x: x.get(key, 0), reverse=reverse)
+
+
+def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[str, Any]]:
+    qq = safe_str(q).lower()
+    if not qq:
+        return None
+    exact_symbol = [s for s in filtered if safe_str(s.get("symbol")).lower() == qq]
+    if len(exact_symbol) == 1:
+        return exact_symbol[0]
+    exact_name = [s for s in filtered if safe_str(s.get("name")).lower() == qq]
+    if len(exact_name) == 1:
+        return exact_name[0]
+    partial = [
+        s for s in filtered
+        if qq in safe_str(s.get("symbol")).lower() or qq in safe_str(s.get("name")).lower()
+    ]
+    if len(partial) == 1:
+        return partial[0]
+    return None
+
+
+# =========================
 # 交易規則（固定）
 # =========================
 TAKE_PROFIT_PCT  = 0.05   # 停利 +5%
@@ -1148,29 +1411,6 @@ def build_recommendations(
         reverse=True,
     )
     return qualified[:top_n]
-
-
-def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[str, Any]]:
-    qq = safe_str(q).lower()
-    if not qq:
-        return None
-
-    exact_symbol = [s for s in filtered if safe_str(s.get("symbol")).lower() == qq]
-    if len(exact_symbol) == 1:
-        return exact_symbol[0]
-
-    exact_name = [s for s in filtered if safe_str(s.get("name")).lower() == qq]
-    if len(exact_name) == 1:
-        return exact_name[0]
-
-    partial = [
-        s for s in filtered
-        if qq in safe_str(s.get("symbol")).lower() or qq in safe_str(s.get("name")).lower()
-    ]
-    if len(partial) == 1:
-        return partial[0]
-
-    return None
 
 
 def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
