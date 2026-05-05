@@ -43,13 +43,8 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
 }
 CACHE_SECONDS = 60
 
-_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
-HISTORY_CACHE_HOURS = 6
-HISTORY_CACHE_MAX_SYMBOLS = 400
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
-HISTORICAL_K_CANDLES = 250
-HISTORICAL_K_CALENDAR_DAYS = 400
 RECOMMENDATION_SEED_LIMIT = 80
 
 # 驗證系統設定
@@ -63,7 +58,6 @@ VALIDATION_STORE_PATH = os.getenv(
     "VALIDATION_STORE_PATH",
     os.path.join(os.getcwd(), "validation_runs.json"),
 )
-VALIDATION_HORIZONS = [1, 2, 3, 5, 10]
 
 
 # =========================
@@ -137,11 +131,6 @@ def normalize_date_key(v: Any) -> str:
         return ""
     digits = "".join(ch for ch in s if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else ""
-
-
-def positive_min(values: List[float], default: float = 0.0) -> float:
-    positives = [x for x in values if x > 0]
-    return min(positives) if positives else default
 
 
 def resolve_cert_path() -> Optional[str]:
@@ -227,12 +216,6 @@ def format_price_value(v: float) -> str:
     return f"{rounded:.2f}"
 
 
-def format_price_range(low: float, high: float) -> str:
-    low = max(low, 0.01)
-    high = max(high, low)
-    return f"{format_price_value(low)} ~ {format_price_value(high)}"
-
-
 def calc_position_ratio(price: float, high_price: float, low_price: float) -> float:
     if high_price > low_price:
         ratio = (price - low_price) / (high_price - low_price)
@@ -245,42 +228,6 @@ def calc_amplitude_pct(high_price: float, low_price: float, previous_close: floa
     if previous_close > 0:
         return (intraday_range / previous_close) * 100
     return 0.0
-
-
-def parse_range_mid(text: str, fallback: float = 0.0) -> float:
-    txt = safe_str(text)
-    if not txt:
-        return fallback
-    txt = txt.replace("突破", "").replace("後再評估", "").strip()
-    parts = [p.strip() for p in txt.split("~")]
-    nums = []
-    for p in parts:
-        try:
-            nums.append(float(p))
-        except Exception:
-            pass
-    if not nums:
-        return fallback
-    return sum(nums) / len(nums)
-
-
-def parse_range_bounds(text: str, fallback: float = 0.0) -> Tuple[float, float]:
-    txt = safe_str(text)
-    if not txt:
-        return fallback, fallback
-    txt = txt.replace("突破", "").replace("後再評估", "").strip()
-    parts = [p.strip() for p in txt.split("~")]
-    nums: List[float] = []
-    for p in parts:
-        try:
-            nums.append(float(p))
-        except Exception:
-            pass
-    if not nums:
-        return fallback, fallback
-    if len(nums) == 1:
-        return nums[0], nums[0]
-    return min(nums), max(nums)
 
 
 def avg(values: List[float]) -> float:
@@ -323,17 +270,6 @@ def completed_candles_for_reference(candles: List[Dict[str, Any]], base_stock: O
     if get_market_status_text() == "開盤" and len(candles) > 1:
         return candles[:-1]
     return candles
-
-
-def format_number(num: float) -> str:
-    try:
-        if num is None or math.isnan(num):
-            return "-"
-    except Exception:
-        pass
-    if abs(num - int(num)) < 0.001:
-        return f"{int(num):,}"
-    return f"{num:,.2f}"
 
 
 def clamp(v: float, low: float, high: float) -> float:
@@ -539,56 +475,6 @@ def build_signal_and_reason(
         "signal": "觀察中",
         "reason": "目前量價結構沒有明確優勢，先觀察是否出現量增與關鍵價位突破。",
     }
-
-
-def enrich_reason_with_context(
-    base_reason: str,
-    price: float,
-    open_price: float,
-    high_price: float,
-    low_price: float,
-    change_percent: float,
-    volume: int,
-    previous_close: float,
-) -> str:
-    extra: List[str] = []
-    pos = calc_position_ratio(price, high_price, low_price)
-    amplitude_pct = calc_amplitude_pct(high_price, low_price, previous_close)
-
-    if pos >= 0.85:
-        extra.append("收盤偏高，若隔日續量容易轉成追價盤")
-    elif 0.5 <= pos <= 0.8:
-        extra.append("收盤落在中高區但未過熱，較適合短線續強觀察")
-    elif pos <= 0.2:
-        extra.append("收盤過低，代表尾盤承接力道不足")
-
-    if price > open_price:
-        extra.append("收盤高於開盤，日內買盤略占上風")
-    elif price < open_price:
-        extra.append("收盤低於開盤，盤中追價延續性較弱")
-
-    if change_percent >= 5:
-        extra.append("單日漲幅過大，較不利 2~4 天低風險切入")
-    elif 0.8 <= change_percent <= 4:
-        extra.append("漲幅屬合理動能區，較符合潛力股模型")
-
-    if volume >= 30000:
-        extra.append("量能過大，需小心已經成為市場熱門追價股")
-    elif 5000 <= volume <= 20000:
-        extra.append("量能活絡但未失控，屬較健康的短線放量")
-    elif volume < 2000:
-        extra.append("量能仍偏低，後續續攻力道需再確認")
-
-    if amplitude_pct >= 6:
-        extra.append("日內振幅偏大，隔日追價波動風險提高")
-    elif amplitude_pct <= 3.5:
-        extra.append("振幅控制尚可，走勢結構相對穩定")
-
-    if not extra:
-        return base_reason
-
-    return base_reason + "。補充：" + "；".join(extra) + "。"
-
 
 
 # =========================
