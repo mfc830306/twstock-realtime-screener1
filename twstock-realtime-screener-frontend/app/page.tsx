@@ -67,93 +67,6 @@ type BackendCategory = {
   count: number;
 };
 
-type ValidationItem = {
-  rank?: number;
-  market?: string;
-  symbol: string;
-  name: string;
-  score?: number;
-  price?: number;
-  recommendation_score?: number;
-  setup_score?: number;
-  signal?: string;
-  stock_type?: string;
-  operation_rating?: string;
-  start_close_price?: number;
-  current_price?: number;
-  current_day_change_pct?: number;
-  return_from_start_close_pct?: number;
-  entry_date?: string;
-  entry_open_price?: number;
-  latest_price?: number;
-  latest_change_pct?: number;
-  max_high_pct?: number;
-  max_drawdown_pct?: number;
-  hit_target?: boolean;
-  hit_stop?: boolean;
-  status_detail?: string;
-  is_closed?: boolean;
-  trading_days_held?: number;
-  take_profit_pct?: number;
-  stop_loss_pct?: number;
-  max_hold_days?: number;
-  target_price_plan?: string;
-  stop_loss_plan?: string;
-  candlestick_pattern?: string;
-  ma_cross?: string;
-  vol_pattern?: string;
-  horizon_returns?: Record<string, number>;
-};
-
-type ValidationRun = {
-  date: string;
-  created_at?: string;
-  last_update?: string;
-  status: string;
-  message?: string;
-  items: ValidationItem[];
-};
-
-type ValidationSummary = {
-  count?: number;
-  entered_count?: number;
-  avg_latest_return_pct?: number;
-  avg_return_from_start_close_pct?: number;
-  win_rate_pct?: number;
-  start_close_win_rate_pct?: number;
-  hit_target_count?: number;
-  hit_stop_count?: number;
-};
-
-type ValidationResponse = {
-  success: boolean;
-  market_status?: string;
-  data_date?: string;
-  last_update?: string;
-  validation?: ValidationRun | null;
-  summary?: ValidationSummary;
-  error?: string;
-  message?: string;
-};
-
-type ValidationHistoryRun = {
-  date: string;
-  created_at?: string;
-  last_update?: string;
-  status?: string;
-  message?: string;
-  summary?: ValidationSummary;
-  items?: ValidationItem[];
-};
-
-type ValidationHistoryResponse = {
-  success: boolean;
-  total?: number;
-  runs?: ValidationHistoryRun[];
-  error?: string;
-  message?: string;
-};
-
 type ApiResponse = {
   success: boolean;
   market_status?: string;
@@ -179,9 +92,6 @@ type ApiResponse = {
 
 const API_BASE = "https://twstock-realtime-screener1.onrender.com";
 const BACKEND_BASE = `${API_BASE}/stocks`;
-const VALIDATION_BASE = `${API_BASE}/validation`;
-const VALIDATION_HISTORY_BASE = `${API_BASE}/validation/history`;
-const VALIDATION_START_DATE = "latest";
 
 const PRICE_CATEGORIES = [
   { key: "all", label: "全部" },
@@ -194,7 +104,7 @@ const PRICE_CATEGORIES = [
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
-type ActiveScreen = "screener" | "validation" | "history";
+type ActiveScreen = "screener";
 
 const ITEMS_PER_PAGE = 20;
 
@@ -366,10 +276,6 @@ export default function Home() {
   const [recommendationStatus, setRecommendationStatus] = useState("");
   const [recommendationMessage, setRecommendationMessage] = useState("");
   const [showRecommendationsPanel, setShowRecommendationsPanel] = useState(true);
-  const [validationRun, setValidationRun] = useState<ValidationRun | null>(null);
-  const [validationSummary, setValidationSummary] = useState<ValidationSummary>({});
-  const [validationLoading, setValidationLoading] = useState(false);
-  const [validationHistory, setValidationHistory] = useState<ValidationHistoryRun[]>([]);
 
   const initialLoadedRef = useRef(false);
   const pagedRequestIdRef = useRef(0);
@@ -523,48 +429,6 @@ export default function Home() {
     }
   }
 
-  async function fetchValidationRunSafe(options?: { forceRefresh?: boolean }) {
-    setValidationLoading(true);
-    try {
-      const params = new URLSearchParams({ date: VALIDATION_START_DATE });
-      if (options?.forceRefresh) params.set("force_refresh", "true");
-      const res = await fetch(`${VALIDATION_BASE}?${params.toString()}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ValidationResponse = await res.json();
-      if (!data.success) throw new Error(data.error || data.message || "載入驗證資料失敗");
-      setValidationRun(data.validation || null);
-      setValidationSummary(data.summary || {});
-      return data;
-    } catch (err) {
-      setValidationRun({
-        date: VALIDATION_START_DATE,
-        status: "error",
-        message: err instanceof Error ? err.message : "載入驗證資料失敗",
-        items: [],
-      });
-      setValidationSummary({});
-      return null;
-    } finally {
-      setValidationLoading(false);
-    }
-  }
-
-  async function fetchValidationHistorySafe(options?: { forceRefresh?: boolean }) {
-    try {
-      const params = new URLSearchParams({ limit: "120", include_items: "true" });
-      if (options?.forceRefresh) params.set("force_refresh", "true");
-      const res = await fetch(`${VALIDATION_HISTORY_BASE}?${params.toString()}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ValidationHistoryResponse = await res.json();
-      if (!data.success) throw new Error(data.error || data.message || "載入推薦紀錄失敗");
-      setValidationHistory(data.runs || []);
-      return data;
-    } catch {
-      setValidationHistory([]);
-      return null;
-    }
-  }
-
   async function fetchAllDataSafe(options?: { forceRefresh?: boolean }) {
     setLoading(true);
     setError("");
@@ -585,9 +449,6 @@ export default function Home() {
     if (!data?.recommendations?.length) {
       await fetchRecommendationsSafe({ forceRefresh: options?.forceRefresh });
     }
-
-    await fetchValidationRunSafe({ forceRefresh: options?.forceRefresh });
-    await fetchValidationHistorySafe({ forceRefresh: true });
 
     initialLoadedRef.current = true;
     setLoading(false);
@@ -650,10 +511,6 @@ export default function Home() {
     if (debouncedSearchTerm && stocks.length === 1) return stockToFocused(stocks[0]);
     return null;
   }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
-
-  const validationStartStocks = validationRun?.items || [];
-  const isValidationStartReady = validationRun?.status === "tracking" && validationStartStocks.length > 0;
-  const validationDisplayDate = formatDateString(validationRun?.date || VALIDATION_START_DATE);
 
   const toggleRecommendationsPanel = () => {
     setShowRecommendationsPanel((prev) => {
@@ -782,8 +639,6 @@ export default function Home() {
             >
               {[
                 { key: "screener" as ActiveScreen, label: "選股首頁" },
-                { key: "validation" as ActiveScreen, label: "驗證追蹤" },
-                { key: "history" as ActiveScreen, label: "推薦紀錄" },
               ].map((item) => {
                 const active = activeScreen === item.key;
                 return (
@@ -854,303 +709,6 @@ export default function Home() {
           >
             {error}
           </div>
-        )}
-
-        {activeScreen === "validation" && (
-          <section style={{ ...panelStyle }}>
-            {/* 標題 */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", gap: "14px", flexDirection: isMobile ? "column" : "row", marginBottom: "20px" }}>
-              <div>
-                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "6px" }}>純技術線驗證追蹤</div>
-                <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>
-                  {validationDisplayDate} 推薦10檔追蹤
-                </h2>
-                <div style={{ color: "#9fc7f5", fontSize: "13px", marginTop: "6px", fontWeight: 700 }}>
-                  停利 +5% ｜ 停損 -2.5% ｜ 最多持有 3 天
-                </div>
-              </div>
-              <button type="button" onClick={() => fetchValidationRunSafe({ forceRefresh: true })} disabled={validationLoading}
-                style={{ border: "1px solid rgba(120,205,255,0.28)", borderRadius: "12px", padding: "8px 14px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, fontSize: "13px", cursor: validationLoading ? "not-allowed" : "pointer", opacity: validationLoading ? 0.6 : 1 }}>
-                {validationLoading ? "更新中" : "更新"}
-              </button>
-            </div>
-
-            {/* 摘要統計 */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,minmax(0,1fr))", gap: "12px", marginBottom: "20px" }}>
-              {[
-                { label: "追蹤檔數", value: `${validationSummary.count || 0} 檔` },
-                { label: "已進場", value: validationSummary.entered_count ? `${validationSummary.entered_count} 檔` : "等隔日開盤" },
-                { label: "進場平均報酬", value: validationSummary.entered_count ? `${formatSigned(validationSummary.avg_latest_return_pct)}%` : "-" },
-                { label: "進場勝率", value: validationSummary.entered_count ? `${formatSigned(validationSummary.win_rate_pct)}%` : "-" },
-              ].map((item) => (
-                <div key={item.label} style={{ borderRadius: "16px", padding: "14px 16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
-                  <div style={{ color: "#8fc3ff", fontSize: "12px", fontWeight: 900, marginBottom: "8px" }}>{item.label}</div>
-                  <div style={{ color: "#fff", fontSize: "20px", fontWeight: 900 }}>{item.value}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* 狀態說明 */}
-            {!isValidationStartReady && (
-              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontSize: "13px", fontWeight: 800, marginBottom: "16px" }}>
-                {validationLoading ? "讀取中..." : validationRun?.message || "等待收盤後推薦資料..."}
-              </div>
-            )}
-
-            {/* 10 檔卡片 */}
-            {isValidationStartReady && (
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,minmax(0,1fr))", gap: "12px" }}>
-                {validationStartStocks.map((stock, index) => {
-                  const entered = !!stock.entry_open_price;
-                  const statusDetail = stock.status_detail || (entered ? "持倉中" : "等待進場");
-                  const isClosed = stock.is_closed;
-
-                  const statusStyle: Record<string, { bg: string; border: string; color: string; label: string }> = {
-                    "達標平倉":  { bg: "rgba(58,168,89,0.15)",  border: "rgba(126,231,135,0.4)", color: "#7ee787", label: "✅ 達標平倉" },
-                    "停損平倉":  { bg: "rgba(255,80,80,0.12)",  border: "rgba(255,100,100,0.4)", color: "#ff7c7c", label: "🔴 停損平倉" },
-                    "時間到期":  { bg: "rgba(150,150,150,0.12)", border: "rgba(200,200,200,0.3)", color: "#c8c8c8", label: "⚪ 時間到期" },
-                    "持倉中":    { bg: "rgba(20,58,112,0.52)",  border: "rgba(120,180,255,0.22)", color: "#7fb6ff", label: "🔵 持倉中" },
-                    "等待進場":  { bg: "rgba(20,58,112,0.52)",  border: "rgba(255,217,95,0.22)", color: "#ffd95f", label: "🟡 等待進場" },
-                  };
-                  const st = statusStyle[statusDetail] || statusStyle["等待進場"];
-                  const rc = (n?: number) => !n ? "#cfe3ff" : n > 0 ? "#7ee787" : "#ff7c7c";
-                  const horizonKeys = Object.keys(stock.horizon_returns || {}).sort((a, b) => Number(a) - Number(b));
-
-                  return (
-                    <div key={stock.symbol} style={{ borderRadius: "18px", padding: "16px", background: st.bg, border: `1px solid ${st.border}`, opacity: isClosed ? 0.85 : 1 }}>
-                      {/* 名稱列 */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                        <div style={{ color: "#fff", fontSize: "16px", fontWeight: 900 }}>
-                          {stock.rank || index + 1}. {stock.symbol} {stock.name}
-                        </div>
-                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                          <span style={{ color: st.color, fontSize: "12px", fontWeight: 900, background: "rgba(0,0,0,0.2)", borderRadius: "999px", padding: "2px 8px" }}>{st.label}</span>
-                        </div>
-                      </div>
-
-                      {/* 型態 / 評分 */}
-                      <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
-                        <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#ff9c9c" }}>{stock.stock_type || stock.signal || "-"}</span>
-                        <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#ffd95f" }}>評分 {(stock.setup_score || stock.recommendation_score || 0).toFixed(0)}</span>
-                        {stock.candlestick_pattern && stock.candlestick_pattern !== "無明顯型態" && (
-                          <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#7ee787" }}>{stock.candlestick_pattern}</span>
-                        )}
-                        {stock.ma_cross && stock.ma_cross !== "無" && (
-                          <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#7fb6ff" }}>{stock.ma_cross}</span>
-                        )}
-                      </div>
-
-                      {/* 價格格子 */}
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "8px", marginBottom: "8px" }}>
-                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>推薦收盤</div>
-                          <div style={{ color: "#fff", fontSize: "14px", fontWeight: 900 }}>{formatPrice(stock.start_close_price)}</div>
-                        </div>
-                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>{entered ? "進場開盤" : "現價"}</div>
-                          <div style={{ color: "#fff", fontSize: "14px", fontWeight: 900 }}>{entered ? formatPrice(stock.entry_open_price) : formatPrice(stock.current_price)}</div>
-                        </div>
-                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>收盤起算</div>
-                          <div style={{ color: rc(stock.return_from_start_close_pct), fontSize: "14px", fontWeight: 900 }}>{formatSigned(stock.return_from_start_close_pct)}%</div>
-                        </div>
-                      </div>
-
-                      {/* 交易計畫 */}
-                      <div style={{ background: "rgba(0,0,0,0.15)", borderRadius: "10px", padding: "8px 10px", marginBottom: "8px", fontSize: "12px", fontWeight: 800, color: "#cfe3ff", display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                        <span>停利：{stock.target_price_plan || "-"}</span>
-                        <span style={{ color: "#ff9c9c" }}>停損：{stock.stop_loss_plan || "-"}</span>
-                        <span style={{ color: "#ffd95f" }}>持有：最多 {stock.max_hold_days || 3} 天（第 {stock.trading_days_held || 0} 天）</span>
-                      </div>
-
-                      {/* 進場後績效 */}
-                      {entered ? (
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "6px", marginBottom: horizonKeys.length ? "8px" : "0" }}>
-                          {[
-                            { label: "進場報酬", val: stock.latest_change_pct },
-                            { label: "最大漲幅", val: stock.max_high_pct, forceColor: "#7ee787" },
-                            { label: "最大回撤", val: stock.max_drawdown_pct, forceColor: "#ff7c7c" },
-                          ].map(({ label, val, forceColor }) => (
-                            <div key={label} style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                              <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>{label}</div>
-                              <div style={{ color: forceColor || rc(val), fontSize: "14px", fontWeight: 900 }}>{formatSigned(val)}%</div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div style={{ color: "#9fc7f5", fontSize: "12px", fontWeight: 700 }}>等隔日開盤後記錄進場價，開始計算報酬</div>
-                      )}
-
-                      {/* Horizon 報酬（1/2/3日）*/}
-                      {horizonKeys.length > 0 && (
-                        <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
-                          {horizonKeys.map((h) => {
-                            const val = stock.horizon_returns?.[h];
-                            return (
-                              <div key={h} style={{ background: "rgba(0,0,0,0.25)", borderRadius: "8px", padding: "4px 10px", textAlign: "center" }}>
-                                <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900 }}>第{h}天</div>
-                                <div style={{ color: rc(val), fontSize: "13px", fontWeight: 900 }}>{formatSigned(val)}%</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        )}
-
-        {activeScreen === "history" && (
-          <section
-            style={{
-              ...panelStyle,
-              minHeight: isMobile ? "auto" : "680px",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: isMobile ? "flex-start" : "center",
-                gap: "14px",
-                flexDirection: isMobile ? "column" : "row",
-                marginBottom: "18px",
-              }}
-            >
-              <div>
-                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "8px" }}>
-                  每日歸檔
-                </div>
-                <h2 style={{ fontSize: isMobile ? "26px" : "32px", fontWeight: 900, margin: 0 }}>
-                  所有推薦股票紀錄
-                </h2>
-                <div style={{ color: "#b9d7ff", fontSize: "14px", fontWeight: 700, lineHeight: 1.8, marginTop: "8px" }}>
-                  每個收盤日固定保存推薦10檔；日後驗證直接讀取這裡的歷史樣本。
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => fetchValidationHistorySafe({ forceRefresh: true })}
-                style={{
-                  border: "1px solid rgba(120, 205, 255, 0.28)",
-                  borderRadius: "12px",
-                  padding: "10px 14px",
-                  background: "rgba(255,255,255,0.05)",
-                  color: "#e8f4ff",
-                  fontWeight: 900,
-                  cursor: "pointer",
-                }}
-              >
-                重新整理
-              </button>
-            </div>
-
-            {validationHistory.length === 0 ? (
-              <div
-                style={{
-                  borderRadius: "18px",
-                  padding: "18px",
-                  background: "rgba(255,217,95,0.12)",
-                  border: "1px solid rgba(255,217,95,0.22)",
-                  color: "#ffd95f",
-                  fontSize: "16px",
-                  fontWeight: 900,
-                }}
-              >
-                目前尚未保存任何收盤推薦紀錄。收盤後按更新，或呼叫 `/validation`，即會開始累積。
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: "16px" }}>
-                {validationHistory.map((run) => {
-                  const summary = run.summary || {};
-                  const items = run.items || [];
-                  return (
-                    <div
-                      key={run.date}
-                      style={{
-                        borderRadius: "20px",
-                        padding: isMobile ? "16px" : "18px",
-                        background: "rgba(20, 58, 112, 0.52)",
-                        border: "1px solid rgba(120, 180, 255, 0.16)",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: isMobile ? "flex-start" : "center",
-                          gap: "12px",
-                          flexDirection: isMobile ? "column" : "row",
-                          marginBottom: "12px",
-                        }}
-                      >
-                        <div>
-                          <div style={{ color: "#ffffff", fontSize: "22px", fontWeight: 900 }}>
-                            {formatDateString(run.date)} 推薦10檔
-                          </div>
-                          <div style={{ color: "#9fc7f5", fontSize: "13px", fontWeight: 800, marginTop: "6px" }}>
-                            建立：{run.created_at || "-"} ｜ 更新：{run.last_update || "-"}
-                          </div>
-                        </div>
-                        <div style={{ color: "#dce9ff", fontSize: "13px", lineHeight: 1.8, fontWeight: 800 }}>
-                          樣本 {summary.count || items.length || 0} 檔 ｜ 收盤起算平均 {formatSigned(summary.avg_return_from_start_close_pct)}% ｜ 已進場 {summary.entered_count || 0} 檔
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
-                          gap: "10px",
-                        }}
-                      >
-                        {items.map((stock, index) => (
-                          <div
-                            key={`${run.date}-${stock.symbol}`}
-                            style={{
-                              borderRadius: "16px",
-                              padding: "12px 14px",
-                              background: "rgba(255,255,255,0.05)",
-                              border: "1px solid rgba(255,255,255,0.08)",
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                                gap: "10px",
-                                marginBottom: "8px",
-                              }}
-                            >
-                              <div style={{ color: "#ffffff", fontSize: "16px", fontWeight: 900 }}>
-                                {stock.rank || index + 1}. {stock.symbol} {stock.name}
-                              </div>
-                              <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
-                                {stock.recommendation_score || 0}
-                              </div>
-                            </div>
-                            <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
-                              訊號：{stock.signal || "-"} ｜ 評級：{stock.operation_rating || "-"} ｜ 收盤價：{formatPrice(stock.start_close_price)} ｜ 現價：{formatPrice(stock.current_price || stock.latest_price)}
-                            </div>
-                            <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 700, marginTop: "4px" }}>
-                              {stock.entry_open_price
-                                ? `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 進場起算 ${formatSigned(stock.latest_change_pct)}% ｜ 最高 ${formatSigned(stock.max_high_pct)}%`
-                                : `當日 ${formatSigned(stock.current_day_change_pct)}% ｜ 收盤起算 ${formatSigned(stock.return_from_start_close_pct)}% ｜ 尚未記錄隔日開盤價`}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
         )}
 
         {activeScreen === "screener" && (
@@ -2017,4 +1575,5 @@ const tradePlanValueStyle: React.CSSProperties = {
   fontWeight: 900,
   lineHeight: 1.6,
 };
+
 
