@@ -1450,7 +1450,6 @@ export default function Home() {
                           }}
                         >
                           推薦 {stock.recommendation_score || stock.score || 0}
-                          {stock.book_selection_score ? ` / 代理 ${stock.book_selection_score.toFixed(1)}` : ""}
                         </div>
                       </div>
 
@@ -1480,7 +1479,6 @@ export default function Home() {
                         <span>目標：{stock.target_price || "-"}</span>
                         <span>停損：{stock.stop_loss || "-"}</span>
                         <span>風報比：{stock.risk_reward || "-"}</span>
-                        {stock.book_selection_comment && <span>代理：{stock.book_selection_comment}</span>}
                       </div>
                     </div>
                   );
