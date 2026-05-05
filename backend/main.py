@@ -1492,6 +1492,280 @@ def startup_event():
 
 
 # =========================
+# Upstash Redis + Validation Store
+# =========================
+
+def _upstash_command(*args: Any) -> Any:
+    if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
+        return None
+    try:
+        body = json.dumps(list(args)).encode("utf-8")
+        req = urllib.request.Request(
+            UPSTASH_REDIS_REST_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            return result.get("result")
+    except Exception:
+        return None
+
+
+def load_validation_store() -> Dict[str, Any]:
+    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+        try:
+            raw = _upstash_command("GET", UPSTASH_REDIS_KEY)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    if not isinstance(data.get("runs"), dict):
+                        data["runs"] = {}
+                    return data
+        except Exception:
+            pass
+        return {"runs": {}}
+    try:
+        if not os.path.exists(VALIDATION_STORE_PATH):
+            return {"runs": {}}
+        with open(VALIDATION_STORE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"runs": {}}
+        if not isinstance(data.get("runs"), dict):
+            data["runs"] = {}
+        return data
+    except Exception:
+        return {"runs": {}}
+
+
+def save_validation_store(store: Dict[str, Any]) -> None:
+    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+        try:
+            _upstash_command("SET", UPSTASH_REDIS_KEY, json.dumps(store, ensure_ascii=False))
+        except Exception:
+            pass
+        return
+    try:
+        directory = os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        tmp_path = f"{VALIDATION_STORE_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, VALIDATION_STORE_PATH)
+    except Exception:
+        pass
+
+
+def get_latest_validation_date() -> str:
+    store = load_validation_store()
+    runs = store.get("runs", {})
+    if not runs:
+        return ""
+    valid = [normalize_date_key(k) for k in runs if normalize_date_key(k)]
+    return max(valid) if valid else ""
+
+
+def create_validation_run(
+    date_key: str,
+    recommendations: List[Dict[str, Any]],
+    last_update: str,
+) -> Dict[str, Any]:
+    items = []
+    for i, stock in enumerate(recommendations[:10]):
+        start_price = safe_float(stock.get("price"))
+        plan = build_fixed_trade_plan(start_price)
+        items.append({
+            "rank": i + 1,
+            "symbol": stock.get("symbol", ""),
+            "name": stock.get("name", ""),
+            "market": stock.get("market", ""),
+            "signal": stock.get("signal", ""),
+            "stock_type": stock.get("stock_type", stock.get("signal", "")),
+            "operation_rating": stock.get("operation_rating", ""),
+            "recommendation_score": safe_float(stock.get("setup_score", stock.get("score", 0))),
+            "setup_score": safe_float(stock.get("setup_score", 0)),
+            "start_close_price": start_price,
+            "take_profit_pct": TAKE_PROFIT_PCT * 100,
+            "stop_loss_pct": STOP_LOSS_PCT * 100,
+            "max_hold_days": MAX_HOLD_DAYS,
+            "target_price_plan": plan["target_price"],
+            "stop_loss_plan": plan["stop_loss"],
+            "candlestick_pattern": stock.get("candlestick_pattern", ""),
+            "ma_cross": stock.get("ma_cross", ""),
+            "vol_pattern": stock.get("vol_pattern", ""),
+            "entry_date": "",
+            "entry_open_price": 0.0,
+            "daily_closes": {},
+            "current_price": start_price,
+            "current_day_change_pct": safe_float(stock.get("change_percent")),
+            "return_from_start_close_pct": 0.0,
+            "latest_change_pct": 0.0,
+            "max_high_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "hit_target": False,
+            "hit_stop": False,
+            "status_detail": "等待進場",
+            "is_closed": False,
+            "trading_days_held": 0,
+            "horizon_returns": {},
+        })
+    run = {
+        "date": date_key,
+        "created_at": format_dt_taipei(now_taipei()),
+        "last_update": last_update,
+        "status": "tracking",
+        "message": "已保存收盤推薦10檔，等隔日開盤後開始追蹤。",
+        "items": items,
+    }
+    store = load_validation_store()
+    store.setdefault("runs", {})[date_key] = run
+    save_validation_store(store)
+    return run
+
+
+def update_validation_run(
+    run: Dict[str, Any],
+    today_date: str,
+    stock_map: Dict[str, Any],
+    last_update: str,
+) -> Dict[str, Any]:
+    run_date = normalize_date_key(run.get("date"))
+    if not run_date or today_date <= run_date:
+        return run
+    changed = False
+    for item in run.get("items", []):
+        symbol = safe_str(item.get("symbol"))
+        if not symbol:
+            continue
+        stock = stock_map.get(symbol)
+        if not stock:
+            continue
+        price = safe_float(stock.get("price"))
+        open_price = safe_float(stock.get("open")) or price
+        if price <= 0:
+            continue
+        if not item.get("entry_date"):
+            item["entry_date"] = today_date
+            item["entry_open_price"] = open_price
+            changed = True
+        daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
+        if today_date not in daily_closes:
+            daily_closes[today_date] = price
+            changed = True
+        start_close = safe_float(item.get("start_close_price"))
+        item["current_price"] = price
+        item["current_day_change_pct"] = round(safe_float(stock.get("change_percent")), 2)
+        if start_close > 0:
+            item["return_from_start_close_pct"] = calc_pct(start_close, price)
+        entry_price = safe_float(item.get("entry_open_price"))
+        entry_date  = safe_str(item.get("entry_date"))
+        if entry_price > 0 and entry_date:
+            sorted_closes = [v for k, v in sorted(daily_closes.items()) if k >= entry_date]
+            if sorted_closes:
+                item["latest_change_pct"] = calc_pct(entry_price, sorted_closes[-1])
+            closes_after = [v for k, v in daily_closes.items() if k >= entry_date]
+            if closes_after:
+                item["max_high_pct"]     = calc_pct(entry_price, max(closes_after))
+                item["max_drawdown_pct"] = calc_pct(entry_price, min(closes_after))
+            target_price = entry_price * (1 + TAKE_PROFIT_PCT)
+            stop_price   = entry_price * (1 - STOP_LOSS_PCT)
+            hit_target, hit_stop = False, False
+            for c in sorted_closes:
+                if c >= target_price:
+                    hit_target = True
+                    break
+                if c <= stop_price:
+                    hit_stop = True
+                    break
+            item["hit_target"] = hit_target
+            item["hit_stop"]   = hit_stop
+            trading_days = len(sorted_closes)
+            item["trading_days_held"] = trading_days
+            if hit_target:
+                item["status_detail"] = "達標平倉"
+                item["is_closed"] = True
+            elif hit_stop:
+                item["status_detail"] = "停損平倉"
+                item["is_closed"] = True
+            elif trading_days >= MAX_HOLD_DAYS:
+                item["status_detail"] = "時間到期"
+                item["is_closed"] = True
+            else:
+                item["status_detail"] = "持倉中"
+                item["is_closed"] = False
+            horizon_returns: Dict[str, float] = {}
+            for horizon in [1, 2, 3]:
+                if len(sorted_closes) > horizon:
+                    horizon_returns[str(horizon)] = calc_pct(entry_price, sorted_closes[horizon])
+            item["horizon_returns"] = horizon_returns
+        changed = True
+    if changed:
+        run["last_update"] = last_update
+        run["status"] = "tracking"
+        run["message"] = "追蹤中；每次呼叫 /validation 自動更新當日資料。"
+        store = load_validation_store()
+        store.setdefault("runs", {})[run_date] = run
+        save_validation_store(store)
+    return run
+
+
+def update_all_runs(
+    today_date: str,
+    stock_map: Dict[str, Any],
+    last_update: str,
+) -> None:
+    store = load_validation_store()
+    runs = store.get("runs", {})
+    if not isinstance(runs, dict):
+        return
+    for date_key, run in list(runs.items()):
+        if isinstance(run, dict):
+            runs[date_key] = update_validation_run(run, today_date, stock_map, last_update)
+    store["runs"] = runs
+    save_validation_store(store)
+
+
+def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    items = run.get("items", []) if isinstance(run.get("items"), list) else []
+    entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
+    latest_returns = [safe_float(x.get("latest_change_pct")) for x in entered]
+    start_returns  = [safe_float(x.get("return_from_start_close_pct")) for x in items]
+    wins       = [x for x in entered if safe_float(x.get("latest_change_pct")) > 0]
+    hit_targets = [x for x in entered if x.get("hit_target")]
+    hit_stops   = [x for x in entered if x.get("hit_stop")]
+    horizon_summary: Dict[str, Any] = {}
+    for h in [1, 2, 3]:
+        h_key = str(h)
+        h_returns = [
+            safe_float(x.get("horizon_returns", {}).get(h_key))
+            for x in entered
+            if x.get("horizon_returns", {}).get(h_key) is not None
+        ]
+        if h_returns:
+            horizon_summary[h_key] = {
+                "count": len(h_returns),
+                "avg_return_pct": round(avg(h_returns), 2),
+                "win_rate_pct": round(sum(1 for r in h_returns if r > 0) / len(h_returns) * 100, 2),
+            }
+    return {
+        "count": len(items),
+        "entered_count": len(entered),
+        "avg_latest_return_pct": round(avg(latest_returns), 2) if latest_returns else 0.0,
+        "avg_return_from_start_close_pct": round(avg(start_returns), 2) if start_returns else 0.0,
+        "win_rate_pct": round((len(wins) / len(entered)) * 100, 2) if entered else 0.0,
+        "hit_target_count": len(hit_targets),
+        "hit_stop_count": len(hit_stops),
+        "horizon_summary": horizon_summary,
+    }
+
+
+# =========================
 # Routes
 # =========================
 @app.get("/")
