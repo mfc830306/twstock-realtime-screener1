@@ -1446,7 +1446,7 @@ def startup_event():
 # Upstash Redis + Validation Store
 # =========================
 
-def _upstash_command(*args: Any) -> Any:
+def _upstash_command(*args: Any, raise_on_error: bool = False) -> Any:
     if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
         return None
     try:
@@ -1462,24 +1462,29 @@ def _upstash_command(*args: Any) -> Any:
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
             result = json.loads(resp.read().decode("utf-8"))
+            if isinstance(result, dict) and result.get("error"):
+                raise RuntimeError(str(result.get("error")))
             return result.get("result")
-    except Exception:
+    except Exception as exc:
+        if raise_on_error:
+            raise RuntimeError(f"Upstash command failed: {args[0] if args else 'UNKNOWN'}") from exc
         return None
 
 
 def load_validation_store() -> Dict[str, Any]:
     if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
         try:
-            raw = _upstash_command("GET", UPSTASH_REDIS_KEY)
-            if raw:
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    if not isinstance(data.get("runs"), dict):
-                        data["runs"] = {}
-                    return data
-        except Exception:
-            pass
-        return {"runs": {}}
+            raw = _upstash_command("GET", UPSTASH_REDIS_KEY, raise_on_error=True)
+            if not raw:
+                return {"runs": {}}
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise RuntimeError("validation store payload is not a JSON object")
+            if not isinstance(data.get("runs"), dict):
+                data["runs"] = {}
+            return data
+        except Exception as exc:
+            raise RuntimeError("讀取驗證資料失敗，已停止寫入以避免覆蓋歷史紀錄") from exc
     try:
         if not os.path.exists(VALIDATION_STORE_PATH):
             return {"runs": {}}
@@ -1490,16 +1495,21 @@ def load_validation_store() -> Dict[str, Any]:
         if not isinstance(data.get("runs"), dict):
             data["runs"] = {}
         return data
-    except Exception:
-        return {"runs": {}}
+    except Exception as exc:
+        raise RuntimeError("讀取本地驗證資料失敗，已停止寫入以避免覆蓋歷史紀錄") from exc
 
 
 def save_validation_store(store: Dict[str, Any]) -> None:
     if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
         try:
-            _upstash_command("SET", UPSTASH_REDIS_KEY, json.dumps(store, ensure_ascii=False))
-        except Exception:
-            pass
+            _upstash_command(
+                "SET",
+                UPSTASH_REDIS_KEY,
+                json.dumps(store, ensure_ascii=False),
+                raise_on_error=True,
+            )
+        except Exception as exc:
+            raise RuntimeError("寫入驗證資料失敗") from exc
         return
     try:
         directory = os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH))
@@ -1509,8 +1519,8 @@ def save_validation_store(store: Dict[str, Any]) -> None:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(store, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, VALIDATION_STORE_PATH)
-    except Exception:
-        pass
+    except Exception as exc:
+        raise RuntimeError("寫入本地驗證資料失敗") from exc
 
 
 def get_latest_validation_date() -> str:
@@ -1553,6 +1563,8 @@ def create_validation_run(
             "entry_date": "",
             "entry_open_price": 0.0,
             "daily_closes": {},
+            "daily_highs": {},
+            "daily_lows": {},
             "current_price": start_price,
             "current_day_change_pct": safe_float(stock.get("change_percent")),
             "return_from_start_close_pct": 0.0,
@@ -1599,6 +1611,14 @@ def update_validation_run(
             continue
         price = safe_float(stock.get("price"))
         open_price = safe_float(stock.get("open")) or price
+        high_price = max(
+            [x for x in [safe_float(stock.get("high")), price, open_price] if x > 0],
+            default=price,
+        )
+        low_price = positive_min(
+            [safe_float(stock.get("low")), price, open_price],
+            min(price, open_price) if price > 0 and open_price > 0 else price,
+        )
         if price <= 0:
             continue
         if not item.get("entry_date"):
@@ -1606,8 +1626,16 @@ def update_validation_run(
             item["entry_open_price"] = open_price
             changed = True
         daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
+        daily_highs: Dict[str, float] = item.setdefault("daily_highs", {})
+        daily_lows: Dict[str, float] = item.setdefault("daily_lows", {})
         if today_date not in daily_closes:
             daily_closes[today_date] = price
+            changed = True
+        if today_date not in daily_highs:
+            daily_highs[today_date] = high_price
+            changed = True
+        if today_date not in daily_lows:
+            daily_lows[today_date] = low_price
             changed = True
         start_close = safe_float(item.get("start_close_price"))
         item["current_price"] = price
@@ -1617,22 +1645,28 @@ def update_validation_run(
         entry_price = safe_float(item.get("entry_open_price"))
         entry_date  = safe_str(item.get("entry_date"))
         if entry_price > 0 and entry_date:
-            sorted_closes = [v for k, v in sorted(daily_closes.items()) if k >= entry_date]
+            tracked_dates = [k for k in sorted(daily_closes) if k >= entry_date]
+            sorted_closes = [daily_closes[k] for k in tracked_dates]
             if sorted_closes:
                 item["latest_change_pct"] = calc_pct(entry_price, sorted_closes[-1])
-            closes_after = [v for k, v in daily_closes.items() if k >= entry_date]
-            if closes_after:
-                item["max_high_pct"]     = calc_pct(entry_price, max(closes_after))
-                item["max_drawdown_pct"] = calc_pct(entry_price, min(closes_after))
+            highs_after = [daily_highs.get(k, daily_closes[k]) for k in tracked_dates]
+            lows_after = [daily_lows.get(k, daily_closes[k]) for k in tracked_dates]
+            if highs_after:
+                item["max_high_pct"] = calc_pct(entry_price, max(highs_after))
+            if lows_after:
+                item["max_drawdown_pct"] = calc_pct(entry_price, min(lows_after))
             target_price = entry_price * (1 + TAKE_PROFIT_PCT)
             stop_price   = entry_price * (1 - STOP_LOSS_PCT)
             hit_target, hit_stop = False, False
-            for c in sorted_closes:
-                if c >= target_price:
-                    hit_target = True
-                    break
-                if c <= stop_price:
+            for k in tracked_dates:
+                day_high = daily_highs.get(k, daily_closes[k])
+                day_low = daily_lows.get(k, daily_closes[k])
+                # 沒有分時資料時採保守口徑：同日同時觸及停利/停損，先視為停損。
+                if day_low <= stop_price:
                     hit_stop = True
+                    break
+                if day_high >= target_price:
+                    hit_target = True
                     break
             item["hit_target"] = hit_target
             item["hit_stop"]   = hit_stop
@@ -1652,8 +1686,8 @@ def update_validation_run(
                 item["is_closed"] = False
             horizon_returns: Dict[str, float] = {}
             for horizon in [1, 2, 3]:
-                if len(sorted_closes) > horizon:
-                    horizon_returns[str(horizon)] = calc_pct(entry_price, sorted_closes[horizon])
+                if len(sorted_closes) >= horizon:
+                    horizon_returns[str(horizon)] = calc_pct(entry_price, sorted_closes[horizon - 1])
             item["horizon_returns"] = horizon_returns
         changed = True
     if changed:
