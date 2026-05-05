@@ -40,9 +40,14 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "top_n": 0,
 }
 CACHE_SECONDS = 60
+_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
+HISTORY_CACHE_HOURS = 6
+HISTORY_CACHE_MAX_SYMBOLS = 400
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
+HISTORICAL_K_CANDLES = 250
+HISTORICAL_K_CALENDAR_DAYS = 400
 RECOMMENDATION_SEED_LIMIT = 120
 
 
@@ -118,6 +123,11 @@ def normalize_date_key(v: Any) -> str:
         return ""
     digits = "".join(ch for ch in s if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else ""
+
+
+def positive_min(values: List[float], default: float = 0.0) -> float:
+    positives = [x for x in values if x > 0]
+    return min(positives) if positives else default
 
 
 def resolve_cert_path() -> Optional[str]:
@@ -201,6 +211,17 @@ def format_price_value(v: float) -> str:
     if abs(rounded - int(rounded)) < 0.001:
         return str(int(rounded))
     return f"{rounded:.2f}"
+
+
+def format_number(num: float) -> str:
+    try:
+        if num is None or math.isnan(num):
+            return "-"
+    except Exception:
+        return "-"
+    if abs(num - int(num)) < 0.001:
+        return f"{int(num):,}"
+    return f"{num:,.2f}"
 
 
 def calc_position_ratio(price: float, high_price: float, low_price: float) -> float:
@@ -384,6 +405,190 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
                 if isinstance(val, list):
                     return val
     return []
+
+
+# =========================
+# Historical K helpers
+# =========================
+def get_history_cache(symbol: str) -> Optional[Dict[str, Any]]:
+    item = _HISTORY_CACHE.get(symbol)
+    if not item:
+        return None
+    fetched_at = item.get("fetched_at")
+    if not isinstance(fetched_at, datetime):
+        return None
+    if (now_taipei() - fetched_at).total_seconds() > HISTORY_CACHE_HOURS * 3600:
+        return None
+    data = item.get("data")
+    return data if isinstance(data, dict) else None
+
+
+def set_history_cache(symbol: str, data: Dict[str, Any]) -> None:
+    _HISTORY_CACHE[symbol] = {"fetched_at": now_taipei(), "data": data}
+    if len(_HISTORY_CACHE) <= HISTORY_CACHE_MAX_SYMBOLS:
+        return
+    stale_keys = sorted(
+        _HISTORY_CACHE.items(),
+        key=lambda item: item[1].get("fetched_at") or datetime.min.replace(tzinfo=TZ_TAIPEI),
+    )
+    for cache_key, _ in stale_keys[: max(len(_HISTORY_CACHE) - HISTORY_CACHE_MAX_SYMBOLS, 0)]:
+        _HISTORY_CACHE.pop(cache_key, None)
+
+
+def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
+    cached = get_history_cache(symbol)
+    if cached:
+        return cached
+
+    stock_client = get_stock_rest_client()
+    to_date = now_taipei().strftime("%Y-%m-%d")
+    from_date = (now_taipei() - timedelta(days=HISTORICAL_K_CALENDAR_DAYS)).strftime("%Y-%m-%d")
+    resp = stock_client.historical.candles(
+        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
+    )
+
+    candles: List[Dict[str, Any]] = []
+    for row in extract_rows(resp):
+        if not isinstance(row, dict):
+            continue
+        candle = {
+            "date": safe_str(row.get("date")),
+            "open": safe_float(row.get("open")),
+            "high": safe_float(row.get("high")),
+            "low": safe_float(row.get("low")),
+            "close": safe_float(row.get("close")),
+            "volume": safe_int(row.get("volume")),
+            "change": safe_float(row.get("change")),
+        }
+        if candle["close"] > 0:
+            candles.append(candle)
+
+    if len(candles) > HISTORICAL_K_CANDLES:
+        candles = candles[-HISTORICAL_K_CANDLES:]
+    data = {"candles": candles}
+    set_history_cache(symbol, data)
+    return data
+
+
+def overlay_snapshot_on_candles(
+    candles: List[Dict[str, Any]],
+    base_stock: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], float]:
+    if not candles:
+        return [], 0.0
+
+    merged = [dict(x) for x in candles]
+    snapshot_price = safe_float(base_stock.get("price"))
+    snapshot_volume = safe_int(base_stock.get("volume"))
+    snapshot_prev_close = safe_float(base_stock.get("prev_close"))
+    snapshot_open = safe_float(base_stock.get("open"))
+    snapshot_high = safe_float(base_stock.get("high"))
+    snapshot_low = safe_float(base_stock.get("low"))
+    snapshot_date_key = normalize_date_key(base_stock.get("update_time")) or now_taipei().strftime("%Y%m%d")
+    last_candle_date_key = normalize_date_key(merged[-1].get("date"))
+
+    if snapshot_price <= 0:
+        prev_close = snapshot_prev_close
+        if prev_close <= 0 and len(merged) >= 2:
+            prev_close = safe_float(merged[-2].get("close"))
+        elif prev_close <= 0:
+            prev_close = safe_float(merged[-1].get("close"))
+        return merged, prev_close
+
+    if snapshot_date_key and last_candle_date_key and snapshot_date_key > last_candle_date_key:
+        prev_close = snapshot_prev_close if snapshot_prev_close > 0 else safe_float(merged[-1].get("close"))
+        open_price = snapshot_open if snapshot_open > 0 else prev_close
+        high_price = max([x for x in [snapshot_high, snapshot_price, open_price] if x > 0], default=snapshot_price)
+        low_price = positive_min([snapshot_low, snapshot_price, open_price], min(snapshot_price, open_price))
+        merged.append({
+            "date": snapshot_date_key,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": snapshot_price,
+            "volume": snapshot_volume if snapshot_volume > 0 else safe_int(merged[-1].get("volume")),
+            "change": round(snapshot_price - prev_close, 2) if prev_close > 0 else 0.0,
+        })
+        return merged, prev_close
+
+    current = dict(merged[-1])
+    prev_close = snapshot_prev_close if snapshot_prev_close > 0 else (
+        safe_float(merged[-2].get("close")) if len(merged) >= 2 else safe_float(current.get("close"))
+    )
+    current_open = snapshot_open if snapshot_open > 0 else safe_float(current.get("open"))
+    current_high = max(
+        [x for x in [safe_float(current.get("high")), snapshot_high, snapshot_price, current_open] if x > 0],
+        default=snapshot_price,
+    )
+    current_low = positive_min(
+        [safe_float(current.get("low")), snapshot_low, snapshot_price, current_open],
+        min(snapshot_price, current_open if current_open > 0 else snapshot_price),
+    )
+    current["open"] = current_open if current_open > 0 else snapshot_price
+    current["high"] = current_high
+    current["low"] = current_low
+    current["close"] = snapshot_price
+    if snapshot_volume > 0:
+        current["volume"] = snapshot_volume
+    current["change"] = round(snapshot_price - prev_close, 2) if prev_close > 0 else safe_float(current.get("change"))
+    merged[-1] = current
+    return merged, prev_close
+
+
+def ema(values: List[float], period: int) -> List[float]:
+    if not values:
+        return []
+    alpha = 2 / (period + 1)
+    result = [values[0]]
+    for value in values[1:]:
+        result.append((value * alpha) + (result[-1] * (1 - alpha)))
+    return result
+
+
+def calc_rsi(closes: List[float], period: int = 14) -> float:
+    if len(closes) <= period:
+        return 50.0
+    gains: List[float] = []
+    losses: List[float] = []
+    for index in range(1, len(closes)):
+        diff = closes[index] - closes[index - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(abs(min(diff, 0.0)))
+    avg_gain = avg(gains[:period])
+    avg_loss = avg(losses[:period])
+    for index in range(period, len(gains)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[index]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[index]) / period
+    if avg_loss == 0:
+        return 100.0
+    return 100 - (100 / (1 + avg_gain / avg_loss))
+
+
+def calc_macd(closes: List[float]) -> Tuple[float, float, float]:
+    if len(closes) < 35:
+        return 0.0, 0.0, 0.0
+    ema12 = ema(closes, 12)
+    ema26 = ema(closes, 26)
+    macd_line_series = [a - b for a, b in zip(ema12, ema26)]
+    signal_series = ema(macd_line_series, 9)
+    macd_line = macd_line_series[-1]
+    signal_line = signal_series[-1]
+    return macd_line, signal_line, macd_line - signal_line
+
+
+def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
+    if len(candles) < 2:
+        return 0.0
+    true_ranges: List[float] = []
+    prev_close = safe_float(candles[0].get("close"))
+    for candle in candles[1:]:
+        high = safe_float(candle.get("high"))
+        low = safe_float(candle.get("low"))
+        close = safe_float(candle.get("close"))
+        true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(max(true_range, 0.0))
+        prev_close = close
+    return avg(true_ranges[-period:]) if true_ranges else 0.0
 
 
 # =========================
