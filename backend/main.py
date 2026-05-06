@@ -1,4 +1,6 @@
 import os
+import json
+import urllib.request
 import math
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,6 +42,16 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "top_n": 0,
 }
 CACHE_SECONDS = 30
+
+# 驗證系統 - Upstash Redis
+UPSTASH_REDIS_REST_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").strip()
+UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "").strip()
+UPSTASH_REDIS_KEY        = "twstock:validation_runs"
+VALIDATION_STORE_PATH    = os.getenv(
+    "VALIDATION_STORE_PATH",
+    os.path.join(os.getcwd(), "validation_runs.json"),
+)
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "").strip()
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
@@ -1660,6 +1672,258 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+
+# =========================
+# 驗證系統
+# =========================
+
+def _upstash_cmd(*args) -> None:
+    """呼叫 Upstash Redis REST API"""
+    if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
+        return None
+    try:
+        body = json.dumps(list(args)).encode("utf-8")
+        req  = urllib.request.Request(
+            UPSTASH_REDIS_REST_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {UPSTASH_REDIS_REST_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return json.loads(resp.read().decode("utf-8")).get("result")
+    except Exception:
+        return None
+
+
+def load_validation_store() -> Dict[str, Any]:
+    """讀取驗證資料（優先 Upstash，fallback 本地 JSON）"""
+    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+        try:
+            raw = _upstash_cmd("GET", UPSTASH_REDIS_KEY)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data.setdefault("runs", {})
+                    return data
+            return {"runs": {}}
+        except Exception:
+            # 讀取失敗：回傳哨兵，避免誤寫覆蓋
+            return {"runs": {}, "_read_error": True}
+    try:
+        if not os.path.exists(VALIDATION_STORE_PATH):
+            return {"runs": {}}
+        with open(VALIDATION_STORE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"runs": {}}
+        data.setdefault("runs", {})
+        return data
+    except Exception:
+        return {"runs": {}}
+
+
+def save_validation_store(store: Dict[str, Any]) -> None:
+    """寫入驗證資料（讀取失敗時不寫入，防止覆蓋）"""
+    if store.get("_read_error"):
+        return
+    clean = {k: v for k, v in store.items() if k != "_read_error"}
+
+    if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+        try:
+            _upstash_cmd("SET", UPSTASH_REDIS_KEY, json.dumps(clean, ensure_ascii=False))
+        except Exception:
+            pass
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH)) or ".", exist_ok=True)
+        tmp = f"{VALIDATION_STORE_PATH}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(clean, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, VALIDATION_STORE_PATH)
+    except Exception:
+        pass
+
+
+def create_validation_run(
+    date_key: str,
+    recommendations: List[Dict[str, Any]],
+    last_update: str,
+) -> Dict[str, Any]:
+    """收盤後保存推薦10檔，等隔日開盤填入進場價"""
+    items = []
+    for i, stock in enumerate(recommendations[:10]):
+        items.append({
+            "rank":               i + 1,
+            "symbol":             stock.get("symbol", ""),
+            "name":               stock.get("name", ""),
+            "signal":             stock.get("signal", ""),
+            "operation_rating":   stock.get("operation_rating", ""),
+            "setup_score":        safe_float(stock.get("setup_score", stock.get("score", 0))),
+            "start_close_price":  safe_float(stock.get("price")),
+            # 進場資訊（隔日才填）
+            "entry_date":         "",
+            "entry_open_price":   0.0,
+            # 每日收盤追蹤 { "20260506": 85.0, ... }
+            "daily_closes":       {},
+            # 計算結果
+            "return_from_close_pct": 0.0,
+            "horizon_returns":    {},   # {"1": x, "3": x, "5": x}
+        })
+
+    run = {
+        "date":       date_key,
+        "created_at": format_dt_taipei(now_taipei()),
+        "last_update": last_update,
+        "items":      items,
+    }
+    store = load_validation_store()
+    if store.get("_read_error"):
+        return run
+    store["runs"][date_key] = run
+    save_validation_store(store)
+    return run
+
+
+def update_validation_run(
+    run: Dict[str, Any],
+    today_date: str,
+    stock_map: Dict[str, Any],
+    last_update: str,
+) -> Dict[str, Any]:
+    """
+    每次呼叫 /validation 時更新：
+    1. 若隔日第一次 → 填入開盤價（進場價）
+    2. 記錄今日收盤
+    3. 重算 horizon_returns（1/3/5日）
+    """
+    run_date = normalize_date_key(run.get("date", ""))
+    if not run_date or today_date <= run_date:
+        return run
+
+    changed = False
+    for item in run.get("items", []):
+        symbol = safe_str(item.get("symbol"))
+        stock  = stock_map.get(symbol)
+        if not stock:
+            continue
+
+        price      = safe_float(stock.get("price"))
+        open_price = safe_float(stock.get("open")) or price
+        if price <= 0:
+            continue
+
+        # 步驟1：首次出現 → 記錄進場價
+        if not item.get("entry_date"):
+            item["entry_date"]       = today_date
+            item["entry_open_price"] = open_price
+            changed = True
+
+        # 步驟2：記錄今日收盤
+        daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
+        if today_date not in daily_closes:
+            daily_closes[today_date] = price
+            changed = True
+
+        # 步驟3：計算報酬
+        start_close = safe_float(item.get("start_close_price"))
+        if start_close > 0:
+            item["return_from_close_pct"] = calc_pct(start_close, price)
+
+        entry_price = safe_float(item.get("entry_open_price"))
+        entry_date  = safe_str(item.get("entry_date"))
+        if entry_price > 0 and entry_date:
+            # sorted_closes: 進場日起的每日收盤（時間順序）
+            # sorted_closes[0] = 進場日收盤
+            # sorted_closes[1] = 第1日收盤 → horizon "1"
+            # sorted_closes[3] = 第3日收盤 → horizon "3"
+            # sorted_closes[5] = 第5日收盤 → horizon "5"
+            sorted_closes = [
+                v for k, v in sorted(daily_closes.items()) if k >= entry_date
+            ]
+            horizon_returns: Dict[str, float] = {}
+            for h in [1, 3, 5]:
+                if len(sorted_closes) > h:
+                    horizon_returns[str(h)] = calc_pct(entry_price, sorted_closes[h])
+            item["horizon_returns"] = horizon_returns
+
+    if changed:
+        run["last_update"] = last_update
+        store = load_validation_store()
+        if not store.get("_read_error"):
+            run_date_key = normalize_date_key(run.get("date", ""))
+            store["runs"][run_date_key] = run
+            save_validation_store(store)
+    return run
+
+
+def update_all_runs(
+    today_date: str,
+    stock_map: Dict[str, Any],
+    last_update: str,
+) -> None:
+    """批次更新所有歷史 run（只在 /validation 呼叫）"""
+    store = load_validation_store()
+    if store.get("_read_error"):
+        return
+    for date_key, run in list(store["runs"].items()):
+        if isinstance(run, dict):
+            store["runs"][date_key] = update_validation_run(
+                run, today_date, stock_map, last_update
+            )
+    save_validation_store(store)
+
+
+def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    """計算單一 run 的4個總結指標"""
+    items   = run.get("items", [])
+    entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
+
+    if not entered:
+        return {
+            "count": len(items), "entered_count": 0,
+            "avg_return_pct": 0.0, "win_rate_pct": 0.0,
+            "best": None, "worst": None, "horizon_summary": {},
+        }
+
+    # 以進場後最新報酬計算
+    latest_returns = [safe_float(x.get("horizon_returns", {}).get("1",
+                        x.get("return_from_close_pct", 0))) for x in entered]
+    wins   = [r for r in latest_returns if r > 0]
+
+    best_item  = max(entered, key=lambda x: safe_float(x.get("return_from_close_pct")))
+    worst_item = min(entered, key=lambda x: safe_float(x.get("return_from_close_pct")))
+
+    # Horizon 統計（1/3/5日）
+    horizon_summary: Dict[str, Any] = {}
+    for h in ["1", "3", "5"]:
+        h_rets = [
+            safe_float(x.get("horizon_returns", {}).get(h))
+            for x in entered
+            if x.get("horizon_returns", {}).get(h) is not None
+        ]
+        if h_rets:
+            horizon_summary[h] = {
+                "count":        len(h_rets),
+                "avg_pct":      round(avg(h_rets), 2),
+                "win_rate_pct": round(sum(1 for r in h_rets if r > 0) / len(h_rets) * 100, 2),
+            }
+
+    return {
+        "count":         len(items),
+        "entered_count": len(entered),
+        "avg_return_pct": round(avg(latest_returns), 2),
+        "win_rate_pct":  round(len(wins) / len(entered) * 100, 2) if entered else 0.0,
+        "best":  {"symbol": best_item.get("symbol"), "name": best_item.get("name"),
+                  "pct": safe_float(best_item.get("return_from_close_pct"))},
+        "worst": {"symbol": worst_item.get("symbol"), "name": worst_item.get("name"),
+                  "pct": safe_float(worst_item.get("return_from_close_pct"))},
+        "horizon_summary": horizon_summary,
+    }
+
+
 # =========================
 # Startup
 # =========================
@@ -1683,6 +1947,118 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+
+@app.get("/validation")
+def get_validation(
+    date: str = Query("latest"),
+    force_refresh: bool = Query(False),
+):
+    """
+    驗證追蹤端點：
+    - 收盤後自動保存當日推薦10檔
+    - 每次呼叫更新所有 run 的追蹤資料
+    - 返回指定日期（或最新）的驗證結果
+    """
+    try:
+        result      = get_cached_all_stocks(force_refresh=force_refresh)
+        all_stocks  = result["stocks"]
+        market_status = get_market_status_text()
+        today_date  = normalize_date_key(result["data_date"])
+        stock_map   = {safe_str(s.get("symbol")): s for s in all_stocks if safe_str(s.get("symbol"))}
+
+        # 收盤後：保存今日推薦（若尚未保存）
+        if should_settle_recommendations(market_status):
+            store = load_validation_store()
+            if not store.get("_read_error") and today_date and today_date not in store.get("runs", {}):
+                recs, _ = get_recommendations_safe(
+                    all_stocks,
+                    data_date=result["data_date"],
+                    last_update=result["last_update"],
+                    top_n=10,
+                )
+                if recs:
+                    create_validation_run(today_date, recs, result["last_update"])
+
+            # 更新所有 run（只在 /validation 呼叫）
+            update_all_runs(today_date, stock_map, result["last_update"])
+
+        # 取目標日期的 run
+        store = load_validation_store()
+        runs  = store.get("runs", {})
+
+        target_date = today_date if date.lower() in ("latest", "", "auto") else normalize_date_key(date)
+        if not target_date:
+            target_date = max(runs.keys()) if runs else today_date
+
+        run = runs.get(target_date)
+        if run is None:
+            latest = max(runs.keys()) if runs else ""
+            run = {
+                "date":       target_date,
+                "created_at": "",
+                "last_update": result["last_update"],
+                "items":      [],
+                "status":     "missing",
+                "message":    f"尚未保存 {target_date} 的推薦。收盤後呼叫 /validation 即自動保存。"
+                              + (f" 最新日期：{latest}" if latest else ""),
+            }
+
+        return {
+            "success":       True,
+            "market_status": market_status,
+            "data_date":     result["data_date"],
+            "last_update":   result["last_update"],
+            "validation":    run,
+            "summary":       summarize_run(run),
+            "available_dates": sorted(runs.keys(), reverse=True)[:30],
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "success": False, "error": str(e),
+            "trace": traceback.format_exc(),
+        })
+
+
+@app.get("/validation/history")
+def get_validation_history(limit: int = Query(60, ge=1, le=365)):
+    """所有歷史驗證 run 列表（含摘要）"""
+    try:
+        store = load_validation_store()
+        runs  = store.get("runs", {})
+        result = []
+        for date_key in sorted(runs.keys(), reverse=True)[:limit]:
+            run = runs.get(date_key)
+            if not isinstance(run, dict):
+                continue
+            result.append({
+                "date":       run.get("date", date_key),
+                "created_at": run.get("created_at", ""),
+                "last_update": run.get("last_update", ""),
+                "summary":    summarize_run(run),
+                "items":      run.get("items", []),
+            })
+        return {"success": True, "total": len(result), "runs": result}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "success": False, "error": str(e),
+        })
+
+
+@app.post("/admin/reset-validation")
+def reset_validation(secret: str = Query("")):
+    """月底清空驗證資料（需帶 ADMIN_SECRET）"""
+    if not ADMIN_SECRET or secret != ADMIN_SECRET:
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    try:
+        if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+            _upstash_cmd("DEL", UPSTASH_REDIS_KEY)
+        else:
+            save_validation_store({"runs": {}})
+        return {"success": True, "message": "驗證資料已清空，下次收盤後重新累積。"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
 @app.get("/stocks")
