@@ -1095,7 +1095,7 @@ def calc_setup_score(
     change_pct: float,
     prev3_change_pct: float,
     dist_from_ma5_pct: float,
-) -> Tuple[float, str]:
+) -> Tuple[float, str, Dict[str, Any]]:
     """
     純技術評分系統（100分制）
     核心邏輯：找出「K棒轉強、股價站上MA5/MA10、
@@ -1107,47 +1107,86 @@ def calc_setup_score(
     條件四：MACD剛翻多（15分）
     條件五：K棒轉強（20分）
     """
-    # ===== 硬性排除（尚未過熱） =====
-    if close < ma5:
-        return 0.0, "不符條件"   # 跌破5日線
-    if close < ma10:
-        return 0.0, "不符條件"   # 跌破10日線
-    if prev3_change_pct > 10:
-        return 0.0, "不符條件"   # 近3天漲太多（已過熱）
-    if change_pct > 5.0:
-        return 0.0, "不符條件"   # 今日漲幅過大
-    if ma_cross["cross"] == "死亡交叉":
-        return 0.0, "不符條件"   # 死亡交叉
-    if candle_pattern["pattern"] in {"長上影線", "開高走低黑K", "空方吞噬"}:
-        return 0.0, "不符條件"   # 明顯出貨訊號
+    ma_gap_pct = ((ma5 - ma10) / ma10 * 100) if ma10 > 0 else 0
     vol_ratio = vol_pattern.get("vol_ratio", 1.0)
-    if vol_pattern["pattern"] == "爆量" and candle_pattern.get("bias") != "偏多":
-        return 0.0, "不符條件"   # 爆量但非多方型態
 
-    score = 0.0
+    ma_score = 0.0
+    volume_score = 0.0
+    macd_score = 0.0
+    candle_score = 0.0
+    overheat_penalty = 0.0
+    overheat_flags: List[str] = []
+    fail_reasons: List[str] = []
+
+    if close < ma5:
+        fail_reasons.append("跌破5日線")
+    if close < ma10:
+        fail_reasons.append("跌破10日線")
+    if prev3_change_pct > 10:
+        fail_reasons.append("近3日漲幅過大")
+        overheat_flags.append("近3日漲幅過大")
+        overheat_penalty += 18
+    if change_pct > 5.2:
+        fail_reasons.append("單日漲幅偏大")
+        overheat_flags.append("單日漲幅偏大")
+        overheat_penalty += 18
+    if dist_from_ma5_pct > 8.0:
+        fail_reasons.append("距5日線過遠")
+        overheat_flags.append("距5日線過遠")
+        overheat_penalty += 12
+    if ma_cross["cross"] == "死亡交叉":
+        fail_reasons.append("5日線死亡交叉10日線")
+    if candle_pattern["pattern"] in {"長上影線", "開高走低黑K", "空方吞噬"}:
+        fail_reasons.append(f"K棒偏空：{candle_pattern['pattern']}")
+    if vol_pattern["pattern"] == "爆量" and candle_pattern.get("bias") != "偏多":
+        fail_reasons.append("爆量但K棒未轉強")
+        overheat_flags.append("爆量未轉強")
+        overheat_penalty += 10
+
+    if fail_reasons:
+        return 0.0, "不符條件", {
+            "candle_score": 0.0,
+            "ma_score": 0.0,
+            "volume_score": 0.0,
+            "macd_score": 0.0,
+            "overheat_penalty": round(overheat_penalty, 1),
+            "total_score": 0.0,
+            "ma_score_max": 45,
+            "volume_score_max": 20,
+            "macd_score_max": 15,
+            "candle_score_max": 20,
+            "ma_gap_pct": round(ma_gap_pct, 2),
+            "vol_ratio": round(vol_ratio, 2),
+            "dist_from_ma5_pct": round(dist_from_ma5_pct, 2),
+            "macd_hist": round(macd_hist, 4),
+            "prev_macd_hist": round(prev_macd_hist, 4),
+            "overheat_flags": overheat_flags,
+            "fail_reasons": fail_reasons,
+        }
 
     # ===== 條件一：股價站上MA5且MA10（25分）=====
     # 兩個都站上才完整
     if close > ma5 and close > ma10:
-        score += 20
+        ma_score += 20
         # 剛站上（今日站上）加分
         if dist_from_ma5_pct <= 2.0:
-            score += 5   # 剛站上不遠，轉折最佳位置
+            ma_score += 5   # 剛站上不遠，轉折最佳位置
 
     # ===== 條件二：MA5接近或黃金交叉MA10（20分）=====
-    ma_gap_pct = ((ma5 - ma10) / ma10 * 100) if ma10 > 0 else 0
     if ma_cross["cross"] == "黃金交叉":
         days = ma_cross["days_ago"]
         if days <= 2:
-            score += 20   # 剛發生黃金交叉（最強）
+            ma_score += 20   # 剛發生黃金交叉（最強）
         elif days <= 5:
-            score += 15   # 近5天內黃金交叉
+            ma_score += 15   # 近5天內黃金交叉
     elif -0.5 <= ma_gap_pct <= 1.0:
-        score += 12   # MA5接近MA10（即將黃金交叉）
+        ma_score += 12   # MA5接近MA10（即將黃金交叉）
     elif 1.0 < ma_gap_pct <= 3.0:
-        score += 8    # MA5略高於MA10（已轉多但未過熱）
+        ma_score += 8    # MA5略高於MA10（已轉多但未過熱）
     elif ma_gap_pct > 3.0:
-        score += 3    # MA5遠高於MA10（可能過熱）
+        ma_score += 3    # MA5遠高於MA10（可能過熱）
+        overheat_penalty += 4
+        overheat_flags.append("MA5明顯高於MA10")
 
     # ===== 條件三：成交量放大（20分）=====
     vol_score_map = {
@@ -1158,10 +1197,12 @@ def calc_setup_score(
         "量縮":       0,
         "資料不足":   5,
     }
-    score += vol_score_map.get(vol_pattern["pattern"], 5)
+    volume_score = float(vol_score_map.get(vol_pattern["pattern"], 5))
+    if vol_ratio > 3.0:
+        overheat_penalty += 5
+        overheat_flags.append("量能偏爆量")
 
     # ===== 條件四：MACD剛翻多（15分）=====
-    macd_score = 0.0
     if prev_macd_hist < 0 and macd_hist >= 0:
         macd_score = 15   # 剛翻多（最強訊號）
     elif prev_macd_hist < 0 and macd_hist < 0 and macd_hist > prev_macd_hist:
@@ -1170,7 +1211,6 @@ def calc_setup_score(
         macd_score = 8    # 正值擴大，動能持續
     elif macd_hist > 0:
         macd_score = 4    # 正值但縮小
-    score += macd_score
 
     # ===== 條件五：K棒轉強（20分）=====
     k_bonus_map = {
@@ -1181,13 +1221,41 @@ def calc_setup_score(
         "十字星":      5,
         "無明顯型態":  5,
     }
-    k_score = float(k_bonus_map.get(candle_pattern["pattern"], 5))
+    candle_score = float(k_bonus_map.get(candle_pattern["pattern"], 5))
     # 今日漲幅適中加分
     if 0.5 <= change_pct <= 3.0:
-        k_score += 3
-    score += min(k_score, 20.0)
+        candle_score += 3
+    candle_score = min(candle_score, 20.0)
 
-    score = round(clamp(score, 0.0, 100.0), 1)
+    if change_pct > 4.2:
+        overheat_penalty += 8
+        overheat_flags.append("單日漲幅接近過熱")
+    if dist_from_ma5_pct > 5.0:
+        overheat_penalty += 6
+        overheat_flags.append("離5日線偏遠")
+
+    raw_score = ma_score + volume_score + macd_score + candle_score
+    score = round(clamp(raw_score - overheat_penalty, 0.0, 100.0), 1)
+
+    score_breakdown = {
+        "candle_score": round(candle_score, 1),
+        "ma_score": round(ma_score, 1),
+        "volume_score": round(volume_score, 1),
+        "macd_score": round(macd_score, 1),
+        "overheat_penalty": round(overheat_penalty, 1),
+        "total_score": score,
+        "ma_score_max": 45,
+        "volume_score_max": 20,
+        "macd_score_max": 15,
+        "candle_score_max": 20,
+        "ma_gap_pct": round(ma_gap_pct, 2),
+        "vol_ratio": round(vol_ratio, 2),
+        "dist_from_ma5_pct": round(dist_from_ma5_pct, 2),
+        "macd_hist": round(macd_hist, 4),
+        "prev_macd_hist": round(prev_macd_hist, 4),
+        "overheat_flags": overheat_flags,
+        "fail_reasons": [],
+    }
 
     # ===== 判斷型態 =====
     # 準備轉強：MACD剛翻多或負值縮小，量放大，K棒轉強，漲幅不大
@@ -1208,16 +1276,16 @@ def calc_setup_score(
     )
 
     if score >= 80:
-        return score, "準備轉強" if is_turning else "續攻型"
+        return score, "準備轉強" if is_turning else "續攻型", score_breakdown
     if score >= 65:
         if is_turning:
-            return score, "準備轉強"
+            return score, "準備轉強", score_breakdown
         if is_continuation:
-            return score, "續攻型"
-        return score, "轉強觀察"
+            return score, "續攻型", score_breakdown
+        return score, "轉強觀察", score_breakdown
     if score >= 50:
-        return score, "整理待發"
-    return score, "不符條件"
+        return score, "整理待發", score_breakdown
+    return score, "不符條件", score_breakdown
 
 
 def build_technical_reason(
@@ -1235,38 +1303,54 @@ def build_technical_reason(
     candle_pattern: Dict[str, Any],
     ma_cross: Dict[str, Any],
     change_pct: float,
+    score_breakdown: Dict[str, Any],
+    dist_from_ma5_pct: float,
 ) -> str:
-    lines = [f"【{name} 技術分析 | {stock_type} | 評分 {setup_score}分】"]
+    lines = [f"【{name} 收盤技術篩選｜{stock_type}｜總分 {setup_score}】"]
 
     # 均線
     ma_desc = f"MA5 {format_price_value(ma5)} / MA10 {format_price_value(ma10)} / MA20 {format_price_value(ma20)}"
-    lines.append(f"均線結構：{ma_desc}，現價 {format_price_value(close)}（" + ("站上5/10日線 ✓" if close > ma10 else "需關注") + "）")
+    ma_gap_pct = safe_float(score_breakdown.get("ma_gap_pct"))
+    lines.append(
+        f"均線：現價 {format_price_value(close)} 已站上5日與10日線，{ma_desc}；"
+        f"MA5與MA10差距 {ma_gap_pct:+.2f}%，距5日線 {dist_from_ma5_pct:+.2f}%，"
+        f"{safe_str(ma_cross.get('cross'), '無')}，均線分 {score_breakdown.get('ma_score', 0)}/45。"
+    )
 
     # MACD
     if prev_macd_hist < 0 and macd_hist >= 0:
-        lines.append(f"MACD：由負翻正（Hist {prev_macd_hist:.3f} → {macd_hist:.3f}），動能轉折訊號最強。")
+        macd_text = f"由負翻正（Hist {prev_macd_hist:.3f} -> {macd_hist:.3f}），屬剛翻多。"
     elif prev_macd_hist < 0 and macd_hist > prev_macd_hist:
-        lines.append(f"MACD：負值縮小中（Hist {prev_macd_hist:.3f} → {macd_hist:.3f}），動能持續改善。")
+        macd_text = f"負值收斂（Hist {prev_macd_hist:.3f} -> {macd_hist:.3f}），翻多前段。"
     elif macd_hist > 0 and macd_hist > prev_macd_hist:
-        lines.append(f"MACD：正值擴大（Hist {macd_hist:.3f}），多方動能持續。")
+        macd_text = f"正值擴大（Hist {macd_hist:.3f}），多方動能延續。"
     else:
-        lines.append(f"MACD：Hist {macd_hist:.3f}，動能待確認。")
+        macd_text = f"Hist {macd_hist:.3f}，動能仍需確認。"
+    lines.append(f"MACD：{macd_text}MACD分 {score_breakdown.get('macd_score', 0)}/15。")
 
     # 量能
-    lines.append(f"量能：{vol_pattern['pattern']}（量比 {vol_pattern.get('vol_ratio', 0):.2f} 倍）。")
+    lines.append(
+        f"量能：{vol_pattern['pattern']}，量比 {vol_pattern.get('vol_ratio', 0):.2f} 倍；"
+        f"量能分 {score_breakdown.get('volume_score', 0)}/20。"
+    )
 
     # K棒
-    if candle_pattern["pattern"] != "無明顯型態":
-        lines.append(f"K棒型態：{candle_pattern['pattern']}（{candle_pattern['bias']}）。")
+    lines.append(
+        f"K棒：{candle_pattern['pattern']}（{candle_pattern['bias']}），今日漲幅 {change_pct:+.2f}%；"
+        f"K棒分 {score_breakdown.get('candle_score', 0)}/20。"
+    )
 
-    # 均線交叉
-    if ma_cross["cross"] != "無":
-        lines.append(f"均線交叉：{ma_cross['cross']}（{ma_cross['days_ago']} 天前）。")
+    overheat_penalty = safe_float(score_breakdown.get("overheat_penalty"))
+    overheat_flags = score_breakdown.get("overheat_flags") or []
+    if overheat_penalty > 0:
+        lines.append(f"過熱控管：{'、'.join(overheat_flags)}，扣 {overheat_penalty:.1f} 分。")
+    else:
+        lines.append("過熱控管：單日漲幅、量能與5日線乖離仍在可接受區，未判定過熱。")
 
     # RSI
-    lines.append(f"RSI(14)：{rsi14:.1f}{'（健康動能區）' if 50 <= rsi14 <= 70 else '（注意過熱）' if rsi14 > 70 else ''}。")
+    lines.append(f"RSI(14)：{rsi14:.1f}{'，位於健康動能區。' if 50 <= rsi14 <= 70 else '，需留意是否過熱。' if rsi14 > 70 else '。'}")
 
-    return "".join(lines)
+    return " ".join(lines)
 
 
 def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str, Any]:
@@ -1320,7 +1404,7 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         change_pct = safe_float(base_stock.get("change_percent"))
 
         # 純技術評分
-        setup_score, stock_type = calc_setup_score(
+        setup_score, stock_type, score_breakdown = calc_setup_score(
             close=close_now,
             ma5=ma5,
             ma10=ma10,
@@ -1354,6 +1438,8 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             candle_pattern=candle_pattern,
             ma_cross=ma_cross,
             change_pct=change_pct,
+            score_breakdown=score_breakdown,
+            dist_from_ma5_pct=dist_from_ma5_pct,
         )
 
         # 操作評級
@@ -1393,6 +1479,7 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "risk_note":          f"收盤跌破 MA5（{format_price_value(ma5)}）即停損出場。",
             "recommendation_score": setup_score,
             "setup_score":          setup_score,
+            "score_breakdown":      score_breakdown,
             "score":                setup_score,
             "stock_type":           stock_type,
             "candlestick_pattern":  candle_pattern["pattern"],
@@ -1494,7 +1581,7 @@ def build_recommendations(
         and safe_float(s.get("price")) >= 8
         and safe_int(s.get("volume")) >= 500
         and safe_int(s.get("volume")) <= 150000
-        and 0.1 <= safe_float(s.get("change_percent")) <= 6.5
+        and 0.1 <= safe_float(s.get("change_percent")) <= 5.2
     ]
 
     def snapshot_prescore(s: Dict[str, Any]) -> float:
@@ -1506,7 +1593,7 @@ def build_recommendations(
         open_p = safe_float(s.get("open"))
         pos    = calc_position_ratio(price, high, low)
         vol_score = 20 if 500 <= vol <= 30000 else 10 if vol <= 80000 else 0
-        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 6.5 else 0
+        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 5.2 else 0
         pos_score = 15 if pos >= 0.65 else 8 if pos >= 0.45 else 0
         red_score = 10 if price >= open_p > 0 else 0
         return vol_score + chg_score + pos_score + red_score
@@ -1580,12 +1667,38 @@ def build_recommendations(
         score  = safe_float(stock.get("recommendation_score") or stock.get("score"))
         signal = safe_str(stock.get("signal"))
         rating = safe_str(stock.get("operation_rating"))
-        if score >= 45 and signal in {"量增轉強", "整理待發", "穩步走高"} and rating in {"A", "B+"}:
+        change_pct = safe_float(stock.get("change_percent"))
+        if (
+            score >= 45
+            and 0.1 <= change_pct <= 5.2
+            and signal in {"量增轉強", "整理待發", "穩步走高"}
+            and rating in {"A", "B+"}
+        ):
             fb = dict(stock)
             fb["setup_score"]          = safe_float(fb.get("setup_score")) or score
             fb["recommendation_score"] = score
             fb["stock_type"]           = fb.get("stock_type") or "收盤快照候選"
             fb["analysis_source"]      = "snapshot_fallback"
+            fb["score_breakdown"]      = {
+                "candle_score": 8,
+                "ma_score": 0,
+                "volume_score": 8,
+                "macd_score": 0,
+                "overheat_penalty": 0,
+                "total_score": score,
+                "ma_score_max": 45,
+                "volume_score_max": 20,
+                "macd_score_max": 15,
+                "candle_score_max": 20,
+                "ma_gap_pct": 0,
+                "vol_ratio": 1,
+                "dist_from_ma5_pct": 0,
+                "macd_hist": 0,
+                "prev_macd_hist": 0,
+                "overheat_flags": [],
+                "fail_reasons": [],
+                "note": "快照補位項目，均線與MACD等待歷史K補齊後重算。",
+            }
             fb["reason"]               = build_snapshot_fallback_reason(fb, score)
             snapshot_fallback.append(fb)
     snapshot_fallback.sort(key=rank_key, reverse=True)
@@ -1625,10 +1738,17 @@ def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
         "risk_reward": s.get("risk_reward", ""),
         "risk_note": s.get("risk_note", ""),
         "setup_score": s.get("setup_score", 0),
+        "score_breakdown": s.get("score_breakdown", {}),
         "stock_type": s.get("stock_type", ""),
         "candlestick_pattern": s.get("candlestick_pattern", ""),
         "ma_cross": s.get("ma_cross", ""),
         "vol_pattern": s.get("vol_pattern", ""),
+        "vol_ratio": s.get("vol_ratio", 0),
+        "ma5_value": s.get("ma5_value", 0),
+        "ma10_value": s.get("ma10_value", 0),
+        "ma20_value": s.get("ma20_value", 0),
+        "macd_hist_value": s.get("macd_hist_value", 0),
+        "dist_from_ma5_pct": s.get("dist_from_ma5_pct", 0),
         "analysis_source": s.get("analysis_source", "snapshot"),
     }
 
