@@ -1770,6 +1770,7 @@ def create_validation_run(
             "daily_closes":       {},
             # 計算結果
             "return_from_close_pct": 0.0,
+            "latest_return_pct":      0.0,
             "horizon_returns":    {},   # {"1": x, "3": x, "5": x}
         })
 
@@ -1843,6 +1844,8 @@ def update_validation_run(
             sorted_closes = [
                 v for k, v in sorted(daily_closes.items()) if k >= entry_date
             ]
+            if sorted_closes:
+                item["latest_return_pct"] = calc_pct(entry_price, sorted_closes[-1])
             horizon_returns: Dict[str, float] = {}
             for h in [1, 3, 5]:
                 if len(sorted_closes) > h:
@@ -1888,13 +1891,12 @@ def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
             "best": None, "worst": None, "horizon_summary": {},
         }
 
-    # 以進場後最新報酬計算
-    latest_returns = [safe_float(x.get("horizon_returns", {}).get("1",
-                        x.get("return_from_close_pct", 0))) for x in entered]
+    # 統一用隔日開盤進場後的最新報酬，不混用推薦日收盤價。
+    latest_returns = [safe_float(x.get("latest_return_pct")) for x in entered]
     wins   = [r for r in latest_returns if r > 0]
 
-    best_item  = max(entered, key=lambda x: safe_float(x.get("return_from_close_pct")))
-    worst_item = min(entered, key=lambda x: safe_float(x.get("return_from_close_pct")))
+    best_item  = max(entered, key=lambda x: safe_float(x.get("latest_return_pct")))
+    worst_item = min(entered, key=lambda x: safe_float(x.get("latest_return_pct")))
 
     # Horizon 統計（1/3/5日）
     horizon_summary: Dict[str, Any] = {}
@@ -1917,9 +1919,9 @@ def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
         "avg_return_pct": round(avg(latest_returns), 2),
         "win_rate_pct":  round(len(wins) / len(entered) * 100, 2) if entered else 0.0,
         "best":  {"symbol": best_item.get("symbol"), "name": best_item.get("name"),
-                  "pct": safe_float(best_item.get("return_from_close_pct"))},
+                  "pct": safe_float(best_item.get("latest_return_pct"))},
         "worst": {"symbol": worst_item.get("symbol"), "name": worst_item.get("name"),
-                  "pct": safe_float(worst_item.get("return_from_close_pct"))},
+                  "pct": safe_float(worst_item.get("latest_return_pct"))},
         "horizon_summary": horizon_summary,
     }
 
@@ -1988,9 +1990,10 @@ def get_validation(
         store = load_validation_store()
         runs  = store.get("runs", {})
 
-        target_date = today_date if date.lower() in ("latest", "", "auto") else normalize_date_key(date)
-        if not target_date:
+        if date.lower() in ("latest", "", "auto"):
             target_date = max(runs.keys()) if runs else today_date
+        else:
+            target_date = normalize_date_key(date) or today_date
 
         run = runs.get(target_date)
         if run is None:
