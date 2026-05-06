@@ -40,14 +40,9 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "top_n": 0,
 }
 CACHE_SECONDS = 60
-_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
-HISTORY_CACHE_HOURS = 6
-HISTORY_CACHE_MAX_SYMBOLS = 400
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
-HISTORICAL_K_CANDLES = 250
-HISTORICAL_K_CALENDAR_DAYS = 400
 RECOMMENDATION_SEED_LIMIT = 120
 
 
@@ -123,11 +118,6 @@ def normalize_date_key(v: Any) -> str:
         return ""
     digits = "".join(ch for ch in s if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else ""
-
-
-def positive_min(values: List[float], default: float = 0.0) -> float:
-    positives = [x for x in values if x > 0]
-    return min(positives) if positives else default
 
 
 def resolve_cert_path() -> Optional[str]:
@@ -211,17 +201,6 @@ def format_price_value(v: float) -> str:
     if abs(rounded - int(rounded)) < 0.001:
         return str(int(rounded))
     return f"{rounded:.2f}"
-
-
-def format_number(num: float) -> str:
-    try:
-        if num is None or math.isnan(num):
-            return "-"
-    except Exception:
-        return "-"
-    if abs(num - int(num)) < 0.001:
-        return f"{int(num):,}"
-    return f"{num:,.2f}"
 
 
 def calc_position_ratio(price: float, high_price: float, low_price: float) -> float:
@@ -405,190 +384,6 @@ def extract_rows(resp: Any) -> List[Dict[str, Any]]:
                 if isinstance(val, list):
                     return val
     return []
-
-
-# =========================
-# Historical K helpers
-# =========================
-def get_history_cache(symbol: str) -> Optional[Dict[str, Any]]:
-    item = _HISTORY_CACHE.get(symbol)
-    if not item:
-        return None
-    fetched_at = item.get("fetched_at")
-    if not isinstance(fetched_at, datetime):
-        return None
-    if (now_taipei() - fetched_at).total_seconds() > HISTORY_CACHE_HOURS * 3600:
-        return None
-    data = item.get("data")
-    return data if isinstance(data, dict) else None
-
-
-def set_history_cache(symbol: str, data: Dict[str, Any]) -> None:
-    _HISTORY_CACHE[symbol] = {"fetched_at": now_taipei(), "data": data}
-    if len(_HISTORY_CACHE) <= HISTORY_CACHE_MAX_SYMBOLS:
-        return
-    stale_keys = sorted(
-        _HISTORY_CACHE.items(),
-        key=lambda item: item[1].get("fetched_at") or datetime.min.replace(tzinfo=TZ_TAIPEI),
-    )
-    for cache_key, _ in stale_keys[: max(len(_HISTORY_CACHE) - HISTORY_CACHE_MAX_SYMBOLS, 0)]:
-        _HISTORY_CACHE.pop(cache_key, None)
-
-
-def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
-    cached = get_history_cache(symbol)
-    if cached:
-        return cached
-
-    stock_client = get_stock_rest_client()
-    to_date = now_taipei().strftime("%Y-%m-%d")
-    from_date = (now_taipei() - timedelta(days=HISTORICAL_K_CALENDAR_DAYS)).strftime("%Y-%m-%d")
-    resp = stock_client.historical.candles(
-        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
-    )
-
-    candles: List[Dict[str, Any]] = []
-    for row in extract_rows(resp):
-        if not isinstance(row, dict):
-            continue
-        candle = {
-            "date": safe_str(row.get("date")),
-            "open": safe_float(row.get("open")),
-            "high": safe_float(row.get("high")),
-            "low": safe_float(row.get("low")),
-            "close": safe_float(row.get("close")),
-            "volume": safe_int(row.get("volume")),
-            "change": safe_float(row.get("change")),
-        }
-        if candle["close"] > 0:
-            candles.append(candle)
-
-    if len(candles) > HISTORICAL_K_CANDLES:
-        candles = candles[-HISTORICAL_K_CANDLES:]
-    data = {"candles": candles}
-    set_history_cache(symbol, data)
-    return data
-
-
-def overlay_snapshot_on_candles(
-    candles: List[Dict[str, Any]],
-    base_stock: Dict[str, Any],
-) -> Tuple[List[Dict[str, Any]], float]:
-    if not candles:
-        return [], 0.0
-
-    merged = [dict(x) for x in candles]
-    snapshot_price = safe_float(base_stock.get("price"))
-    snapshot_volume = safe_int(base_stock.get("volume"))
-    snapshot_prev_close = safe_float(base_stock.get("prev_close"))
-    snapshot_open = safe_float(base_stock.get("open"))
-    snapshot_high = safe_float(base_stock.get("high"))
-    snapshot_low = safe_float(base_stock.get("low"))
-    snapshot_date_key = normalize_date_key(base_stock.get("update_time")) or now_taipei().strftime("%Y%m%d")
-    last_candle_date_key = normalize_date_key(merged[-1].get("date"))
-
-    if snapshot_price <= 0:
-        prev_close = snapshot_prev_close
-        if prev_close <= 0 and len(merged) >= 2:
-            prev_close = safe_float(merged[-2].get("close"))
-        elif prev_close <= 0:
-            prev_close = safe_float(merged[-1].get("close"))
-        return merged, prev_close
-
-    if snapshot_date_key and last_candle_date_key and snapshot_date_key > last_candle_date_key:
-        prev_close = snapshot_prev_close if snapshot_prev_close > 0 else safe_float(merged[-1].get("close"))
-        open_price = snapshot_open if snapshot_open > 0 else prev_close
-        high_price = max([x for x in [snapshot_high, snapshot_price, open_price] if x > 0], default=snapshot_price)
-        low_price = positive_min([snapshot_low, snapshot_price, open_price], min(snapshot_price, open_price))
-        merged.append({
-            "date": snapshot_date_key,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": snapshot_price,
-            "volume": snapshot_volume if snapshot_volume > 0 else safe_int(merged[-1].get("volume")),
-            "change": round(snapshot_price - prev_close, 2) if prev_close > 0 else 0.0,
-        })
-        return merged, prev_close
-
-    current = dict(merged[-1])
-    prev_close = snapshot_prev_close if snapshot_prev_close > 0 else (
-        safe_float(merged[-2].get("close")) if len(merged) >= 2 else safe_float(current.get("close"))
-    )
-    current_open = snapshot_open if snapshot_open > 0 else safe_float(current.get("open"))
-    current_high = max(
-        [x for x in [safe_float(current.get("high")), snapshot_high, snapshot_price, current_open] if x > 0],
-        default=snapshot_price,
-    )
-    current_low = positive_min(
-        [safe_float(current.get("low")), snapshot_low, snapshot_price, current_open],
-        min(snapshot_price, current_open if current_open > 0 else snapshot_price),
-    )
-    current["open"] = current_open if current_open > 0 else snapshot_price
-    current["high"] = current_high
-    current["low"] = current_low
-    current["close"] = snapshot_price
-    if snapshot_volume > 0:
-        current["volume"] = snapshot_volume
-    current["change"] = round(snapshot_price - prev_close, 2) if prev_close > 0 else safe_float(current.get("change"))
-    merged[-1] = current
-    return merged, prev_close
-
-
-def ema(values: List[float], period: int) -> List[float]:
-    if not values:
-        return []
-    alpha = 2 / (period + 1)
-    result = [values[0]]
-    for value in values[1:]:
-        result.append((value * alpha) + (result[-1] * (1 - alpha)))
-    return result
-
-
-def calc_rsi(closes: List[float], period: int = 14) -> float:
-    if len(closes) <= period:
-        return 50.0
-    gains: List[float] = []
-    losses: List[float] = []
-    for index in range(1, len(closes)):
-        diff = closes[index] - closes[index - 1]
-        gains.append(max(diff, 0.0))
-        losses.append(abs(min(diff, 0.0)))
-    avg_gain = avg(gains[:period])
-    avg_loss = avg(losses[:period])
-    for index in range(period, len(gains)):
-        avg_gain = ((avg_gain * (period - 1)) + gains[index]) / period
-        avg_loss = ((avg_loss * (period - 1)) + losses[index]) / period
-    if avg_loss == 0:
-        return 100.0
-    return 100 - (100 / (1 + avg_gain / avg_loss))
-
-
-def calc_macd(closes: List[float]) -> Tuple[float, float, float]:
-    if len(closes) < 35:
-        return 0.0, 0.0, 0.0
-    ema12 = ema(closes, 12)
-    ema26 = ema(closes, 26)
-    macd_line_series = [a - b for a, b in zip(ema12, ema26)]
-    signal_series = ema(macd_line_series, 9)
-    macd_line = macd_line_series[-1]
-    signal_line = signal_series[-1]
-    return macd_line, signal_line, macd_line - signal_line
-
-
-def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
-    if len(candles) < 2:
-        return 0.0
-    true_ranges: List[float] = []
-    prev_close = safe_float(candles[0].get("close"))
-    for candle in candles[1:]:
-        high = safe_float(candle.get("high"))
-        low = safe_float(candle.get("low"))
-        close = safe_float(candle.get("close"))
-        true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        true_ranges.append(max(true_range, 0.0))
-        prev_close = close
-    return avg(true_ranges[-period:]) if true_ranges else 0.0
 
 
 # =========================
@@ -867,36 +662,19 @@ def get_cached_recommendations(
     cached_items = _RECOMMENDATION_CACHE.get("items")
     if (
         isinstance(cached_items, list)
-        and len(cached_items) > 0
         and _RECOMMENDATION_CACHE.get("data_date")   == data_date
         and _RECOMMENDATION_CACHE.get("last_update") == last_update
         and _RECOMMENDATION_CACHE.get("top_n")       == top_n
     ):
         return cached_items
     items = build_recommendations(stocks, top_n=top_n)
-    _RECOMMENDATION_CACHE["items"]       = items
-    _RECOMMENDATION_CACHE["data_date"]   = data_date
-    _RECOMMENDATION_CACHE["last_update"] = last_update
-    _RECOMMENDATION_CACHE["top_n"]       = top_n
+    # 只快取非空結果，避免空推薦被鎖住
+    if items:
+        _RECOMMENDATION_CACHE["items"]       = items
+        _RECOMMENDATION_CACHE["data_date"]   = data_date
+        _RECOMMENDATION_CACHE["last_update"] = last_update
+        _RECOMMENDATION_CACHE["top_n"]       = top_n
     return items
-
-
-def get_recommendations_safe(
-    stocks: List[Dict[str, Any]],
-    data_date: str,
-    last_update: str,
-    top_n: int = 10,
-) -> Tuple[List[Dict[str, Any]], str]:
-    try:
-        return get_cached_recommendations(
-            stocks,
-            data_date=data_date,
-            last_update=last_update,
-            top_n=top_n,
-        ), ""
-    except Exception as exc:
-        print(f"recommendation build skipped: {exc}")
-        return [], f"推薦10檔暫時無法計算：{exc}"
 
 
 # =========================
@@ -1010,6 +788,152 @@ def build_fixed_trade_plan(price: float) -> Dict[str, str]:
         "stop_loss": str(stop_loss),
         "max_hold_days": str(MAX_HOLD_DAYS),
     }
+
+
+# =========================
+# K 線分析工具函數
+# =========================
+
+_K_CACHE: Dict[str, Dict[str, Any]] = {}  # 當次服務期間的 K 線快取
+
+def positive_min(values: List[float], default: float = 0.0) -> float:
+    positives = [x for x in values if x > 0]
+    return min(positives) if positives else default
+
+
+def overlay_snapshot_on_candles(
+    candles: List[Dict[str, Any]],
+    base_stock: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], float]:
+    if not candles:
+        return [], 0.0
+    merged = [dict(x) for x in candles]
+    snapshot_price     = safe_float(base_stock.get("price"))
+    snapshot_volume    = safe_int(base_stock.get("volume"))
+    snapshot_prev_close = safe_float(base_stock.get("prev_close"))
+    snapshot_open      = safe_float(base_stock.get("open"))
+    snapshot_high      = safe_float(base_stock.get("high"))
+    snapshot_low       = safe_float(base_stock.get("low"))
+    snapshot_date_key  = normalize_date_key(base_stock.get("update_time")) or now_taipei().strftime("%Y%m%d")
+    last_candle_date   = normalize_date_key(merged[-1].get("date"))
+
+    if snapshot_price <= 0:
+        prev = snapshot_prev_close or (safe_float(merged[-2].get("close")) if len(merged) >= 2 else safe_float(merged[-1].get("close")))
+        return merged, prev
+
+    if snapshot_date_key and last_candle_date and snapshot_date_key > last_candle_date:
+        prev_close  = snapshot_prev_close if snapshot_prev_close > 0 else safe_float(merged[-1].get("close"))
+        open_price  = snapshot_open if snapshot_open > 0 else prev_close
+        high_price  = max([x for x in [snapshot_high, snapshot_price, open_price] if x > 0], default=snapshot_price)
+        low_price   = positive_min([snapshot_low, snapshot_price, open_price], min(snapshot_price, open_price))
+        merged.append({
+            "date": snapshot_date_key, "open": open_price, "high": high_price,
+            "low": low_price, "close": snapshot_price,
+            "volume": snapshot_volume if snapshot_volume > 0 else safe_int(merged[-1].get("volume")),
+            "change": round(snapshot_price - prev_close, 2) if prev_close > 0 else 0.0,
+        })
+        return merged, prev_close
+
+    current    = dict(merged[-1])
+    prev_close = snapshot_prev_close if snapshot_prev_close > 0 else (
+        safe_float(merged[-2].get("close")) if len(merged) >= 2 else safe_float(current.get("close"))
+    )
+    c_open  = snapshot_open if snapshot_open > 0 else safe_float(current.get("open"))
+    c_high  = max([x for x in [safe_float(current.get("high")), snapshot_high, snapshot_price, c_open] if x > 0], default=snapshot_price)
+    c_low   = positive_min([safe_float(current.get("low")), snapshot_low, snapshot_price, c_open],
+                           min(snapshot_price, c_open if c_open > 0 else snapshot_price))
+    current.update({
+        "open": c_open if c_open > 0 else snapshot_price,
+        "high": c_high, "low": c_low, "close": snapshot_price,
+        "change": round(snapshot_price - prev_close, 2) if prev_close > 0 else safe_float(current.get("change")),
+    })
+    if snapshot_volume > 0:
+        current["volume"] = snapshot_volume
+    merged[-1] = current
+    return merged, prev_close
+
+
+def ema(values: List[float], period: int) -> List[float]:
+    if not values:
+        return []
+    alpha  = 2 / (period + 1)
+    result = [values[0]]
+    for v in values[1:]:
+        result.append((v * alpha) + (result[-1] * (1 - alpha)))
+    return result
+
+
+def calc_rsi(closes: List[float], period: int = 14) -> float:
+    if len(closes) <= period:
+        return 50.0
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(abs(min(diff, 0)))
+    ag = avg(gains[:period])
+    al = avg(losses[:period])
+    for i in range(period, len(gains)):
+        ag = ((ag * (period - 1)) + gains[i]) / period
+        al = ((al * (period - 1)) + losses[i]) / period
+    return 100.0 if al == 0 else 100 - (100 / (1 + ag / al))
+
+
+def calc_macd(closes: List[float]) -> Tuple[float, float, float]:
+    if len(closes) < 35:
+        return 0.0, 0.0, 0.0
+    ema12  = ema(closes, 12)
+    ema26  = ema(closes, 26)
+    macd_s = [a - b for a, b in zip(ema12, ema26)]
+    sig_s  = ema(macd_s, 9)
+    ml, sl = macd_s[-1], sig_s[-1]
+    return ml, sl, ml - sl
+
+
+def calc_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
+    if len(candles) < 2:
+        return 0.0
+    trs: List[float] = []
+    prev = safe_float(candles[0].get("close"))
+    for c in candles[1:]:
+        h = safe_float(c.get("high"))
+        l = safe_float(c.get("low"))
+        cl = safe_float(c.get("close"))
+        trs.append(max(h - l, abs(h - prev), abs(l - prev)))
+        prev = cl
+    return avg(trs[-period:]) if trs else 0.0
+
+
+def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
+    """取得個股歷史日K，使用記憶體快取避免重複呼叫。"""
+    if symbol in _K_CACHE:
+        return _K_CACHE[symbol]
+
+    stock_client = get_stock_rest_client()
+    to_date   = now_taipei().strftime("%Y-%m-%d")
+    from_date = (now_taipei() - timedelta(days=400)).strftime("%Y-%m-%d")
+
+    resp = stock_client.historical.candles(
+        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
+    )
+    rows    = extract_rows(resp)
+    candles: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        candles.append({
+            "date":   safe_str(row.get("date")),
+            "open":   safe_float(row.get("open")),
+            "high":   safe_float(row.get("high")),
+            "low":    safe_float(row.get("low")),
+            "close":  safe_float(row.get("close")),
+            "volume": safe_int(row.get("volume")),
+            "change": safe_float(row.get("change")),
+        })
+    candles = [x for x in candles if x["close"] > 0][-250:]
+    data = {"candles": candles}
+    _K_CACHE[symbol] = data
+    return data
 
 
 # =========================
@@ -1300,67 +1224,37 @@ def build_technical_reason(
     ma_cross: Dict[str, Any],
     change_pct: float,
 ) -> str:
-    def pct_gap(value: float, base: float) -> float:
-        return ((value - base) / base * 100) if base > 0 else 0.0
+    lines = [f"【{name} 技術分析 | {stock_type} | 評分 {setup_score}分】"]
 
-    ma5_gap = pct_gap(close, ma5)
-    ma10_gap = pct_gap(close, ma10)
-    ma_gap = pct_gap(ma5, ma10)
-    vol_ratio = safe_float(vol_pattern.get("vol_ratio"), 1.0)
-    candle_name = safe_str(candle_pattern.get("pattern"), "無明顯型態")
-    candle_bias = safe_str(candle_pattern.get("bias"), "中性")
-    cross_name = safe_str(ma_cross.get("cross"), "無")
-    cross_days = safe_int(ma_cross.get("days_ago"))
+    # 均線
+    ma_desc = f"MA5 {format_price_value(ma5)} / MA10 {format_price_value(ma10)} / MA20 {format_price_value(ma20)}"
+    lines.append(f"均線結構：{ma_desc}，現價 {format_price_value(close)}（" + ("站上5/10日線 ✓" if close > ma10 else "需關注") + "）")
 
-    if stock_type == "準備轉強":
-        thesis = "短線核心假設是轉折初期，重點在隔日能否守住5日線並延續量能。"
-    elif stock_type == "續攻型":
-        thesis = "短線核心假設是趨勢延續，適合觀察回測不破後的續攻力道。"
-    elif stock_type == "轉強觀察":
-        thesis = "短線核心假設是結構改善但尚未完全確認，適合放入觀察名單而非追價。"
-    else:
-        thesis = "短線核心假設仍需隔日量價確認，先以風險控管為主。"
-
-    lines = [
-        f"【{name} 技術評估｜{stock_type}｜{setup_score:.1f}分】{thesis}",
-        (
-            f"均線位置：收盤 {format_price_value(close)}，高於MA5 {ma5_gap:+.2f}%、"
-            f"高於MA10 {ma10_gap:+.2f}%；MA5相對MA10 {ma_gap:+.2f}%，"
-            f"{'短均線已轉多' if ma5 >= ma10 else '短均線接近轉多但仍需確認'}。"
-        ),
-    ]
-
+    # MACD
     if prev_macd_hist < 0 and macd_hist >= 0:
-        macd_text = f"MACD柱狀體由負翻正（{prev_macd_hist:.3f} → {macd_hist:.3f}），屬動能轉折訊號。"
+        lines.append(f"MACD：由負翻正（Hist {prev_macd_hist:.3f} → {macd_hist:.3f}），動能轉折訊號最強。")
     elif prev_macd_hist < 0 and macd_hist > prev_macd_hist:
-        macd_text = f"MACD仍在零軸下但負值收斂（{prev_macd_hist:.3f} → {macd_hist:.3f}），空方動能正在減弱。"
+        lines.append(f"MACD：負值縮小中（Hist {prev_macd_hist:.3f} → {macd_hist:.3f}），動能持續改善。")
     elif macd_hist > 0 and macd_hist > prev_macd_hist:
-        macd_text = f"MACD柱狀體維持正值且擴大（{prev_macd_hist:.3f} → {macd_hist:.3f}），多方動能延續。"
+        lines.append(f"MACD：正值擴大（Hist {macd_hist:.3f}），多方動能持續。")
     else:
-        macd_text = f"MACD柱狀體 {macd_hist:.3f}，動能尚未明確轉強，需降低追價意願。"
-    lines.append(macd_text)
+        lines.append(f"MACD：Hist {macd_hist:.3f}，動能待確認。")
 
-    volume_text = f"量能：{safe_str(vol_pattern.get('pattern'), '量能待確認')}，量比 {vol_ratio:.2f} 倍"
-    if vol_ratio > 3:
-        volume_text += "，量能偏熱，隔日若開高量縮需小心短線獲利了結。"
-    elif vol_ratio >= 1.3:
-        volume_text += "，屬有效放量但未失控。"
-    else:
-        volume_text += "，量能尚可但不是主動攻擊型。"
-    lines.append(volume_text)
+    # 量能
+    lines.append(f"量能：{vol_pattern['pattern']}（量比 {vol_pattern.get('vol_ratio', 0):.2f} 倍）。")
 
-    if candle_name != "無明顯型態":
-        lines.append(f"K棒：{candle_name}（{candle_bias}），今日漲幅 {change_pct:+.2f}%，型態偏向短線承接轉強。")
-    else:
-        lines.append(f"K棒：未出現特殊反轉型態，今日漲幅 {change_pct:+.2f}%，需觀察隔日是否續量站穩。")
+    # K棒
+    if candle_pattern["pattern"] != "無明顯型態":
+        lines.append(f"K棒型態：{candle_pattern['pattern']}（{candle_pattern['bias']}）。")
 
-    if cross_name != "無":
-        lines.append(f"均線交叉：{cross_name}發生於近 {cross_days} 天內，作為短線趨勢切換參考。")
+    # 均線交叉
+    if ma_cross["cross"] != "無":
+        lines.append(f"均線交叉：{ma_cross['cross']}（{ma_cross['days_ago']} 天前）。")
 
-    rsi_note = "健康動能區" if 50 <= rsi14 <= 70 else "偏熱需控追價" if rsi14 > 70 else "動能仍偏保守"
-    lines.append(f"風險控管：RSI(14) {rsi14:.1f}（{rsi_note}）；若隔日跌回MA10或量縮開高走低，應視為轉強失敗。")
+    # RSI
+    lines.append(f"RSI(14)：{rsi14:.1f}{'（健康動能區）' if 50 <= rsi14 <= 70 else '（注意過熱）' if rsi14 > 70 else ''}。")
 
-    return " ".join(lines)
+    return "".join(lines)
 
 
 def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str, Any]:
@@ -1517,44 +1411,59 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
 
 
 def build_snapshot_fallback_reason(stock: Dict[str, Any], score: float) -> str:
-    name = safe_str(stock.get("name"), safe_str(stock.get("symbol")))
-    signal = safe_str(stock.get("signal"), "收盤快照候選")
-    rating = safe_str(stock.get("operation_rating"), "-")
-    price = safe_float(stock.get("price"))
+    """推薦名單不足時，用快照資料補位的說明文字"""
+    name      = safe_str(stock.get("name"), safe_str(stock.get("symbol")))
+    signal    = safe_str(stock.get("signal"), "收盤快照候選")
+    rating    = safe_str(stock.get("operation_rating"), "-")
+    price     = safe_float(stock.get("price"))
     change_pct = safe_float(stock.get("change_percent"))
     open_price = safe_float(stock.get("open")) or price
     high_price = safe_float(stock.get("high")) or price
-    low_price = safe_float(stock.get("low")) or price
+    low_price  = safe_float(stock.get("low"))  or price
     prev_close = safe_float(stock.get("prev_close"))
-    volume = safe_int(stock.get("volume"))
-    close_position = calc_position_ratio(price, high_price, low_price)
-    amplitude_pct = calc_amplitude_pct(high_price, low_price, prev_close)
-    red_k = price >= open_price if open_price > 0 else False
+    volume     = safe_int(stock.get("volume"))
+    close_pos  = calc_position_ratio(price, high_price, low_price)
+    amp_pct    = calc_amplitude_pct(high_price, low_price, prev_close)
+    red_k      = price >= open_price if open_price > 0 else False
 
-    position_note = (
-        "收在日內高檔，代表尾盤承接力較強"
-        if close_position >= 0.68
-        else "收在日內中段偏上，尚未形成過熱追價"
-        if close_position >= 0.5
-        else "收盤位置仍不算強，隔日需要補量確認"
+    pos_note = (
+        "收在日內高檔，尾盤承接力較強" if close_pos >= 0.68
+        else "收在日內中段偏上" if close_pos >= 0.5
+        else "收盤位置仍不算強"
     )
-    volume_note = (
-        "量能活絡但未失控"
-        if 500 <= volume <= 30000
-        else "量能偏大，需留意隔日是否轉成震盪"
-        if volume > 30000
-        else "量能仍偏低，適合小心觀察"
+    vol_note = (
+        "量能活絡但未失控" if 500 <= volume <= 30000
+        else "量能偏大，需留意隔日震盪" if volume > 30000
+        else "量能偏低，需小心觀察"
     )
-    k_note = "收紅K，短線買盤佔優" if red_k else "未收紅K，隔日需先確認開盤承接"
+    k_note = "收紅K，短線買盤佔優" if red_k else "未收紅K，需確認隔日開盤承接"
 
     return (
-        f"【{name} 收盤快照評估｜{signal}｜評級 {rating}｜分數 {score:.1f}】"
-        f"因完整歷史K技術名單不足，此檔以收盤快照條件列入補位觀察。"
-        f"今日漲幅 {change_pct:+.2f}%，振幅 {amplitude_pct:.2f}%，收盤位置 {close_position:.0%}，{position_note}。"
-        f"{k_note}；成交量 {format_number(volume)} 張，{volume_note}。"
-        "操作上不建議直接追高，隔日若開盤守住今日中段並維持量能，才視為有效續強；"
-        "若開高走低或跌破今日低點，應從推薦觀察名單中降級。"
+        f"【{name} 快照候選｜{signal}｜評級 {rating}｜分數 {score:.1f}】"
+        f"今日漲幅 {change_pct:+.2f}%，振幅 {amp_pct:.2f}%，{pos_note}。"
+        f"{k_note}；成交量 {volume:,} 張，{vol_note}。"
+        "隔日若開盤守住今日中段並維持量能，視為有效續強；"
+        "開高走低或跌破今日低點，應降級觀察。"
     )
+
+
+def get_recommendations_safe(
+    stocks: List[Dict[str, Any]],
+    data_date: str,
+    last_update: str,
+    top_n: int = 10,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """安全包裝 get_cached_recommendations，不讓例外中斷主流程"""
+    try:
+        return get_cached_recommendations(
+            stocks,
+            data_date=data_date,
+            last_update=last_update,
+            top_n=top_n,
+        ), ""
+    except Exception as exc:
+        print(f"recommendation build skipped: {exc}")
+        return [], f"推薦10檔暫時無法計算：{exc}"
 
 
 def build_recommendations(
@@ -1562,39 +1471,31 @@ def build_recommendations(
     top_n: int = 10,
 ) -> List[Dict[str, Any]]:
     """
-    純技術分析選股
-    1. 基本過濾（量、價、漲跌）
-    2. 取前80筆做歷史K分析
-    3. setup_score >= 65 且型態符合才進推薦
+    純技術分析選股 - 三層篩選機制
+    第一層：setup_score >= 65，完整技術分析
+    第二層：setup_score >= 50，放寬條件
+    第三層：快照候選補位
     """
-    # 基本過濾：價格、量能、漲跌幅範圍
     candidates = [
         s for s in stocks
         if is_main_board_stock(s)
         and safe_float(s.get("price")) >= 8
         and safe_int(s.get("volume")) >= 500
-        and safe_int(s.get("volume")) <= 150000  # 排除超大型股（不易轉折）
-        and 0.1 <= safe_float(s.get("change_percent")) <= 6.5  # 今日小漲到適度漲（不追漲停）
+        and safe_int(s.get("volume")) <= 150000
+        and 0.1 <= safe_float(s.get("change_percent")) <= 6.5
     ]
 
-    # 計算技術預篩分數（快速，不跑歷史K）
     def snapshot_prescore(s: Dict[str, Any]) -> float:
-        chg  = safe_float(s.get("change_percent"))
-        vol  = safe_int(s.get("volume"))
-        high = safe_float(s.get("high"))
-        low  = safe_float(s.get("low"))
-        price = safe_float(s.get("price"))
-        prev  = safe_float(s.get("prev_close"))
-        # 收盤位置（收在高位加分）
-        pos = calc_position_ratio(price, high, low)
-        # 量能合理區間（500~30000張最佳）
-        vol_score = 20 if 500 <= vol <= 30000 else 10 if vol <= 80000 else 0
-        # 漲幅甜蜜區（0.5%~4%）
-        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 6.5 else 0
-        # 收盤偏高
-        pos_score = 15 if pos >= 0.65 else 8 if pos >= 0.45 else 0
-        # 今日收盤 > 開盤（收紅K）
+        chg    = safe_float(s.get("change_percent"))
+        vol    = safe_int(s.get("volume"))
+        price  = safe_float(s.get("price"))
+        high   = safe_float(s.get("high"))
+        low    = safe_float(s.get("low"))
         open_p = safe_float(s.get("open"))
+        pos    = calc_position_ratio(price, high, low)
+        vol_score = 20 if 500 <= vol <= 30000 else 10 if vol <= 80000 else 0
+        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 6.5 else 0
+        pos_score = 15 if pos >= 0.65 else 8 if pos >= 0.45 else 0
         red_score = 10 if price >= open_p > 0 else 0
         return vol_score + chg_score + pos_score + red_score
 
@@ -1627,28 +1528,27 @@ def build_recommendations(
     def add_unique(target: List[Dict[str, Any]], source: List[Dict[str, Any]]) -> None:
         seen = {safe_str(item.get("symbol")) for item in target}
         for item in source:
-            symbol = safe_str(item.get("symbol"))
-            if not symbol or symbol in seen:
+            sym = safe_str(item.get("symbol"))
+            if not sym or sym in seen:
                 continue
             target.append(item)
-            seen.add(symbol)
+            seen.add(sym)
             if len(target) >= top_n:
                 break
 
-    # 第一層：嚴格技術條件，符合原本 K棒 + 均線 + 量 + MACD 邏輯。
+    # 第一層：嚴格技術條件
     qualified = [
         s for s in result_map.values()
         if safe_float(s.get("setup_score")) >= 65
         and s.get("stock_type") in {"準備轉強", "續攻型", "轉強觀察"}
     ]
-
     qualified.sort(key=rank_key, reverse=True)
     recommendations: List[Dict[str, Any]] = qualified[:top_n]
 
     if len(recommendations) >= top_n:
         return recommendations
 
-    # 第二層：技術分數略低但仍在轉強/整理待發區間，避免只有 8~9 檔時整體名單不足。
+    # 第二層：放寬條件
     relaxed = [
         s for s in result_map.values()
         if safe_float(s.get("setup_score")) >= 50
@@ -1662,24 +1562,20 @@ def build_recommendations(
     if len(recommendations) >= top_n:
         return recommendations
 
-    # 第三層：若歷史K資料不足或條件過嚴，至少用收盤快照強勢候選補足畫面與歸檔。
+    # 第三層：快照候選補位
     snapshot_fallback: List[Dict[str, Any]] = []
     for stock in candidates:
-        score = safe_float(stock.get("recommendation_score") or stock.get("score"))
+        score  = safe_float(stock.get("recommendation_score") or stock.get("score"))
         signal = safe_str(stock.get("signal"))
         rating = safe_str(stock.get("operation_rating"))
-        if (
-            score >= 45
-            and signal in {"量增轉強", "整理待發", "穩步走高"}
-            and rating in {"A", "B+"}
-        ):
-            fallback = dict(stock)
-            fallback["setup_score"] = safe_float(fallback.get("setup_score")) or score
-            fallback["recommendation_score"] = score
-            fallback["stock_type"] = fallback.get("stock_type") or "收盤快照候選"
-            fallback["analysis_source"] = fallback.get("analysis_source") or "snapshot_fallback"
-            fallback["reason"] = build_snapshot_fallback_reason(fallback, score)
-            snapshot_fallback.append(fallback)
+        if score >= 45 and signal in {"量增轉強", "整理待發", "穩步走高"} and rating in {"A", "B+"}:
+            fb = dict(stock)
+            fb["setup_score"]          = safe_float(fb.get("setup_score")) or score
+            fb["recommendation_score"] = score
+            fb["stock_type"]           = fb.get("stock_type") or "收盤快照候選"
+            fb["analysis_source"]      = "snapshot_fallback"
+            fb["reason"]               = build_snapshot_fallback_reason(fb, score)
+            snapshot_fallback.append(fb)
     snapshot_fallback.sort(key=rank_key, reverse=True)
     add_unique(recommendations, snapshot_fallback)
 
@@ -1801,6 +1697,7 @@ def get_stocks(
     price_min: float = Query(0),
     price_max: float = Query(0),
     force_refresh: bool = Query(False),
+    include_recommendations: bool = Query(True),
 ):
     try:
         result = get_cached_all_stocks(force_refresh=force_refresh)
@@ -1822,9 +1719,10 @@ def get_stocks(
         paged = filtered[offset: offset + limit]
 
         recs = []
-        rec_error = ""
-        non_blocking_warnings: List[str] = []
+        rec_err = ""
         if (
+            include_recommendations
+            and
             offset == 0
             and safe_str(market).lower() == "all"
             and safe_str(category).lower() == "all"
@@ -1833,33 +1731,29 @@ def get_stocks(
             and price_max <= 0
             and should_settle_recommendations(market_status)
         ):
-            recs, rec_error = get_recommendations_safe(
+            recs, rec_err = get_recommendations_safe(
                 all_stocks,
                 data_date=result["data_date"],
                 last_update=result["last_update"],
                 top_n=10,
             )
-            if rec_error:
-                non_blocking_warnings.append(rec_error)
+            if rec_err:
                 recommendation_info["recommendation_status"] = "recommendation_error"
-                recommendation_info["recommendation_message"] = rec_error
+                recommendation_info["recommendation_message"] = rec_err
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
         focused = find_focused_stock(filtered, q)
         if focused:
-            try:
-                focused = build_historical_analysis_for_stock(focused)
-                symbol = focused.get("symbol", "")
-                paged = [focused if x.get("symbol") == symbol else x for x in paged]
-            except Exception as exc:
-                non_blocking_warnings.append(f"個股分析暫時無法計算：{exc}")
+            focused = build_historical_analysis_for_stock(focused)
+            symbol = focused.get("symbol", "")
+            paged = [focused if x.get("symbol") == symbol else x for x in paged]
 
         twse_total = len([s for s in all_stocks if s.get("market") == "上市"])
         otc_total = len([s for s in all_stocks if s.get("market") == "上櫃"])
         response_message = result.get("message", "")
-        if non_blocking_warnings:
-            response_message = "；".join([x for x in [response_message, *non_blocking_warnings] if x])
+        if rec_err:
+            response_message = "；".join([x for x in [response_message, rec_err] if x])
 
         return {
             "success": True,
@@ -1893,4 +1787,3 @@ def get_stocks(
                 "focused_stock": None,
             },
         )
-
