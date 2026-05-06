@@ -308,8 +308,11 @@ export default function Home() {
         offset: "0",
         sort_by: "recommendation_score",
         sort_dir: "desc",
+        include_recommendations: "true",
       });
       if (options?.forceRefresh) params.set("force_refresh", "true");
+      setRecommendationStatus("loading");
+      setRecommendationMessage("推薦10檔計算中，股票列表可先使用。");
 
       const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -370,6 +373,7 @@ export default function Home() {
         offset: String((page - 1) * ITEMS_PER_PAGE),
         sort_by: sortQuery.sort_by,
         sort_dir: sortQuery.sort_dir,
+        include_recommendations: "false",
       });
 
       if (keyword) params.set("q", keyword);
@@ -446,12 +450,12 @@ export default function Home() {
       }
     );
 
-    if (!data?.recommendations?.length) {
-      await fetchRecommendationsSafe({ forceRefresh: options?.forceRefresh });
-    }
-
     initialLoadedRef.current = true;
     setLoading(false);
+
+    if (data && !data.recommendations?.length) {
+      void fetchRecommendationsSafe({ forceRefresh: options?.forceRefresh });
+    }
   }
 
   useEffect(() => {
@@ -479,7 +483,7 @@ export default function Home() {
         rank: rankType,
         keyword: debouncedSearchTerm,
       });
-    }, 120000);
+    }, 30000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, selectedCategory, rankType, debouncedSearchTerm]);
