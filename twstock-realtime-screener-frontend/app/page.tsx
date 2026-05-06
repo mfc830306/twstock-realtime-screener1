@@ -104,7 +104,41 @@ const PRICE_CATEGORIES = [
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
-type ActiveScreen = "screener";
+type ActiveScreen = "screener" | "validation" | "history";
+
+type ValidationItem = {
+  rank?: number;
+  symbol: string;
+  name: string;
+  signal?: string;
+  operation_rating?: string;
+  setup_score?: number;
+  start_close_price?: number;
+  entry_date?: string;
+  entry_open_price?: number;
+  return_from_close_pct?: number;
+  horizon_returns?: Record<string, number>;
+};
+
+type HorizonSummary = { count: number; avg_pct: number; win_rate_pct: number };
+
+type ValidationSummary = {
+  count: number;
+  entered_count: number;
+  avg_return_pct: number;
+  win_rate_pct: number;
+  best?: { symbol: string; name: string; pct: number } | null;
+  worst?: { symbol: string; name: string; pct: number } | null;
+  horizon_summary: Record<string, HorizonSummary>;
+};
+
+type ValidationRun = {
+  date: string;
+  created_at: string;
+  last_update: string;
+  items: ValidationItem[];
+  message?: string;
+};
 
 const ITEMS_PER_PAGE = 20;
 
@@ -268,6 +302,11 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("screener");
+  const [validationRun, setValidationRun] = useState<ValidationRun | null>(null);
+  const [validationSummary, setValidationSummary] = useState<ValidationSummary | null>(null);
+  const [validationHistory, setValidationHistory] = useState<ValidationRun[]>([]);
+  const [validationLoading, setValidationLoading] = useState(false);
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
@@ -338,6 +377,36 @@ export default function Home() {
       if (requestId !== recommendationsRequestIdRef.current) return null;
       setError(err instanceof Error ? err.message : "載入失敗");
       return null;
+    }
+  }
+
+  async function fetchValidationSafe(date: string = "latest", forceRefresh = false) {
+    setValidationLoading(true);
+    try {
+      const params = new URLSearchParams({ date, force_refresh: String(forceRefresh) });
+      const res  = await fetch(`${BACKEND_BASE.replace("/stocks", "/validation")}?${params}`, { cache: "no-store" });
+      const data = await res.json();
+      if (data.success) {
+        setValidationRun(data.validation ?? null);
+        setValidationSummary(data.summary ?? null);
+        setAvailableDates(data.available_dates ?? []);
+      }
+    } catch (e) {
+      console.error("fetchValidation error", e);
+    } finally {
+      setValidationLoading(false);
+    }
+  }
+
+  async function fetchValidationHistorySafe() {
+    try {
+      const res  = await fetch(`${BACKEND_BASE.replace("/stocks", "/validation/history")}?limit=60`, { cache: "no-store" });
+      const data = await res.json();
+      if (data.success) {
+        setValidationHistory(data.runs ?? []);
+      }
+    } catch (e) {
+      console.error("fetchValidationHistory error", e);
     }
   }
 
@@ -473,6 +542,12 @@ export default function Home() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, debouncedSearchTerm, selectedCategory, rankType]);
+
+  useEffect(() => {
+    if (activeScreen === "validation") fetchValidationSafe();
+    if (activeScreen === "history") fetchValidationHistorySafe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeScreen]);
 
   useEffect(() => {
     if (!initialLoadedRef.current) return;
@@ -643,6 +718,8 @@ export default function Home() {
             >
               {[
                 { key: "screener" as ActiveScreen, label: "選股首頁" },
+                  { key: "validation" as ActiveScreen, label: "驗證追蹤" },
+                  { key: "history" as ActiveScreen, label: "推薦紀錄" },
               ].map((item) => {
                 const active = activeScreen === item.key;
                 return (
