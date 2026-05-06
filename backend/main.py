@@ -39,7 +39,7 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "last_update": "",
     "top_n": 0,
 }
-CACHE_SECONDS = 60
+CACHE_SECONDS = 30
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
