@@ -13,6 +13,7 @@ type Stock = {
   score?: number;
   recommendation_score?: number;
   setup_score?: number;
+  score_breakdown?: ScoreBreakdown;
   signal?: string;
   stock_type?: string;
   trend_type?: string;
@@ -35,6 +36,31 @@ type Stock = {
   vol_pattern?: string;
   ma5_value?: number;
   ma10_value?: number;
+  ma20_value?: number;
+  vol_ratio?: number;
+  macd_hist_value?: number;
+  dist_from_ma5_pct?: number;
+};
+
+type ScoreBreakdown = {
+  candle_score?: number;
+  ma_score?: number;
+  volume_score?: number;
+  macd_score?: number;
+  overheat_penalty?: number;
+  total_score?: number;
+  ma_score_max?: number;
+  volume_score_max?: number;
+  macd_score_max?: number;
+  candle_score_max?: number;
+  ma_gap_pct?: number;
+  vol_ratio?: number;
+  dist_from_ma5_pct?: number;
+  macd_hist?: number;
+  prev_macd_hist?: number;
+  overheat_flags?: string[];
+  fail_reasons?: string[];
+  note?: string;
 };
 
 type FocusedStock = {
@@ -159,6 +185,12 @@ function formatSigned(num?: number, digits = 2) {
   return `${num > 0 ? "+" : num < 0 ? "" : ""}${num.toFixed(digits)}`;
 }
 
+function formatScoreValue(num?: number, digits = 1) {
+  if (num === undefined || num === null || Number.isNaN(num)) return "-";
+  const text = Number(num).toFixed(digits);
+  return text.endsWith(".0") ? text.slice(0, -2) : text;
+}
+
 function formatPctText(num?: number, digits = 2) {
   const text = formatSigned(num, digits);
   return text === "-" ? "-" : `${text}%`;
@@ -171,6 +203,43 @@ function formatDateString(dateText?: string) {
     return `${clean.slice(0, 4)}/${clean.slice(4, 6)}/${clean.slice(6, 8)}`;
   }
   return dateText;
+}
+
+function getScoreBreakdownRows(stock: Stock) {
+  const breakdown = stock.score_breakdown || {};
+  return [
+    {
+      label: "K棒",
+      value: breakdown.candle_score,
+      max: breakdown.candle_score_max || 20,
+      detail: stock.candlestick_pattern || "-",
+      color: "#7ee787",
+    },
+    {
+      label: "均線",
+      value: breakdown.ma_score,
+      max: breakdown.ma_score_max || 45,
+      detail: stock.ma_cross || "-",
+      color: "#7fb6ff",
+    },
+    {
+      label: "量能",
+      value: breakdown.volume_score,
+      max: breakdown.volume_score_max || 20,
+      detail: stock.vol_pattern || `量比 ${formatScoreValue(stock.vol_ratio || breakdown.vol_ratio)}`,
+      color: "#ffd95f",
+    },
+    {
+      label: "MACD",
+      value: breakdown.macd_score,
+      max: breakdown.macd_score_max || 15,
+      detail:
+        breakdown.macd_hist !== undefined
+          ? `Hist ${formatScoreValue(breakdown.macd_hist, 3)}`
+          : "-",
+      color: "#ffb86c",
+    },
+  ];
 }
 
 
@@ -190,6 +259,7 @@ function normalizeStock(s: Stock): Stock {
     volume: Number(s.volume ?? 0),
     score: Number(s.score ?? 0),
     recommendation_score: Number(s.recommendation_score ?? 0),
+    setup_score: Number(s.setup_score ?? 0),
   };
 }
 
@@ -928,7 +998,7 @@ export default function Home() {
               }}
             >
               <div>
-                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 推薦10檔</h2>
+                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 收盤推薦10檔</h2>
                 {recommendationMessage && (
                   <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginTop: "6px" }}>
                     {recommendationMessage}
@@ -975,6 +1045,9 @@ export default function Home() {
                   const isUp = stock.change >= 0;
                   const changeColor = isUp ? "#ff4d4f" : "#00c853";
                   const isSelected = activeFocusedStock?.symbol === stock.symbol;
+                  const scoreBreakdownRows = getScoreBreakdownRows(stock);
+                  const overheatPenalty = Number(stock.score_breakdown?.overheat_penalty || 0);
+                  const overheatFlags = stock.score_breakdown?.overheat_flags || [];
 
                   return (
                     <div
@@ -1094,7 +1167,13 @@ export default function Home() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          推薦 {stock.recommendation_score || stock.score || 0}
+                          推薦{" "}
+                          {formatScoreValue(
+                            stock.score_breakdown?.total_score ||
+                              stock.recommendation_score ||
+                              stock.score ||
+                              0
+                          )}
                         </div>
                       </div>
 
@@ -1107,6 +1186,78 @@ export default function Home() {
                         }}
                       >
                         {stock.reason || "價格維持強勢結構，買盤承接力道偏強，屬盤面表態標的。"}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(5, minmax(0, 1fr))",
+                          gap: "8px",
+                          marginBottom: "12px",
+                        }}
+                      >
+                        {scoreBreakdownRows.map((item) => (
+                          <div
+                            key={item.label}
+                            style={{
+                              borderRadius: "12px",
+                              padding: "9px 10px",
+                              background: "rgba(255,255,255,0.055)",
+                              border: "1px solid rgba(255,255,255,0.08)",
+                            }}
+                          >
+                            <div style={{ color: "#9fc3f6", fontSize: "11px", fontWeight: 900, marginBottom: "5px" }}>
+                              {item.label}
+                            </div>
+                            <div style={{ color: item.color, fontSize: "16px", fontWeight: 900 }}>
+                              {formatScoreValue(item.value)} / {item.max}
+                            </div>
+                            <div
+                              style={{
+                                marginTop: "4px",
+                                color: "#cfe3ff",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                              title={item.detail}
+                            >
+                              {item.detail}
+                            </div>
+                          </div>
+                        ))}
+
+                        <div
+                          style={{
+                            borderRadius: "12px",
+                            padding: "9px 10px",
+                            background: overheatPenalty > 0 ? "rgba(255, 120, 120, 0.10)" : "rgba(126, 231, 135, 0.08)",
+                            border: overheatPenalty > 0 ? "1px solid rgba(255, 120, 120, 0.18)" : "1px solid rgba(126, 231, 135, 0.14)",
+                          }}
+                        >
+                          <div style={{ color: "#9fc3f6", fontSize: "11px", fontWeight: 900, marginBottom: "5px" }}>
+                            過熱扣分
+                          </div>
+                          <div style={{ color: overheatPenalty > 0 ? "#ffb4b4" : "#7ee787", fontSize: "16px", fontWeight: 900 }}>
+                            -{formatScoreValue(overheatPenalty)}
+                          </div>
+                          <div
+                            style={{
+                              marginTop: "4px",
+                              color: "#cfe3ff",
+                              fontSize: "11px",
+                              fontWeight: 700,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                            title={overheatFlags.join("、") || "未過熱"}
+                          >
+                            {overheatFlags.join("、") || "未過熱"}
+                          </div>
+                        </div>
                       </div>
 
                       <div
