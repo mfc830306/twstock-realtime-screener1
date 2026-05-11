@@ -1527,6 +1527,193 @@ export default function Home() {
           </>
         )}
       </div>
+        {/* ===== 驗證追蹤頁 ===== */}
+        {activeScreen === "validation" && (
+          <div style={{ maxWidth: "1400px", margin: "0 auto", padding: isMobile ? "18px 16px" : "26px 36px" }}>
+            {/* 標題 */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: "20px", flexWrap: "wrap", gap: "12px", flexDirection: isMobile ? "column" : "row" }}>
+              <div>
+                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "4px" }}>純技術線驗證追蹤</div>
+                <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>
+                  {validationRun?.date ? `${validationRun.date.slice(0,4)}/${validationRun.date.slice(4,6)}/${validationRun.date.slice(6,8)} 推薦追蹤` : "等待資料..."}
+                </h2>
+                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>隔日開盤進場 ｜ 追蹤 1日 / 3日 / 5日報酬</div>
+              </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                {availableDates.length > 1 && availableDates.map(d => {
+                  const isActive = validationRun?.date === d;
+                  return (
+                    <button key={d} type="button" onClick={() => fetchValidationSafe(d)}
+                      style={{ border: `1px solid ${isActive ? "rgba(120,205,255,0.6)" : "rgba(120,180,255,0.2)"}`, borderRadius: "10px", padding: "6px 12px", background: isActive ? "rgba(90,165,255,0.2)" : "rgba(255,255,255,0.04)", color: isActive ? "#7fb6ff" : "#9fc7f5", fontWeight: 900, fontSize: "13px", cursor: "pointer" }}>
+                      {`${d.slice(4,6)}/${d.slice(6,8)}`}
+                    </button>
+                  );
+                })}
+                <button type="button" onClick={() => fetchValidationSafe("latest", true)} disabled={validationLoading}
+                  style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: validationLoading ? "not-allowed" : "pointer", opacity: validationLoading ? 0.6 : 1 }}>
+                  {validationLoading ? "更新中..." : "更新"}
+                </button>
+              </div>
+            </div>
+
+            {/* 4個總結指標 */}
+            {validationSummary && validationSummary.entered_count > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: "12px", marginBottom: "20px" }}>
+                {[
+                  { label: "進場平均報酬", value: `${(validationSummary.avg_return_pct ?? 0) >= 0 ? "+" : ""}${(validationSummary.avg_return_pct ?? 0).toFixed(2)}%`, color: (validationSummary.avg_return_pct ?? 0) >= 0 ? "#7ee787" : "#ff7c7c" },
+                  { label: "勝率", value: `${(validationSummary.win_rate_pct ?? 0).toFixed(1)}%`, color: (validationSummary.win_rate_pct ?? 0) >= 50 ? "#7ee787" : "#ff7c7c" },
+                  { label: "最好一檔", value: validationSummary.best ? `${validationSummary.best.name} ${(validationSummary.best.pct ?? 0) >= 0 ? "+" : ""}${(validationSummary.best.pct ?? 0).toFixed(2)}%` : "-", color: "#7ee787" },
+                  { label: "最差一檔", value: validationSummary.worst ? `${validationSummary.worst.name} ${(validationSummary.worst.pct ?? 0) >= 0 ? "+" : ""}${(validationSummary.worst.pct ?? 0).toFixed(2)}%` : "-", color: "#ff7c7c" },
+                ].map(item => (
+                  <div key={item.label} style={{ borderRadius: "16px", padding: "14px 16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
+                    <div style={{ color: "#8fc3ff", fontSize: "11px", fontWeight: 900, marginBottom: "8px" }}>{item.label}</div>
+                    <div style={{ color: item.color, fontSize: "18px", fontWeight: 900 }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Horizon 統計 */}
+            {validationSummary && Object.keys(validationSummary.horizon_summary || {}).length > 0 && (
+              <div style={{ display: "flex", gap: "10px", marginBottom: "20px", flexWrap: "wrap" }}>
+                {["1","3","5"].map(h => {
+                  const hs = validationSummary?.horizon_summary?.[h];
+                  if (!hs) return null;
+                  return (
+                    <div key={h} style={{ borderRadius: "14px", padding: "10px 16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)", minWidth: "120px" }}>
+                      <div style={{ color: "#8fc3ff", fontSize: "11px", fontWeight: 900, marginBottom: "6px" }}>第 {h} 日</div>
+                      <div style={{ color: (hs.avg_pct ?? 0) >= 0 ? "#7ee787" : "#ff7c7c", fontSize: "18px", fontWeight: 900 }}>
+                        {(hs.avg_pct ?? 0) >= 0 ? "+" : ""}{(hs.avg_pct ?? 0).toFixed(2)}%
+                      </div>
+                      <div style={{ color: "#9fc7f5", fontSize: "11px", marginTop: "4px" }}>勝率 {(hs.win_rate_pct ?? 0).toFixed(0)}%（{hs.count} 檔）</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 等待進場提示 */}
+            {validationSummary && validationSummary.entered_count === 0 && validationRun?.items?.length > 0 && (
+              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
+                📋 已保存 {validationRun.items.length} 檔推薦，等隔日開盤後記錄進場價，開始追蹤報酬。
+              </div>
+            )}
+
+            {/* 股票卡片列表 */}
+            {!validationRun?.items?.length ? (
+              <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
+                {validationLoading ? "讀取中..." : "尚未保存今日推薦，收盤後切換到此頁即自動保存。"}
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: "12px" }}>
+                {validationRun.items.map((stock, idx) => {
+                  const entered  = !!stock.entry_open_price;
+                  const rc = (n?: number) => !n ? "#cfe3ff" : n > 0 ? "#7ee787" : "#ff7c7c";
+                  const horizonKeys = ["1","3","5"].filter(h => stock.horizon_returns?.[h] != null);
+                  return (
+                    <div key={stock.symbol} style={{ borderRadius: "18px", padding: "16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                        <div style={{ color: "#fff", fontSize: "15px", fontWeight: 900 }}>
+                          {stock.rank || idx + 1}. {stock.symbol} {stock.name}
+                        </div>
+                        <span style={{ color: "#ffd95f", fontSize: "12px", fontWeight: 900 }}>{(stock.setup_score || 0).toFixed(0)}分</span>
+                      </div>
+                      <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
+                        {stock.signal && <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#ff9c9c" }}>{stock.signal}</span>}
+                        {stock.operation_rating && <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#7fb6ff" }}>評級 {stock.operation_rating}</span>}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "6px", marginBottom: "8px" }}>
+                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
+                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>推薦收盤</div>
+                          <div style={{ color: "#fff", fontSize: "14px", fontWeight: 900 }}>{stock.start_close_price || "-"}</div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
+                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>{entered ? "進場開盤" : "等隔日開盤"}</div>
+                          <div style={{ color: "#fff", fontSize: "14px", fontWeight: 900 }}>{entered ? stock.entry_open_price : "-"}</div>
+                        </div>
+                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
+                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>收盤起算</div>
+                          <div style={{ color: rc(stock.return_from_close_pct), fontSize: "14px", fontWeight: 900 }}>
+                            {stock.return_from_close_pct != null ? `${(stock.return_from_close_pct ?? 0) > 0 ? "+" : ""}${(stock.return_from_close_pct ?? 0).toFixed(2)}%` : "-"}
+                          </div>
+                        </div>
+                      </div>
+                      {horizonKeys.length > 0 ? (
+                        <div style={{ display: "flex", gap: "6px" }}>
+                          {horizonKeys.map(h => {
+                            const val = stock.horizon_returns?.[h];
+                            return (
+                              <div key={h} style={{ background: "rgba(0,0,0,0.25)", borderRadius: "8px", padding: "4px 10px", textAlign: "center" }}>
+                                <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900 }}>第{h}日</div>
+                                <div style={{ color: rc(val), fontSize: "13px", fontWeight: 900 }}>{val != null ? `${(val ?? 0) > 0 ? "+" : ""}${(val ?? 0).toFixed(2)}%` : "-"}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ color: "#9fc7f5", fontSize: "11px" }}>{entered ? "持續追蹤中..." : "等隔日開盤後開始追蹤"}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ===== 推薦紀錄頁 ===== */}
+        {activeScreen === "history" && (
+          <div style={{ maxWidth: "1400px", margin: "0 auto", padding: isMobile ? "18px 16px" : "26px 36px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <div>
+                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "4px" }}>每日歸檔</div>
+                <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>所有推薦紀錄</h2>
+              </div>
+              <button type="button" onClick={fetchValidationHistorySafe}
+                style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: "pointer" }}>
+                重新整理
+              </button>
+            </div>
+            {validationHistory.length === 0 ? (
+              <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
+                尚未保存任何紀錄。收盤後切換到「驗證追蹤」頁即自動保存。
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: "16px" }}>
+                {validationHistory.map(run => {
+                  const s = run.summary as ValidationSummary | undefined;
+                  const rc = (n: number) => n > 0 ? "#7ee787" : n < 0 ? "#ff7c7c" : "#cfe3ff";
+                  return (
+                    <div key={run.date} style={{ borderRadius: "20px", padding: "16px 20px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "8px" }}>
+                        <div style={{ color: "#fff", fontSize: "18px", fontWeight: 900 }}>
+                          {run.date.slice(0,4)}/{run.date.slice(4,6)}/{run.date.slice(6,8)} 推薦10檔
+                        </div>
+                        {s && s.entered_count > 0 && (
+                          <div style={{ display: "flex", gap: "10px", fontSize: "13px", fontWeight: 800, color: "#cfe3ff" }}>
+                            <span>平均 <span style={{ color: rc(s.avg_return_pct ?? 0) }}>{(s.avg_return_pct ?? 0) >= 0 ? "+" : ""}{(s.avg_return_pct ?? 0).toFixed(2)}%</span></span>
+                            <span>勝率 <span style={{ color: (s.win_rate_pct ?? 0) >= 50 ? "#7ee787" : "#ff7c7c" }}>{(s.win_rate_pct ?? 0).toFixed(0)}%</span></span>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: "8px" }}>
+                        {run.items?.map((stock: ValidationItem, i: number) => (
+                          <div key={stock.symbol} style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: "10px", fontSize: "13px", fontWeight: 800 }}>
+                            <span style={{ color: "#cfe3ff" }}>{i + 1}. {stock.symbol} {stock.name}</span>
+                            <span style={{ color: (stock.return_from_close_pct ?? 0) !== 0 ? rc(stock.return_from_close_pct ?? 0) : "#9fc7f5" }}>
+                              {(stock.return_from_close_pct ?? 0) !== 0 ? `${(stock.return_from_close_pct ?? 0) > 0 ? "+" : ""}${(stock.return_from_close_pct ?? 0).toFixed(2)}%` : "等開盤"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
     </main>
   );
 }
