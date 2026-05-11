@@ -1593,7 +1593,7 @@ export default function Home() {
             )}
 
             {/* 等待進場提示 */}
-            {validationSummary && validationSummary.entered_count === 0 && validationRun?.items?.length > 0 && (
+            {validationSummary && validationSummary.entered_count === 0 && (validationRun?.items?.length ?? 0) > 0 && (
               <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
                 📋 已保存 {validationRun.items.length} 檔推薦，等隔日開盤後記錄進場價，開始追蹤報酬。
               </div>
