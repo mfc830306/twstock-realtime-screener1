@@ -117,6 +117,7 @@ type ValidationItem = {
   entry_date?: string;
   entry_open_price?: number;
   return_from_close_pct?: number;
+  latest_return_pct?: number;
   horizon_returns?: Record<string, number>;
 };
 
@@ -136,7 +137,9 @@ type ValidationRun = {
   date: string;
   created_at: string;
   last_update: string;
+  status?: string;
   items: ValidationItem[];
+  summary?: ValidationSummary;
   message?: string;
 };
 
@@ -306,6 +309,7 @@ export default function Home() {
   const [validationSummary, setValidationSummary] = useState<ValidationSummary | null>(null);
   const [validationHistory, setValidationHistory] = useState<ValidationRun[]>([]);
   const [validationLoading, setValidationLoading] = useState(false);
+  const [validationError, setValidationError] = useState("");
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
@@ -382,31 +386,38 @@ export default function Home() {
 
   async function fetchValidationSafe(date: string = "latest", forceRefresh = false) {
     setValidationLoading(true);
+    setValidationError("");
     try {
       const params = new URLSearchParams({ date, force_refresh: String(forceRefresh) });
       const res  = await fetch(`${BACKEND_BASE.replace("/stocks", "/validation")}?${params}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`驗證 API HTTP ${res.status}`);
       const data = await res.json();
-      if (data.success) {
-        setValidationRun(data.validation ?? null);
-        setValidationSummary(data.summary ?? null);
-        setAvailableDates(data.available_dates ?? []);
-      }
+      if (!data.success) throw new Error(data.error || data.message || "驗證資料載入失敗");
+      setValidationRun(data.validation ?? null);
+      setValidationSummary(data.summary ?? null);
+      setAvailableDates(data.available_dates ?? []);
     } catch (e) {
       console.error("fetchValidation error", e);
+      setValidationError(e instanceof Error ? e.message : "驗證資料載入失敗");
+      setValidationRun(null);
+      setValidationSummary(null);
     } finally {
       setValidationLoading(false);
     }
   }
 
   async function fetchValidationHistorySafe() {
+    setValidationError("");
     try {
       const res  = await fetch(`${BACKEND_BASE.replace("/stocks", "/validation/history")}?limit=60`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`推薦紀錄 API HTTP ${res.status}`);
       const data = await res.json();
-      if (data.success) {
-        setValidationHistory(data.runs ?? []);
-      }
+      if (!data.success) throw new Error(data.error || data.message || "推薦紀錄載入失敗");
+      setValidationHistory(data.runs ?? []);
     } catch (e) {
       console.error("fetchValidationHistory error", e);
+      setValidationError(e instanceof Error ? e.message : "推薦紀錄載入失敗");
+      setValidationHistory([]);
     }
   }
 
@@ -1556,6 +1567,18 @@ export default function Home() {
               </div>
             </div>
 
+            {validationError && (
+              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,80,80,0.14)", border: "1px solid rgba(255,120,120,0.3)", color: "#ffd4d4", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
+                驗證資料載入失敗：{validationError}
+              </div>
+            )}
+
+            {validationRun?.message && (
+              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(120,180,255,0.1)", border: "1px solid rgba(120,180,255,0.18)", color: "#cfe3ff", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
+                {validationRun.message}
+              </div>
+            )}
+
             {/* 4個總結指標 */}
             {validationSummary && validationSummary.entered_count > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: "12px", marginBottom: "20px" }}>
@@ -1602,7 +1625,7 @@ export default function Home() {
             {/* 股票卡片列表 */}
             {!validationRun?.items?.length ? (
               <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
-                {validationLoading ? "讀取中..." : "尚未保存今日推薦，收盤後切換到此頁即自動保存。"}
+                {validationLoading ? "讀取中..." : validationRun?.message || "尚未保存今日推薦，收盤後切換到此頁即自動保存。"}
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: "12px" }}>
@@ -1674,6 +1697,11 @@ export default function Home() {
                 重新整理
               </button>
             </div>
+            {validationError && (
+              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,80,80,0.14)", border: "1px solid rgba(255,120,120,0.3)", color: "#ffd4d4", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
+                推薦紀錄載入失敗：{validationError}
+              </div>
+            )}
             {validationHistory.length === 0 ? (
               <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
                 尚未保存任何紀錄。收盤後切換到「驗證追蹤」頁即自動保存。
