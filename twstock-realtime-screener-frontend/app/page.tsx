@@ -379,7 +379,9 @@ export default function Home() {
       return data;
     } catch (err) {
       if (requestId !== recommendationsRequestIdRef.current) return null;
-      setError(err instanceof Error ? err.message : "載入失敗");
+      const message = err instanceof Error ? err.message : "推薦10檔載入失敗";
+      setRecommendationStatus("recommendation_error");
+      setRecommendationMessage(`推薦10檔暫時無法顯示：${message}`);
       return null;
     }
   }
@@ -972,7 +974,9 @@ export default function Home() {
                 <div style={{ color: "#cfe2ff", padding: "16px 4px", fontWeight: 700 }}>
                   {recommendationStatus === "intraday_paused"
                     ? "盤中暫停結算推薦10檔，請收盤後再更新。"
-                    : recommendationMessage || "目前沒有可顯示的推薦資料"}
+                    : recommendationStatus === "after_close_settlement"
+                      ? "後端目前回傳 0 檔推薦。請確認已部署最新 MAIN，或按右上角更新重新結算。"
+                      : recommendationMessage || "目前沒有可顯示的推薦資料"}
                 </div>
               ) : (
                 recommendations.map((stock) => {
