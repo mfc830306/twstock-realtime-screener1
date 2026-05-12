@@ -1546,6 +1546,29 @@ def build_snapshot_fallback_reason(stock: Dict[str, Any], score: float) -> str:
     )
 
 
+def build_relaxed_fallback_reason(stock: Dict[str, Any], score: float) -> str:
+    """技術候選不足時的保底推薦說明，避免收盤後推薦區完全空白。"""
+    name = safe_str(stock.get("name"), safe_str(stock.get("symbol")))
+    price = safe_float(stock.get("price"))
+    change_pct = safe_float(stock.get("change_percent"))
+    open_price = safe_float(stock.get("open")) or price
+    high_price = safe_float(stock.get("high")) or price
+    low_price = safe_float(stock.get("low")) or price
+    prev_close = safe_float(stock.get("prev_close"))
+    volume = safe_int(stock.get("volume"))
+    close_pos = calc_position_ratio(price, high_price, low_price)
+    amp_pct = calc_amplitude_pct(high_price, low_price, prev_close)
+    k_note = "收紅K" if price >= open_price > 0 else "未收紅K"
+    pos_note = "收盤靠近高檔" if close_pos >= 0.65 else "收盤位於中段偏上" if close_pos >= 0.45 else "收盤位置普通"
+
+    return (
+        f"【{name} 收盤保底候選｜分數 {score:.1f}】"
+        f"今日漲幅 {change_pct:+.2f}%，振幅 {amp_pct:.2f}%，{k_note}，{pos_note}，成交量 {volume:,} 張。"
+        "此檔未完全達到嚴格技術線條件，但在今日候選池排序仍靠前；"
+        "隔日只適合觀察開盤是否守住今日中段與5日線，不建議無條件追價。"
+    )
+
+
 def get_recommendations_safe(
     stocks: List[Dict[str, Any]],
     data_date: str,
@@ -1581,7 +1604,7 @@ def build_recommendations(
         and safe_float(s.get("price")) >= 8
         and safe_int(s.get("volume")) >= 500
         and safe_int(s.get("volume")) <= 150000
-        and 0.1 <= safe_float(s.get("change_percent")) <= 5.2
+        and 0.1 <= safe_float(s.get("change_percent")) <= 8.0
     ]
 
     def snapshot_prescore(s: Dict[str, Any]) -> float:
@@ -1593,7 +1616,7 @@ def build_recommendations(
         open_p = safe_float(s.get("open"))
         pos    = calc_position_ratio(price, high, low)
         vol_score = 20 if 500 <= vol <= 30000 else 10 if vol <= 80000 else 0
-        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 5.2 else 0
+        chg_score = 20 if 0.5 <= chg <= 4.0 else 10 if chg <= 6.5 else 4 if chg <= 8.0 else 0
         pos_score = 15 if pos >= 0.65 else 8 if pos >= 0.45 else 0
         red_score = 10 if price >= open_p > 0 else 0
         return vol_score + chg_score + pos_score + red_score
@@ -1670,7 +1693,7 @@ def build_recommendations(
         change_pct = safe_float(stock.get("change_percent"))
         if (
             score >= 45
-            and 0.1 <= change_pct <= 5.2
+            and 0.1 <= change_pct <= 8.0
             and signal in {"量增轉強", "整理待發", "穩步走高"}
             and rating in {"A", "B+"}
         ):
@@ -1703,6 +1726,70 @@ def build_recommendations(
             snapshot_fallback.append(fb)
     snapshot_fallback.sort(key=rank_key, reverse=True)
     add_unique(recommendations, snapshot_fallback)
+
+    if len(recommendations) >= top_n:
+        return recommendations[:top_n]
+
+    # 第四層：收盤保底候選。保留過熱控管，但不要讓推薦區完全空白。
+    relaxed_fallback: List[Dict[str, Any]] = []
+    for stock in candidates:
+        change_pct = safe_float(stock.get("change_percent"))
+        volume = safe_int(stock.get("volume"))
+        if not (0.1 <= change_pct <= 8.0 and 500 <= volume <= 150000):
+            continue
+        score = max(snapshot_prescore(stock), safe_float(stock.get("recommendation_score") or stock.get("score")))
+        if score < 35:
+            continue
+        fb = dict(stock)
+        fb["setup_score"] = safe_float(fb.get("setup_score")) or score
+        fb["recommendation_score"] = score
+        fb["score"] = score
+        fb["stock_type"] = fb.get("stock_type") or "收盤保底候選"
+        fb["signal"] = fb.get("signal") or "收盤保底候選"
+        fb["operation_rating"] = fb.get("operation_rating") or "B+"
+        fb["analysis_source"] = "relaxed_snapshot_fallback"
+        fb["reason"] = build_relaxed_fallback_reason(fb, score)
+        relaxed_fallback.append(fb)
+    relaxed_fallback.sort(key=rank_key, reverse=True)
+    add_unique(recommendations, relaxed_fallback)
+
+    if len(recommendations) >= top_n:
+        return recommendations[:top_n]
+
+    # 第五層：全市場保底。只在前面完全不足時啟用，確保收盤後畫面一定有可觀察清單。
+    emergency_pool = [
+        s for s in stocks
+        if is_main_board_stock(s)
+        and safe_float(s.get("price")) >= 8
+        and safe_int(s.get("volume")) > 0
+        and safe_float(s.get("change_percent")) > -1.5
+    ]
+    emergency_pool.sort(
+        key=lambda s: (
+            max(snapshot_prescore(s), safe_float(s.get("recommendation_score") or s.get("score"))),
+            safe_float(s.get("change_percent")),
+            safe_int(s.get("volume")),
+        ),
+        reverse=True,
+    )
+    emergency_fallback: List[Dict[str, Any]] = []
+    for stock in emergency_pool:
+        score = max(snapshot_prescore(stock), safe_float(stock.get("recommendation_score") or stock.get("score")))
+        if score <= 0:
+            continue
+        fb = dict(stock)
+        fb["setup_score"] = safe_float(fb.get("setup_score")) or score
+        fb["recommendation_score"] = score
+        fb["score"] = score
+        fb["stock_type"] = "市場保底觀察"
+        fb["signal"] = fb.get("signal") or "市場保底觀察"
+        fb["operation_rating"] = fb.get("operation_rating") or "C"
+        fb["analysis_source"] = "emergency_market_fallback"
+        fb["reason"] = build_relaxed_fallback_reason(fb, score)
+        emergency_fallback.append(fb)
+        if len(emergency_fallback) >= top_n * 2:
+            break
+    add_unique(recommendations, emergency_fallback)
 
     return recommendations[:top_n]
 
