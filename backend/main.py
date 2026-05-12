@@ -1814,8 +1814,8 @@ def _upstash_cmd(*args) -> None:
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
             return json.loads(resp.read().decode("utf-8")).get("result")
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f"Upstash Redis 讀寫失敗：{exc}") from exc
 
 
 def load_validation_store() -> Dict[str, Any]:
@@ -2108,6 +2108,14 @@ def get_validation(
 
         # 取目標日期的 run
         store = load_validation_store()
+        if store.get("_read_error"):
+            return JSONResponse(status_code=503, content={
+                "success": False,
+                "error": "驗證資料庫讀取失敗，請檢查 Upstash Redis 環境變數或連線狀態。",
+                "validation": None,
+                "summary": {},
+                "available_dates": [],
+            })
         runs  = store.get("runs", {})
 
         if date.lower() in ("latest", "", "auto"):
