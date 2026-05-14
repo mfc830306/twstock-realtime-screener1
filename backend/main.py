@@ -3,6 +3,8 @@ import json
 import urllib.request
 import math
 import traceback
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,7 +43,7 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
     "last_update": "",
     "top_n": 0,
 }
-CACHE_SECONDS = 30
+CACHE_SECONDS = 60
 
 # 驗證系統 - Upstash Redis
 UPSTASH_REDIS_REST_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").strip()
@@ -55,7 +57,16 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "").strip()
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
-RECOMMENDATION_SEED_LIMIT = 120
+RECOMMENDATION_SEED_LIMIT = 80
+VALIDATION_JOB_ENABLED = os.getenv("VALIDATION_JOB_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
+try:
+    VALIDATION_JOB_INTERVAL_SECONDS = max(int(float(os.getenv("VALIDATION_JOB_INTERVAL_SECONDS", "1800"))), 300)
+except Exception:
+    VALIDATION_JOB_INTERVAL_SECONDS = 1800
+VALIDATION_JOB_FORCE_REFRESH = os.getenv("VALIDATION_JOB_FORCE_REFRESH", "true").strip().lower() not in {"0", "false", "no"}
+_VALIDATION_WORKER_STARTED = False
+_VALIDATION_JOB_RUNNING = False
+_VALIDATION_JOB_LAST_RESULT: Dict[str, Any] = {}
 
 
 
@@ -2015,30 +2026,56 @@ def update_validation_run(
     for item in run.get("items", []):
         symbol = safe_str(item.get("symbol"))
         stock  = stock_map.get(symbol)
-        if not stock:
+        if not symbol:
             continue
 
-        price      = safe_float(stock.get("price"))
-        open_price = safe_float(stock.get("open")) or price
-        if price <= 0:
-            continue
-
-        # 步驟1：首次出現 → 記錄進場價
-        if not item.get("entry_date"):
-            item["entry_date"]       = today_date
-            item["entry_open_price"] = open_price
-            changed = True
-
-        # 步驟2：記錄今日收盤
         daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
-        if today_date not in daily_closes:
-            daily_closes[today_date] = price
-            changed = True
+        historical_rows: List[Tuple[str, float, float]] = []
+        try:
+            candles = fetch_symbol_daily_candles(symbol).get("candles", [])
+            for candle in candles:
+                candle_date = normalize_date_key(candle.get("date"))
+                if not candle_date or candle_date <= run_date or candle_date > today_date:
+                    continue
+                candle_open = safe_float(candle.get("open"))
+                candle_close = safe_float(candle.get("close"))
+                if candle_close <= 0:
+                    continue
+                historical_rows.append((candle_date, candle_open, candle_close))
+        except Exception:
+            historical_rows = []
+
+        # 優先用歷史日K補齊，避免服務睡著或未開頁時漏掉追蹤日。
+        for candle_date, candle_open, candle_close in historical_rows:
+            if not item.get("entry_date") and candle_open > 0:
+                item["entry_date"] = candle_date
+                item["entry_open_price"] = candle_open
+                changed = True
+            if candle_date not in daily_closes:
+                daily_closes[candle_date] = candle_close
+                changed = True
+
+        # 歷史日K還沒補到今天時，用今日快照補上。
+        if stock:
+            price = safe_float(stock.get("price"))
+            open_price = safe_float(stock.get("open")) or price
+            if price > 0 and today_date > run_date:
+                if not item.get("entry_date") and open_price > 0:
+                    item["entry_date"] = today_date
+                    item["entry_open_price"] = open_price
+                    changed = True
+                if today_date not in daily_closes:
+                    daily_closes[today_date] = price
+                    changed = True
+
+        if not daily_closes:
+            continue
 
         # 步驟3：計算報酬
         start_close = safe_float(item.get("start_close_price"))
+        latest_close = safe_float(daily_closes[sorted(daily_closes.keys())[-1]])
         if start_close > 0:
-            item["return_from_close_pct"] = calc_pct(start_close, price)
+            item["return_from_close_pct"] = calc_pct(start_close, latest_close)
 
         entry_price = safe_float(item.get("entry_open_price"))
         entry_date  = safe_str(item.get("entry_date"))
@@ -2133,6 +2170,133 @@ def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def run_validation_job(force_refresh: bool = False, reason: str = "scheduler") -> Dict[str, Any]:
+    """主動驗證工作：收盤後保存當日推薦，並更新所有歷史推薦追蹤。"""
+    global _VALIDATION_JOB_RUNNING, _VALIDATION_JOB_LAST_RESULT
+
+    if _VALIDATION_JOB_RUNNING:
+        return {
+            "success": False,
+            "status": "running",
+            "message": "validation job already running",
+            "last_result": _VALIDATION_JOB_LAST_RESULT,
+        }
+
+    _VALIDATION_JOB_RUNNING = True
+    started_at = format_dt_taipei(now_taipei())
+    try:
+        result = get_cached_all_stocks(force_refresh=force_refresh)
+        all_stocks = result["stocks"]
+        market_status = get_market_status_text()
+        data_date = result["data_date"]
+        today_date = normalize_date_key(data_date)
+        last_update = result["last_update"]
+
+        if not should_settle_recommendations(market_status):
+            _VALIDATION_JOB_LAST_RESULT = {
+                "success": True,
+                "status": "skipped_intraday",
+                "reason": reason,
+                "market_status": market_status,
+                "data_date": data_date,
+                "started_at": started_at,
+                "finished_at": format_dt_taipei(now_taipei()),
+                "message": "盤中不建立或更新驗證，等待收盤後完整日K。",
+            }
+            return _VALIDATION_JOB_LAST_RESULT
+
+        store = load_validation_store()
+        if store.get("_read_error"):
+            _VALIDATION_JOB_LAST_RESULT = {
+                "success": False,
+                "status": "store_error",
+                "reason": reason,
+                "market_status": market_status,
+                "data_date": data_date,
+                "started_at": started_at,
+                "finished_at": format_dt_taipei(now_taipei()),
+                "message": "驗證資料庫讀取失敗，無法自動保存或追蹤。",
+            }
+            return _VALIDATION_JOB_LAST_RESULT
+
+        runs = store.setdefault("runs", {})
+        created_today = False
+        rec_count = 0
+        if today_date and today_date not in runs:
+            recs, rec_err = get_recommendations_safe(
+                all_stocks,
+                data_date=data_date,
+                last_update=last_update,
+                top_n=10,
+            )
+            rec_count = len(recs)
+            if recs:
+                create_validation_run(today_date, recs, last_update)
+                created_today = True
+            elif rec_err:
+                print(f"validation job recommendation skipped: {rec_err}")
+
+        stock_map = {safe_str(s.get("symbol")): s for s in all_stocks if safe_str(s.get("symbol"))}
+        update_all_runs(today_date, stock_map, last_update)
+
+        final_store = load_validation_store()
+        final_runs = final_store.get("runs", {}) if isinstance(final_store, dict) else {}
+        updated_runs = len(final_runs) if isinstance(final_runs, dict) else 0
+
+        _VALIDATION_JOB_LAST_RESULT = {
+            "success": True,
+            "status": "completed",
+            "reason": reason,
+            "market_status": market_status,
+            "data_date": data_date,
+            "last_update": last_update,
+            "created_today": created_today,
+            "recommendation_count": rec_count,
+            "tracked_run_count": updated_runs,
+            "started_at": started_at,
+            "finished_at": format_dt_taipei(now_taipei()),
+            "message": "收盤推薦保存與歷史推薦追蹤已完成。",
+        }
+        return _VALIDATION_JOB_LAST_RESULT
+    except Exception as exc:
+        _VALIDATION_JOB_LAST_RESULT = {
+            "success": False,
+            "status": "error",
+            "reason": reason,
+            "error": str(exc),
+            "trace": traceback.format_exc(),
+            "started_at": started_at,
+            "finished_at": format_dt_taipei(now_taipei()),
+        }
+        print(f"validation job failed: {exc}")
+        return _VALIDATION_JOB_LAST_RESULT
+    finally:
+        _VALIDATION_JOB_RUNNING = False
+
+
+def validation_worker_loop() -> None:
+    """背景排程：服務醒著時自動執行驗證工作。"""
+    while True:
+        try:
+            run_validation_job(
+                force_refresh=VALIDATION_JOB_FORCE_REFRESH,
+                reason="background_scheduler",
+            )
+        except Exception as exc:
+            print(f"validation worker loop error: {exc}")
+        time.sleep(VALIDATION_JOB_INTERVAL_SECONDS)
+
+
+def start_validation_worker() -> None:
+    global _VALIDATION_WORKER_STARTED
+    if _VALIDATION_WORKER_STARTED or not VALIDATION_JOB_ENABLED:
+        return
+    _VALIDATION_WORKER_STARTED = True
+    thread = threading.Thread(target=validation_worker_loop, name="validation-worker", daemon=True)
+    thread.start()
+    print(f"✅ validation worker started, interval={VALIDATION_JOB_INTERVAL_SECONDS}s")
+
+
 # =========================
 # Startup
 # =========================
@@ -2143,6 +2307,7 @@ def startup_event():
         print("✅ Fubon SDK initialized successfully")
     except Exception as e:
         print(f"⚠️ Fubon SDK startup init failed: {e}")
+    start_validation_worker()
 
 
 # =========================
@@ -2171,27 +2336,10 @@ def get_validation(
     - 返回指定日期（或最新）的驗證結果
     """
     try:
-        result      = get_cached_all_stocks(force_refresh=force_refresh)
-        all_stocks  = result["stocks"]
+        job_result = run_validation_job(force_refresh=force_refresh, reason="api_validation_page")
+        result = get_cached_all_stocks(force_refresh=False)
         market_status = get_market_status_text()
-        today_date  = normalize_date_key(result["data_date"])
-        stock_map   = {safe_str(s.get("symbol")): s for s in all_stocks if safe_str(s.get("symbol"))}
-
-        # 收盤後：保存今日推薦（若尚未保存）
-        if should_settle_recommendations(market_status):
-            store = load_validation_store()
-            if not store.get("_read_error") and today_date and today_date not in store.get("runs", {}):
-                recs, _ = get_recommendations_safe(
-                    all_stocks,
-                    data_date=result["data_date"],
-                    last_update=result["last_update"],
-                    top_n=10,
-                )
-                if recs:
-                    create_validation_run(today_date, recs, result["last_update"])
-
-            # 更新所有 run（只在 /validation 呼叫）
-            update_all_runs(today_date, stock_map, result["last_update"])
+        today_date = normalize_date_key(result["data_date"])
 
         # 取目標日期的 run
         store = load_validation_store()
@@ -2231,6 +2379,7 @@ def get_validation(
             "validation":    run,
             "summary":       summarize_run(run),
             "available_dates": sorted(runs.keys(), reverse=True)[:30],
+            "job":           job_result,
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={
@@ -2262,6 +2411,34 @@ def get_validation_history(limit: int = Query(60, ge=1, le=365)):
         return JSONResponse(status_code=500, content={
             "success": False, "error": str(e),
         })
+
+
+@app.get("/jobs/validation-tick")
+def validation_tick(
+    secret: str = Query(""),
+    force_refresh: bool = Query(True),
+):
+    """外部 Cron 可呼叫此端點，補強 Render 休眠時的自動驗證。"""
+    if ADMIN_SECRET and secret != ADMIN_SECRET:
+        return JSONResponse(status_code=403, content={"success": False, "error": "forbidden"})
+    result = run_validation_job(force_refresh=force_refresh, reason="cron_tick")
+    status_code = 200 if result.get("success") else 500
+    if result.get("status") == "store_error":
+        status_code = 503
+    if result.get("status") == "running":
+        status_code = 409
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/validation/job-status")
+def validation_job_status():
+    return {
+        "success": True,
+        "enabled": VALIDATION_JOB_ENABLED,
+        "running": _VALIDATION_JOB_RUNNING,
+        "interval_seconds": VALIDATION_JOB_INTERVAL_SECONDS,
+        "last_result": _VALIDATION_JOB_LAST_RESULT,
+    }
 
 
 @app.post("/admin/reset-validation")
