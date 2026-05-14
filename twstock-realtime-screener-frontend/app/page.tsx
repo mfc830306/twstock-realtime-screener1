@@ -1552,7 +1552,7 @@ export default function Home() {
                 <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>
                   {validationRun?.date ? `${validationRun.date.slice(0,4)}/${validationRun.date.slice(4,6)}/${validationRun.date.slice(6,8)} 推薦追蹤` : "等待資料..."}
                 </h2>
-                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>隔日開盤進場 ｜ 追蹤 1日 / 3日 / 5日報酬</div>
+                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>後端自動收盤保存 ｜ 隔日開盤進場 ｜ 追蹤 1日 / 3日 / 5日報酬</div>
               </div>
               <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                 {availableDates.length > 1 && availableDates.map(d => {
@@ -1622,14 +1622,14 @@ export default function Home() {
             {/* 等待進場提示 */}
             {validationSummary && validationSummary.entered_count === 0 && (validationRun?.items?.length ?? 0) > 0 && (
               <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
-                📋 已保存 {validationRun?.items?.length ?? 0} 檔推薦，等隔日開盤後記錄進場價，開始追蹤報酬。
+                📋 已保存 {validationRun?.items?.length ?? 0} 檔推薦，後端會自動用隔日開盤價與每日收盤價追蹤報酬。
               </div>
             )}
 
             {/* 股票卡片列表 */}
             {!validationRun?.items?.length ? (
               <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
-                {validationLoading ? "讀取中..." : validationRun?.message || "尚未保存今日推薦，收盤後切換到此頁即自動保存。"}
+                {validationLoading ? "讀取中..." : validationRun?.message || "尚未保存今日推薦；後端排程會在收盤後自動保存。"}
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: "12px" }}>
@@ -1708,7 +1708,7 @@ export default function Home() {
             )}
             {validationHistory.length === 0 ? (
               <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
-                尚未保存任何紀錄。收盤後切換到「驗證追蹤」頁即自動保存。
+                尚未保存任何紀錄。後端排程會在收盤後自動保存推薦10檔。
               </div>
             ) : (
               <div style={{ display: "grid", gap: "16px" }}>
