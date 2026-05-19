@@ -288,6 +288,7 @@ export default function Home() {
   const [recommendationHistory, setRecommendationHistory] = useState<RecommendationHistoryRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [selectedHistoryDate, setSelectedHistoryDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
@@ -371,11 +372,18 @@ export default function Home() {
       if (!res.ok) throw new Error(`推薦紀錄 API HTTP ${res.status}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error || data.message || "推薦紀錄載入失敗");
-      setRecommendationHistory(data.records ?? data.runs ?? []);
+      const records: RecommendationHistoryRecord[] = data.records ?? data.runs ?? [];
+      setRecommendationHistory(records);
+      setSelectedHistoryDate((current) =>
+        current && records.some((record) => record.date === current)
+          ? current
+          : records[0]?.date || ""
+      );
     } catch (e) {
       console.error("fetchRecommendationHistory error", e);
       setHistoryError(e instanceof Error ? e.message : "推薦紀錄載入失敗");
       setRecommendationHistory([]);
+      setSelectedHistoryDate("");
     } finally {
       setHistoryLoading(false);
     }
@@ -560,6 +568,14 @@ export default function Home() {
     if (debouncedSearchTerm && stocks.length === 1) return stockToFocused(stocks[0]);
     return null;
   }, [manualSelectedSymbol, stocks, recommendations, focusedStock, debouncedSearchTerm]);
+
+  const selectedHistoryRecord = useMemo(() => {
+    if (!recommendationHistory.length) return null;
+    return (
+      recommendationHistory.find((record) => record.date === selectedHistoryDate) ||
+      recommendationHistory[0]
+    );
+  }, [recommendationHistory, selectedHistoryDate]);
 
   const toggleRecommendationsPanel = () => {
     setShowRecommendationsPanel((prev) => {
@@ -1533,28 +1549,65 @@ export default function Home() {
                 {historyLoading ? "讀取中..." : "尚未保存任何推薦紀錄。收盤後後端會自動保存當日推薦10檔。"}
               </div>
             ) : (
-              <div style={{ display: "grid", gap: "16px" }}>
-                {recommendationHistory.map((record) => (
-                  <div key={record.date} style={{ borderRadius: "20px", padding: "16px 20px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
+              <div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "10px",
+                    flexWrap: "wrap",
+                    marginBottom: "16px",
+                  }}
+                >
+                  {recommendationHistory.map((record) => {
+                    const active = selectedHistoryRecord?.date === record.date;
+                    return (
+                      <button
+                        key={record.date}
+                        type="button"
+                        onClick={() => setSelectedHistoryDate(record.date)}
+                        style={{
+                          border: active ? "1px solid rgba(255,217,95,0.52)" : "1px solid rgba(120,180,255,0.22)",
+                          borderRadius: "999px",
+                          padding: "9px 14px",
+                          background: active
+                            ? "linear-gradient(180deg, rgba(255,217,95,0.22) 0%, rgba(20,58,112,0.72) 100%)"
+                            : "rgba(255,255,255,0.05)",
+                          color: active ? "#ffd95f" : "#cfe3ff",
+                          fontWeight: 900,
+                          cursor: "pointer",
+                          boxShadow: active ? "0 10px 24px rgba(255,217,95,0.12)" : "none",
+                        }}
+                      >
+                        {formatDateString(record.date)}
+                        <span style={{ marginLeft: "8px", color: active ? "#ffffff" : "#8fc3ff", fontSize: "12px" }}>
+                          {record.count ?? record.items?.length ?? 0} 檔
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedHistoryRecord && (
+                  <div key={selectedHistoryRecord.date} style={{ borderRadius: "20px", padding: "16px 20px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: "12px", flexWrap: "wrap", gap: "8px", flexDirection: isMobile ? "column" : "row" }}>
                       <div>
                         <div style={{ color: "#fff", fontSize: "20px", fontWeight: 900 }}>
-                          {formatDateString(record.date)} 推薦10檔
+                          {formatDateString(selectedHistoryRecord.date)} 推薦10檔
                         </div>
                         <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px", fontWeight: 800 }}>
-                          建立：{record.created_at || "-"} ｜ 更新：{record.last_update || "-"} ｜ 狀態：{record.market_status || "-"}
+                          建立：{selectedHistoryRecord.created_at || "-"} ｜ 更新：{selectedHistoryRecord.last_update || "-"} ｜ 狀態：{selectedHistoryRecord.market_status || "-"}
                         </div>
                       </div>
                       <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
-                        共 {record.count ?? record.items?.length ?? 0} 檔
+                        共 {selectedHistoryRecord.count ?? selectedHistoryRecord.items?.length ?? 0} 檔
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: "10px" }}>
-                      {(record.items || []).map((stock, i) => {
+                      {(selectedHistoryRecord.items || []).map((stock, i) => {
                         const savedChangePercent = stock.saved_change_percent ?? stock.change_percent;
                         const changeColor = (savedChangePercent ?? 0) >= 0 ? "#ff8b8b" : "#57e389";
                         return (
-                          <div key={`${record.date}-${stock.symbol}-${i}`} style={{ borderRadius: "14px", padding: "12px 14px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                          <div key={`${selectedHistoryRecord.date}-${stock.symbol}-${i}`} style={{ borderRadius: "14px", padding: "12px 14px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", marginBottom: "8px" }}>
                               <div style={{ color: "#fff", fontSize: "15px", fontWeight: 900 }}>
                                 {stock.rank || i + 1}. {stock.symbol} {stock.name}
@@ -1574,7 +1627,7 @@ export default function Home() {
                       })}
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>
