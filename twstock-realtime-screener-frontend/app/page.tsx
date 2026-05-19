@@ -104,43 +104,23 @@ const PRICE_CATEGORIES = [
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
-type ActiveScreen = "screener" | "validation" | "history";
+type ActiveScreen = "screener" | "stocks" | "history";
 
-type ValidationItem = {
+type RecommendationHistoryItem = Stock & {
   rank?: number;
-  symbol: string;
-  name: string;
-  signal?: string;
-  operation_rating?: string;
-  setup_score?: number;
-  start_close_price?: number;
-  entry_date?: string;
-  entry_open_price?: number;
-  return_from_close_pct?: number;
-  latest_return_pct?: number;
-  horizon_returns?: Record<string, number>;
+  saved_price?: number;
+  saved_change?: number;
+  saved_change_percent?: number;
+  saved_volume?: number;
 };
 
-type HorizonSummary = { count: number; avg_pct: number; win_rate_pct: number };
-
-type ValidationSummary = {
-  count: number;
-  entered_count: number;
-  avg_return_pct: number;
-  win_rate_pct: number;
-  best?: { symbol: string; name: string; pct: number } | null;
-  worst?: { symbol: string; name: string; pct: number } | null;
-  horizon_summary: Record<string, HorizonSummary>;
-};
-
-type ValidationRun = {
+type RecommendationHistoryRecord = {
   date: string;
   created_at: string;
   last_update: string;
-  status?: string;
-  items: ValidationItem[];
-  summary?: ValidationSummary;
-  message?: string;
+  market_status?: string;
+  count?: number;
+  items: RecommendationHistoryItem[];
 };
 
 const ITEMS_PER_PAGE = 20;
@@ -305,12 +285,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>("screener");
-  const [validationRun, setValidationRun] = useState<ValidationRun | null>(null);
-  const [validationSummary, setValidationSummary] = useState<ValidationSummary | null>(null);
-  const [validationHistory, setValidationHistory] = useState<ValidationRun[]>([]);
-  const [validationLoading, setValidationLoading] = useState(false);
-  const [validationError, setValidationError] = useState("");
-  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [recommendationHistory, setRecommendationHistory] = useState<RecommendationHistoryRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
   const [manualSelectedSymbol, setManualSelectedSymbol] = useState("");
@@ -386,40 +363,21 @@ export default function Home() {
     }
   }
 
-  async function fetchValidationSafe(date: string = "latest", forceRefresh = false) {
-    setValidationLoading(true);
-    setValidationError("");
+  async function fetchRecommendationHistorySafe() {
+    setHistoryLoading(true);
+    setHistoryError("");
     try {
-      const params = new URLSearchParams({ date, force_refresh: String(forceRefresh) });
-      const res  = await fetch(`${BACKEND_BASE.replace("/stocks", "/validation")}?${params}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`驗證 API HTTP ${res.status}`);
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || data.message || "驗證資料載入失敗");
-      setValidationRun(data.validation ?? null);
-      setValidationSummary(data.summary ?? null);
-      setAvailableDates(data.available_dates ?? []);
-    } catch (e) {
-      console.error("fetchValidation error", e);
-      setValidationError(e instanceof Error ? e.message : "驗證資料載入失敗");
-      setValidationRun(null);
-      setValidationSummary(null);
-    } finally {
-      setValidationLoading(false);
-    }
-  }
-
-  async function fetchValidationHistorySafe() {
-    setValidationError("");
-    try {
-      const res  = await fetch(`${BACKEND_BASE.replace("/stocks", "/validation/history")}?limit=60`, { cache: "no-store" });
+      const res = await fetch(`${API_BASE}/recommendations/history?limit=120`, { cache: "no-store" });
       if (!res.ok) throw new Error(`推薦紀錄 API HTTP ${res.status}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error || data.message || "推薦紀錄載入失敗");
-      setValidationHistory(data.runs ?? []);
+      setRecommendationHistory(data.records ?? data.runs ?? []);
     } catch (e) {
-      console.error("fetchValidationHistory error", e);
-      setValidationError(e instanceof Error ? e.message : "推薦紀錄載入失敗");
-      setValidationHistory([]);
+      console.error("fetchRecommendationHistory error", e);
+      setHistoryError(e instanceof Error ? e.message : "推薦紀錄載入失敗");
+      setRecommendationHistory([]);
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -557,8 +515,7 @@ export default function Home() {
   }, [currentPage, debouncedSearchTerm, selectedCategory, rankType]);
 
   useEffect(() => {
-    if (activeScreen === "validation") fetchValidationSafe();
-    if (activeScreen === "history") fetchValidationHistorySafe();
+    if (activeScreen === "history") fetchRecommendationHistorySafe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeScreen]);
 
@@ -731,8 +688,8 @@ export default function Home() {
             >
               {[
                 { key: "screener" as ActiveScreen, label: "選股首頁" },
-                  { key: "validation" as ActiveScreen, label: "驗證追蹤" },
-                  { key: "history" as ActiveScreen, label: "推薦紀錄" },
+                { key: "stocks" as ActiveScreen, label: "股價列表" },
+                { key: "history" as ActiveScreen, label: "推薦紀錄" },
               ].map((item) => {
                 const active = activeScreen === item.key;
                 return (
@@ -805,12 +762,16 @@ export default function Home() {
           </div>
         )}
 
-        {activeScreen === "screener" && (
+        {(activeScreen === "screener" || activeScreen === "stocks") && (
           <>
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: isMobile ? "1fr" : "minmax(320px, 390px) minmax(0, 1fr)",
+            gridTemplateColumns: isMobile
+              ? "1fr"
+              : activeScreen === "screener"
+                ? "minmax(320px, 390px) minmax(0, 1fr)"
+                : "1fr",
             gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
@@ -826,8 +787,11 @@ export default function Home() {
                 marginBottom: "18px",
               }}
             >
-              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>價格分類</h2>
+              <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>
+                {activeScreen === "stocks" ? "價格分類" : "搜尋股票"}
+              </h2>
             </div>
+            {activeScreen === "stocks" && (
             <div style={{ marginBottom: "20px" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
                 {PRICE_CATEGORIES.map((item) => {
@@ -862,6 +826,7 @@ export default function Home() {
                 })}
               </div>
             </div>
+            )}
 
             <input
               value={searchTerm}
@@ -884,6 +849,7 @@ export default function Home() {
               }}
             />
 
+            {activeScreen === "stocks" && (
             <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
               {(["recommend", "up", "down"] as RankType[]).map((r) => {
                 const labels = { recommend: "推薦", up: "漲幅", down: "跌幅" };
@@ -902,7 +868,9 @@ export default function Home() {
                 );
               })}
             </div>
+            )}
 
+            {activeScreen === "stocks" && (
             <div
               style={{
                 marginTop: "18px",
@@ -921,8 +889,10 @@ export default function Home() {
               <div>• 點擊推薦股或列表股，也可直接切換分析</div>
               <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
             </div>
+            )}
           </div>
 
+          {activeScreen === "screener" && (
           <div style={recommendationPanelStyle}>
             <div
               style={{
@@ -1141,6 +1111,7 @@ export default function Home() {
             )}
 
           </div>
+          )}
         </section>
 
         {activeFocusedStock && (
@@ -1302,6 +1273,7 @@ export default function Home() {
           </section>
         )}
 
+        {activeScreen === "stocks" && (
         <section
           style={{
             background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
@@ -1539,208 +1511,76 @@ export default function Home() {
             </div>
           )}
         </section>
+        )}
           </>
         )}
       </div>
-        {/* ===== 驗證追蹤頁 ===== */}
-        {activeScreen === "validation" && (
-          <div style={{ maxWidth: "1400px", margin: "0 auto", padding: isMobile ? "18px 16px" : "26px 36px" }}>
-            {/* 標題 */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: "20px", flexWrap: "wrap", gap: "12px", flexDirection: isMobile ? "column" : "row" }}>
-              <div>
-                <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "4px" }}>純技術線驗證追蹤</div>
-                <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>
-                  {validationRun?.date ? `${validationRun.date.slice(0,4)}/${validationRun.date.slice(4,6)}/${validationRun.date.slice(6,8)} 推薦追蹤` : "等待資料..."}
-                </h2>
-                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>後端自動收盤保存 ｜ 隔日開盤進場 ｜ 追蹤 1日 / 3日 / 5日報酬</div>
-              </div>
-              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                {availableDates.length > 1 && availableDates.map(d => {
-                  const isActive = validationRun?.date === d;
-                  return (
-                    <button key={d} type="button" onClick={() => fetchValidationSafe(d)}
-                      style={{ border: `1px solid ${isActive ? "rgba(120,205,255,0.6)" : "rgba(120,180,255,0.2)"}`, borderRadius: "10px", padding: "6px 12px", background: isActive ? "rgba(90,165,255,0.2)" : "rgba(255,255,255,0.04)", color: isActive ? "#7fb6ff" : "#9fc7f5", fontWeight: 900, fontSize: "13px", cursor: "pointer" }}>
-                      {`${d.slice(4,6)}/${d.slice(6,8)}`}
-                    </button>
-                  );
-                })}
-                <button type="button" onClick={() => fetchValidationSafe("latest", true)} disabled={validationLoading}
-                  style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: validationLoading ? "not-allowed" : "pointer", opacity: validationLoading ? 0.6 : 1 }}>
-                  {validationLoading ? "更新中..." : "更新"}
-                </button>
-              </div>
-            </div>
-
-            {validationError && (
-              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,80,80,0.14)", border: "1px solid rgba(255,120,120,0.3)", color: "#ffd4d4", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
-                驗證資料載入失敗：{validationError}
-              </div>
-            )}
-
-            {validationRun?.message && (
-              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(120,180,255,0.1)", border: "1px solid rgba(120,180,255,0.18)", color: "#cfe3ff", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
-                {validationRun.message}
-              </div>
-            )}
-
-            {/* 4個總結指標 */}
-            {validationSummary && validationSummary.entered_count > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: "12px", marginBottom: "20px" }}>
-                {[
-                  { label: "進場平均報酬", value: `${(validationSummary.avg_return_pct ?? 0) >= 0 ? "+" : ""}${(validationSummary.avg_return_pct ?? 0).toFixed(2)}%`, color: (validationSummary.avg_return_pct ?? 0) >= 0 ? "#7ee787" : "#ff7c7c" },
-                  { label: "勝率", value: `${(validationSummary.win_rate_pct ?? 0).toFixed(1)}%`, color: (validationSummary.win_rate_pct ?? 0) >= 50 ? "#7ee787" : "#ff7c7c" },
-                  { label: "最好一檔", value: validationSummary.best ? `${validationSummary.best.name} ${(validationSummary.best.pct ?? 0) >= 0 ? "+" : ""}${(validationSummary.best.pct ?? 0).toFixed(2)}%` : "-", color: "#7ee787" },
-                  { label: "最差一檔", value: validationSummary.worst ? `${validationSummary.worst.name} ${(validationSummary.worst.pct ?? 0) >= 0 ? "+" : ""}${(validationSummary.worst.pct ?? 0).toFixed(2)}%` : "-", color: "#ff7c7c" },
-                ].map(item => (
-                  <div key={item.label} style={{ borderRadius: "16px", padding: "14px 16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
-                    <div style={{ color: "#8fc3ff", fontSize: "11px", fontWeight: 900, marginBottom: "8px" }}>{item.label}</div>
-                    <div style={{ color: item.color, fontSize: "18px", fontWeight: 900 }}>{item.value}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Horizon 統計 */}
-            {validationSummary && Object.keys(validationSummary.horizon_summary || {}).length > 0 && (
-              <div style={{ display: "flex", gap: "10px", marginBottom: "20px", flexWrap: "wrap" }}>
-                {["1","3","5"].map(h => {
-                  const hs = validationSummary?.horizon_summary?.[h];
-                  if (!hs) return null;
-                  return (
-                    <div key={h} style={{ borderRadius: "14px", padding: "10px 16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)", minWidth: "120px" }}>
-                      <div style={{ color: "#8fc3ff", fontSize: "11px", fontWeight: 900, marginBottom: "6px" }}>第 {h} 日</div>
-                      <div style={{ color: (hs.avg_pct ?? 0) >= 0 ? "#7ee787" : "#ff7c7c", fontSize: "18px", fontWeight: 900 }}>
-                        {(hs.avg_pct ?? 0) >= 0 ? "+" : ""}{(hs.avg_pct ?? 0).toFixed(2)}%
-                      </div>
-                      <div style={{ color: "#9fc7f5", fontSize: "11px", marginTop: "4px" }}>勝率 {(hs.win_rate_pct ?? 0).toFixed(0)}%（{hs.count} 檔）</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* 等待進場提示 */}
-            {validationSummary && validationSummary.entered_count === 0 && (validationRun?.items?.length ?? 0) > 0 && (
-              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
-                📋 已保存 {validationRun?.items?.length ?? 0} 檔推薦，後端會自動用隔日開盤價與每日收盤價追蹤報酬。
-              </div>
-            )}
-
-            {/* 股票卡片列表 */}
-            {!validationRun?.items?.length ? (
-              <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
-                {validationLoading ? "讀取中..." : validationRun?.message || "尚未保存今日推薦；後端排程會在收盤後自動保存。"}
-              </div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: "12px" }}>
-                {validationRun.items.map((stock, idx) => {
-                  const entered  = !!stock.entry_open_price;
-                  const rc = (n?: number) => !n ? "#cfe3ff" : n > 0 ? "#7ee787" : "#ff7c7c";
-                  const horizonKeys = ["1","3","5"].filter(h => stock.horizon_returns?.[h] != null);
-                  return (
-                    <div key={stock.symbol} style={{ borderRadius: "18px", padding: "16px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                        <div style={{ color: "#fff", fontSize: "15px", fontWeight: 900 }}>
-                          {stock.rank || idx + 1}. {stock.symbol} {stock.name}
-                        </div>
-                        <span style={{ color: "#ffd95f", fontSize: "12px", fontWeight: 900 }}>{(stock.setup_score || 0).toFixed(0)}分</span>
-                      </div>
-                      <div style={{ display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" }}>
-                        {stock.signal && <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#ff9c9c" }}>{stock.signal}</span>}
-                        {stock.operation_rating && <span style={{ background: "rgba(255,255,255,0.08)", borderRadius: "999px", padding: "2px 8px", fontSize: "11px", fontWeight: 800, color: "#7fb6ff" }}>評級 {stock.operation_rating}</span>}
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "6px", marginBottom: "8px" }}>
-                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>推薦收盤</div>
-                          <div style={{ color: "#fff", fontSize: "14px", fontWeight: 900 }}>{stock.start_close_price || "-"}</div>
-                        </div>
-                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>{entered ? "進場開盤" : "等隔日開盤"}</div>
-                          <div style={{ color: "#fff", fontSize: "14px", fontWeight: 900 }}>{entered ? stock.entry_open_price : "-"}</div>
-                        </div>
-                        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "8px" }}>
-                          <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900, marginBottom: "3px" }}>收盤起算</div>
-                          <div style={{ color: rc(stock.return_from_close_pct), fontSize: "14px", fontWeight: 900 }}>
-                            {stock.return_from_close_pct != null ? `${(stock.return_from_close_pct ?? 0) > 0 ? "+" : ""}${(stock.return_from_close_pct ?? 0).toFixed(2)}%` : "-"}
-                          </div>
-                        </div>
-                      </div>
-                      {horizonKeys.length > 0 ? (
-                        <div style={{ display: "flex", gap: "6px" }}>
-                          {horizonKeys.map(h => {
-                            const val = stock.horizon_returns?.[h];
-                            return (
-                              <div key={h} style={{ background: "rgba(0,0,0,0.25)", borderRadius: "8px", padding: "4px 10px", textAlign: "center" }}>
-                                <div style={{ color: "#8fc3ff", fontSize: "10px", fontWeight: 900 }}>第{h}日</div>
-                                <div style={{ color: rc(val), fontSize: "13px", fontWeight: 900 }}>{val != null ? `${(val ?? 0) > 0 ? "+" : ""}${(val ?? 0).toFixed(2)}%` : "-"}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div style={{ color: "#9fc7f5", fontSize: "11px" }}>{entered ? "持續追蹤中..." : "等隔日開盤後開始追蹤"}</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* ===== 推薦紀錄頁 ===== */}
         {activeScreen === "history" && (
           <div style={{ maxWidth: "1400px", margin: "0 auto", padding: isMobile ? "18px 16px" : "26px 36px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: "20px", gap: "12px", flexDirection: isMobile ? "column" : "row" }}>
               <div>
                 <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "4px" }}>每日歸檔</div>
-                <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>所有推薦紀錄</h2>
+                <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>推薦紀錄</h2>
+                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>每天收盤後各自保存推薦10檔，不覆蓋前一天。</div>
               </div>
-              <button type="button" onClick={fetchValidationHistorySafe}
-                style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: "pointer" }}>
-                重新整理
+              <button type="button" onClick={fetchRecommendationHistorySafe} disabled={historyLoading}
+                style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: historyLoading ? "not-allowed" : "pointer", opacity: historyLoading ? 0.65 : 1 }}>
+                {historyLoading ? "讀取中..." : "重新整理"}
               </button>
             </div>
-            {validationError && (
+            {historyError && (
               <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,80,80,0.14)", border: "1px solid rgba(255,120,120,0.3)", color: "#ffd4d4", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
-                推薦紀錄載入失敗：{validationError}
+                推薦紀錄載入失敗：{historyError}
               </div>
             )}
-            {validationHistory.length === 0 ? (
+            {recommendationHistory.length === 0 ? (
               <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
-                尚未保存任何紀錄。後端排程會在收盤後自動保存推薦10檔。
+                {historyLoading ? "讀取中..." : "尚未保存任何推薦紀錄。收盤後後端會自動保存當日推薦10檔。"}
               </div>
             ) : (
               <div style={{ display: "grid", gap: "16px" }}>
-                {validationHistory.map(run => {
-                  const s = run.summary as ValidationSummary | undefined;
-                  const rc = (n: number) => n > 0 ? "#7ee787" : n < 0 ? "#ff7c7c" : "#cfe3ff";
-                  return (
-                    <div key={run.date} style={{ borderRadius: "20px", padding: "16px 20px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "8px" }}>
-                        <div style={{ color: "#fff", fontSize: "18px", fontWeight: 900 }}>
-                          {run.date.slice(0,4)}/{run.date.slice(4,6)}/{run.date.slice(6,8)} 推薦10檔
+                {recommendationHistory.map((record) => (
+                  <div key={record.date} style={{ borderRadius: "20px", padding: "16px 20px", background: "rgba(20,58,112,0.52)", border: "1px solid rgba(120,180,255,0.16)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: "12px", flexWrap: "wrap", gap: "8px", flexDirection: isMobile ? "column" : "row" }}>
+                      <div>
+                        <div style={{ color: "#fff", fontSize: "20px", fontWeight: 900 }}>
+                          {formatDateString(record.date)} 推薦10檔
                         </div>
-                        {s && s.entered_count > 0 && (
-                          <div style={{ display: "flex", gap: "10px", fontSize: "13px", fontWeight: 800, color: "#cfe3ff" }}>
-                            <span>平均 <span style={{ color: rc(s.avg_return_pct ?? 0) }}>{(s.avg_return_pct ?? 0) >= 0 ? "+" : ""}{(s.avg_return_pct ?? 0).toFixed(2)}%</span></span>
-                            <span>勝率 <span style={{ color: (s.win_rate_pct ?? 0) >= 50 ? "#7ee787" : "#ff7c7c" }}>{(s.win_rate_pct ?? 0).toFixed(0)}%</span></span>
-                          </div>
-                        )}
+                        <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px", fontWeight: 800 }}>
+                          建立：{record.created_at || "-"} ｜ 更新：{record.last_update || "-"} ｜ 狀態：{record.market_status || "-"}
+                        </div>
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: "8px" }}>
-                        {run.items?.map((stock: ValidationItem, i: number) => (
-                          <div key={stock.symbol} style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: "10px", fontSize: "13px", fontWeight: 800 }}>
-                            <span style={{ color: "#cfe3ff" }}>{i + 1}. {stock.symbol} {stock.name}</span>
-                            <span style={{ color: (stock.return_from_close_pct ?? 0) !== 0 ? rc(stock.return_from_close_pct ?? 0) : "#9fc7f5" }}>
-                              {(stock.return_from_close_pct ?? 0) !== 0 ? `${(stock.return_from_close_pct ?? 0) > 0 ? "+" : ""}${(stock.return_from_close_pct ?? 0).toFixed(2)}%` : "等開盤"}
-                            </span>
-                          </div>
-                        ))}
+                      <div style={{ color: "#ffd95f", fontSize: "13px", fontWeight: 900 }}>
+                        共 {record.count ?? record.items?.length ?? 0} 檔
                       </div>
                     </div>
-                  );
-                })}
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: "10px" }}>
+                      {(record.items || []).map((stock, i) => {
+                        const savedChangePercent = stock.saved_change_percent ?? stock.change_percent;
+                        const changeColor = (savedChangePercent ?? 0) >= 0 ? "#ff8b8b" : "#57e389";
+                        return (
+                          <div key={`${record.date}-${stock.symbol}-${i}`} style={{ borderRadius: "14px", padding: "12px 14px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", marginBottom: "8px" }}>
+                              <div style={{ color: "#fff", fontSize: "15px", fontWeight: 900 }}>
+                                {stock.rank || i + 1}. {stock.symbol} {stock.name}
+                              </div>
+                              <div style={{ color: "#ffd95f", fontSize: "12px", fontWeight: 900 }}>
+                                {stock.recommendation_score || stock.score || 0} 分
+                              </div>
+                            </div>
+                            <div style={{ color: "#cfe3ff", fontSize: "12px", lineHeight: 1.7, fontWeight: 800 }}>
+                              {stock.market || "-"} ｜ {stock.signal || "-"} ｜ 評級 {stock.operation_rating || "-"}
+                            </div>
+                            <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 800, marginTop: "4px" }}>
+                              股價 {formatPrice(stock.saved_price ?? stock.price)} ｜ <span style={{ color: changeColor }}>漲跌% {formatSigned(savedChangePercent)}%</span> ｜ 成交量 {formatNumber(stock.saved_volume ?? stock.volume)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
