@@ -45,28 +45,28 @@ _RECOMMENDATION_CACHE: Dict[str, Any] = {
 }
 CACHE_SECONDS = 60
 
-# 驗證系統 - Upstash Redis
+# 推薦紀錄 - Upstash Redis
 UPSTASH_REDIS_REST_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").strip()
 UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "").strip()
-UPSTASH_REDIS_KEY        = "twstock:validation_runs"
-VALIDATION_STORE_PATH    = os.getenv(
-    "VALIDATION_STORE_PATH",
-    os.path.join(os.getcwd(), "validation_runs.json"),
+RECOMMENDATION_HISTORY_KEY = os.getenv("RECOMMENDATION_HISTORY_KEY", "twstock:recommendation_history_v1")
+RECOMMENDATION_HISTORY_STORE_PATH = os.getenv(
+    "RECOMMENDATION_HISTORY_STORE_PATH",
+    os.path.join(os.getcwd(), "recommendation_history.json"),
 )
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "").strip()
 
 
 TZ_TAIPEI = timezone(timedelta(hours=8))
 RECOMMENDATION_SEED_LIMIT = 80
-VALIDATION_JOB_ENABLED = os.getenv("VALIDATION_JOB_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
+RECOMMENDATION_HISTORY_JOB_ENABLED = os.getenv("RECOMMENDATION_HISTORY_JOB_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
 try:
-    VALIDATION_JOB_INTERVAL_SECONDS = max(int(float(os.getenv("VALIDATION_JOB_INTERVAL_SECONDS", "1800"))), 300)
+    RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS = max(int(float(os.getenv("RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS", "1800"))), 300)
 except Exception:
-    VALIDATION_JOB_INTERVAL_SECONDS = 1800
-VALIDATION_JOB_FORCE_REFRESH = os.getenv("VALIDATION_JOB_FORCE_REFRESH", "true").strip().lower() not in {"0", "false", "no"}
-_VALIDATION_WORKER_STARTED = False
-_VALIDATION_JOB_RUNNING = False
-_VALIDATION_JOB_LAST_RESULT: Dict[str, Any] = {}
+    RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS = 1800
+RECOMMENDATION_HISTORY_JOB_FORCE_REFRESH = os.getenv("RECOMMENDATION_HISTORY_JOB_FORCE_REFRESH", "true").strip().lower() not in {"0", "false", "no"}
+_RECOMMENDATION_HISTORY_WORKER_STARTED = False
+_RECOMMENDATION_HISTORY_JOB_RUNNING = False
+_RECOMMENDATION_HISTORY_JOB_LAST_RESULT: Dict[str, Any] = {}
 
 
 
@@ -1892,16 +1892,16 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================
-# 驗證系統
+# Recommendation History
 # =========================
 
-def _upstash_cmd(*args) -> None:
-    """呼叫 Upstash Redis REST API"""
+def _upstash_cmd(*args) -> Any:
+    """Call Upstash Redis REST API."""
     if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
         return None
     try:
         body = json.dumps(list(args)).encode("utf-8")
-        req  = urllib.request.Request(
+        req = urllib.request.Request(
             UPSTASH_REDIS_REST_URL,
             data=body,
             headers={
@@ -1913,287 +1913,135 @@ def _upstash_cmd(*args) -> None:
         with urllib.request.urlopen(req, timeout=8) as resp:
             return json.loads(resp.read().decode("utf-8")).get("result")
     except Exception as exc:
-        raise RuntimeError(f"Upstash Redis 讀寫失敗：{exc}") from exc
+        raise RuntimeError(f"Upstash Redis read/write failed: {exc}") from exc
 
 
-def load_validation_store() -> Dict[str, Any]:
-    """讀取驗證資料（優先 Upstash，fallback 本地 JSON）"""
+def normalize_recommendation_history_store(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return {"records": {}}
+    records = data.get("records")
+    if not isinstance(records, dict):
+        records = {}
+    data["records"] = records
+    return data
+
+
+def load_recommendation_history_store() -> Dict[str, Any]:
+    """Read daily recommendation records. Records are keyed by YYYYMMDD."""
     if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
         try:
-            raw = _upstash_cmd("GET", UPSTASH_REDIS_KEY)
+            raw = _upstash_cmd("GET", RECOMMENDATION_HISTORY_KEY)
             if raw:
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    data.setdefault("runs", {})
-                    return data
-            return {"runs": {}}
+                return normalize_recommendation_history_store(json.loads(raw))
+            return {"records": {}}
         except Exception:
-            # 讀取失敗：回傳哨兵，避免誤寫覆蓋
-            return {"runs": {}, "_read_error": True}
+            return {"records": {}, "_read_error": True}
+
     try:
-        if not os.path.exists(VALIDATION_STORE_PATH):
-            return {"runs": {}}
-        with open(VALIDATION_STORE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {"runs": {}}
-        data.setdefault("runs", {})
-        return data
+        if not os.path.exists(RECOMMENDATION_HISTORY_STORE_PATH):
+            return {"records": {}}
+        with open(RECOMMENDATION_HISTORY_STORE_PATH, "r", encoding="utf-8") as f:
+            return normalize_recommendation_history_store(json.load(f))
     except Exception:
-        return {"runs": {}}
+        return {"records": {}}
 
 
-def save_validation_store(store: Dict[str, Any]) -> None:
-    """寫入驗證資料（讀取失敗時不寫入，防止覆蓋）"""
+def save_recommendation_history_store(store: Dict[str, Any]) -> None:
+    """Persist recommendation records. Never write when read failed."""
     if store.get("_read_error"):
         return
     clean = {k: v for k, v in store.items() if k != "_read_error"}
+    clean = normalize_recommendation_history_store(clean)
 
     if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
         try:
-            _upstash_cmd("SET", UPSTASH_REDIS_KEY, json.dumps(clean, ensure_ascii=False))
+            _upstash_cmd("SET", RECOMMENDATION_HISTORY_KEY, json.dumps(clean, ensure_ascii=False))
         except Exception:
             pass
         return
+
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(VALIDATION_STORE_PATH)) or ".", exist_ok=True)
-        tmp = f"{VALIDATION_STORE_PATH}.tmp"
+        os.makedirs(os.path.dirname(os.path.abspath(RECOMMENDATION_HISTORY_STORE_PATH)) or ".", exist_ok=True)
+        tmp = f"{RECOMMENDATION_HISTORY_STORE_PATH}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, VALIDATION_STORE_PATH)
+        os.replace(tmp, RECOMMENDATION_HISTORY_STORE_PATH)
     except Exception:
         pass
 
 
-def create_validation_run(
+def build_recommendation_record_item(stock: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    item = clean_stock_output(stock)
+    item.update({
+        "rank": rank,
+        "saved_price": item.get("price", 0),
+        "saved_change": item.get("change", 0),
+        "saved_change_percent": item.get("change_percent", 0),
+        "saved_volume": item.get("volume", 0),
+    })
+    return item
+
+
+def save_daily_recommendation_record(
     date_key: str,
     recommendations: List[Dict[str, Any]],
     last_update: str,
+    market_status: str,
 ) -> Dict[str, Any]:
-    """收盤後保存推薦10檔，等隔日開盤填入進場價"""
-    items = []
-    for i, stock in enumerate(recommendations[:10]):
-        items.append({
-            "rank":               i + 1,
-            "symbol":             stock.get("symbol", ""),
-            "name":               stock.get("name", ""),
-            "signal":             stock.get("signal", ""),
-            "operation_rating":   stock.get("operation_rating", ""),
-            "setup_score":        safe_float(stock.get("setup_score", stock.get("score", 0))),
-            "start_close_price":  safe_float(stock.get("price")),
-            # 進場資訊（隔日才填）
-            "entry_date":         "",
-            "entry_open_price":   0.0,
-            # 每日收盤追蹤 { "20260506": 85.0, ... }
-            "daily_closes":       {},
-            # 計算結果
-            "return_from_close_pct": 0.0,
-            "latest_return_pct":      0.0,
-            "horizon_returns":    {},   # {"1": x, "3": x, "5": x}
-        })
+    """Save one daily top-10 recommendation record. Existing dates are not overwritten."""
+    normalized_date = normalize_date_key(date_key)
+    if not normalized_date:
+        return {"created": False, "reason": "missing_date", "record": None}
 
-    run = {
-        "date":       date_key,
+    store = load_recommendation_history_store()
+    if store.get("_read_error"):
+        return {"created": False, "reason": "store_read_error", "record": None}
+
+    records = store.setdefault("records", {})
+    existing = records.get(normalized_date)
+    if isinstance(existing, dict) and existing.get("items"):
+        return {"created": False, "reason": "already_exists", "record": existing}
+
+    items = [build_recommendation_record_item(stock, index + 1) for index, stock in enumerate(recommendations[:10])]
+    if not items:
+        return {"created": False, "reason": "empty_recommendations", "record": None}
+
+    record = {
+        "date": normalized_date,
         "created_at": format_dt_taipei(now_taipei()),
         "last_update": last_update,
-        "items":      items,
+        "market_status": market_status,
+        "count": len(items),
+        "items": items,
     }
-    store = load_validation_store()
-    if store.get("_read_error"):
-        return run
-    store["runs"][date_key] = run
-    save_validation_store(store)
-    return run
+    records[normalized_date] = record
+    save_recommendation_history_store(store)
+    return {"created": True, "reason": "created", "record": record}
 
 
-def update_validation_run(
-    run: Dict[str, Any],
-    today_date: str,
-    stock_map: Dict[str, Any],
-    last_update: str,
-) -> Dict[str, Any]:
-    """
-    每次呼叫 /validation 時更新：
-    1. 若隔日第一次 → 填入開盤價（進場價）
-    2. 記錄今日收盤
-    3. 重算 horizon_returns（1/3/5日）
-    """
-    run_date = normalize_date_key(run.get("date", ""))
-    if not run_date or today_date <= run_date:
-        return run
+def run_recommendation_history_job(force_refresh: bool = False, reason: str = "scheduler") -> Dict[str, Any]:
+    """After close, archive the day's top-10 recommendations without tracking returns."""
+    global _RECOMMENDATION_HISTORY_JOB_RUNNING, _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
 
-    changed = False
-    for item in run.get("items", []):
-        symbol = safe_str(item.get("symbol"))
-        stock  = stock_map.get(symbol)
-        if not symbol:
-            continue
-
-        daily_closes: Dict[str, float] = item.setdefault("daily_closes", {})
-        historical_rows: List[Tuple[str, float, float]] = []
-        try:
-            candles = fetch_symbol_daily_candles(symbol).get("candles", [])
-            for candle in candles:
-                candle_date = normalize_date_key(candle.get("date"))
-                if not candle_date or candle_date <= run_date or candle_date > today_date:
-                    continue
-                candle_open = safe_float(candle.get("open"))
-                candle_close = safe_float(candle.get("close"))
-                if candle_close <= 0:
-                    continue
-                historical_rows.append((candle_date, candle_open, candle_close))
-        except Exception:
-            historical_rows = []
-
-        # 優先用歷史日K補齊，避免服務睡著或未開頁時漏掉追蹤日。
-        for candle_date, candle_open, candle_close in historical_rows:
-            if not item.get("entry_date") and candle_open > 0:
-                item["entry_date"] = candle_date
-                item["entry_open_price"] = candle_open
-                changed = True
-            if candle_date not in daily_closes:
-                daily_closes[candle_date] = candle_close
-                changed = True
-
-        # 歷史日K還沒補到今天時，用今日快照補上。
-        if stock:
-            price = safe_float(stock.get("price"))
-            open_price = safe_float(stock.get("open")) or price
-            if price > 0 and today_date > run_date:
-                if not item.get("entry_date") and open_price > 0:
-                    item["entry_date"] = today_date
-                    item["entry_open_price"] = open_price
-                    changed = True
-                if today_date not in daily_closes:
-                    daily_closes[today_date] = price
-                    changed = True
-
-        if not daily_closes:
-            continue
-
-        # 步驟3：計算報酬
-        start_close = safe_float(item.get("start_close_price"))
-        latest_close = safe_float(daily_closes[sorted(daily_closes.keys())[-1]])
-        if start_close > 0:
-            item["return_from_close_pct"] = calc_pct(start_close, latest_close)
-
-        entry_price = safe_float(item.get("entry_open_price"))
-        entry_date  = safe_str(item.get("entry_date"))
-        if entry_price > 0 and entry_date:
-            # sorted_closes: 進場日起的每日收盤（時間順序）
-            # sorted_closes[0] = 進場日收盤
-            # sorted_closes[1] = 第1日收盤 → horizon "1"
-            # sorted_closes[3] = 第3日收盤 → horizon "3"
-            # sorted_closes[5] = 第5日收盤 → horizon "5"
-            sorted_closes = [
-                v for k, v in sorted(daily_closes.items()) if k >= entry_date
-            ]
-            if sorted_closes:
-                item["latest_return_pct"] = calc_pct(entry_price, sorted_closes[-1])
-            horizon_returns: Dict[str, float] = {}
-            for h in [1, 3, 5]:
-                if len(sorted_closes) > h:
-                    horizon_returns[str(h)] = calc_pct(entry_price, sorted_closes[h])
-            item["horizon_returns"] = horizon_returns
-
-    if changed:
-        run["last_update"] = last_update
-        store = load_validation_store()
-        if not store.get("_read_error"):
-            run_date_key = normalize_date_key(run.get("date", ""))
-            store["runs"][run_date_key] = run
-            save_validation_store(store)
-    return run
-
-
-def update_all_runs(
-    today_date: str,
-    stock_map: Dict[str, Any],
-    last_update: str,
-) -> None:
-    """批次更新所有歷史 run（只在 /validation 呼叫）"""
-    store = load_validation_store()
-    if store.get("_read_error"):
-        return
-    for date_key, run in list(store["runs"].items()):
-        if isinstance(run, dict):
-            store["runs"][date_key] = update_validation_run(
-                run, today_date, stock_map, last_update
-            )
-    save_validation_store(store)
-
-
-def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
-    """計算單一 run 的4個總結指標"""
-    items   = run.get("items", [])
-    entered = [x for x in items if safe_float(x.get("entry_open_price")) > 0]
-
-    if not entered:
-        return {
-            "count": len(items), "entered_count": 0,
-            "avg_return_pct": 0.0, "win_rate_pct": 0.0,
-            "best": None, "worst": None, "horizon_summary": {},
-        }
-
-    # 統一用隔日開盤進場後的最新報酬，不混用推薦日收盤價。
-    latest_returns = [safe_float(x.get("latest_return_pct")) for x in entered]
-    wins   = [r for r in latest_returns if r > 0]
-
-    best_item  = max(entered, key=lambda x: safe_float(x.get("latest_return_pct")))
-    worst_item = min(entered, key=lambda x: safe_float(x.get("latest_return_pct")))
-
-    # Horizon 統計（1/3/5日）
-    horizon_summary: Dict[str, Any] = {}
-    for h in ["1", "3", "5"]:
-        h_rets = [
-            safe_float(x.get("horizon_returns", {}).get(h))
-            for x in entered
-            if x.get("horizon_returns", {}).get(h) is not None
-        ]
-        if h_rets:
-            horizon_summary[h] = {
-                "count":        len(h_rets),
-                "avg_pct":      round(avg(h_rets), 2),
-                "win_rate_pct": round(sum(1 for r in h_rets if r > 0) / len(h_rets) * 100, 2),
-            }
-
-    return {
-        "count":         len(items),
-        "entered_count": len(entered),
-        "avg_return_pct": round(avg(latest_returns), 2),
-        "win_rate_pct":  round(len(wins) / len(entered) * 100, 2) if entered else 0.0,
-        "best":  {"symbol": best_item.get("symbol"), "name": best_item.get("name"),
-                  "pct": safe_float(best_item.get("latest_return_pct"))},
-        "worst": {"symbol": worst_item.get("symbol"), "name": worst_item.get("name"),
-                  "pct": safe_float(worst_item.get("latest_return_pct"))},
-        "horizon_summary": horizon_summary,
-    }
-
-
-def run_validation_job(force_refresh: bool = False, reason: str = "scheduler") -> Dict[str, Any]:
-    """主動驗證工作：收盤後保存當日推薦，並更新所有歷史推薦追蹤。"""
-    global _VALIDATION_JOB_RUNNING, _VALIDATION_JOB_LAST_RESULT
-
-    if _VALIDATION_JOB_RUNNING:
+    if _RECOMMENDATION_HISTORY_JOB_RUNNING:
         return {
             "success": False,
             "status": "running",
-            "message": "validation job already running",
-            "last_result": _VALIDATION_JOB_LAST_RESULT,
+            "message": "recommendation history job already running",
+            "last_result": _RECOMMENDATION_HISTORY_JOB_LAST_RESULT,
         }
 
-    _VALIDATION_JOB_RUNNING = True
+    _RECOMMENDATION_HISTORY_JOB_RUNNING = True
     started_at = format_dt_taipei(now_taipei())
     try:
         result = get_cached_all_stocks(force_refresh=force_refresh)
         all_stocks = result["stocks"]
         market_status = get_market_status_text()
         data_date = result["data_date"]
-        today_date = normalize_date_key(data_date)
         last_update = result["last_update"]
 
         if not should_settle_recommendations(market_status):
-            _VALIDATION_JOB_LAST_RESULT = {
+            _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
                 "success": True,
                 "status": "skipped_intraday",
                 "reason": reason,
@@ -2201,65 +2049,35 @@ def run_validation_job(force_refresh: bool = False, reason: str = "scheduler") -
                 "data_date": data_date,
                 "started_at": started_at,
                 "finished_at": format_dt_taipei(now_taipei()),
-                "message": "盤中不建立或更新驗證，等待收盤後完整日K。",
+                "message": "盤中不保存推薦紀錄，等待收盤後完整資料。",
             }
-            return _VALIDATION_JOB_LAST_RESULT
+            return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
 
-        store = load_validation_store()
-        if store.get("_read_error"):
-            _VALIDATION_JOB_LAST_RESULT = {
-                "success": False,
-                "status": "store_error",
-                "reason": reason,
-                "market_status": market_status,
-                "data_date": data_date,
-                "started_at": started_at,
-                "finished_at": format_dt_taipei(now_taipei()),
-                "message": "驗證資料庫讀取失敗，無法自動保存或追蹤。",
-            }
-            return _VALIDATION_JOB_LAST_RESULT
+        recs, rec_err = get_recommendations_safe(
+            all_stocks,
+            data_date=data_date,
+            last_update=last_update,
+            top_n=10,
+        )
+        saved = save_daily_recommendation_record(data_date, recs, last_update, market_status)
 
-        runs = store.setdefault("runs", {})
-        created_today = False
-        rec_count = 0
-        if today_date and today_date not in runs:
-            recs, rec_err = get_recommendations_safe(
-                all_stocks,
-                data_date=data_date,
-                last_update=last_update,
-                top_n=10,
-            )
-            rec_count = len(recs)
-            if recs:
-                create_validation_run(today_date, recs, last_update)
-                created_today = True
-            elif rec_err:
-                print(f"validation job recommendation skipped: {rec_err}")
-
-        stock_map = {safe_str(s.get("symbol")): s for s in all_stocks if safe_str(s.get("symbol"))}
-        update_all_runs(today_date, stock_map, last_update)
-
-        final_store = load_validation_store()
-        final_runs = final_store.get("runs", {}) if isinstance(final_store, dict) else {}
-        updated_runs = len(final_runs) if isinstance(final_runs, dict) else 0
-
-        _VALIDATION_JOB_LAST_RESULT = {
+        _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
             "success": True,
-            "status": "completed",
+            "status": saved.get("reason", "completed"),
             "reason": reason,
             "market_status": market_status,
             "data_date": data_date,
             "last_update": last_update,
-            "created_today": created_today,
-            "recommendation_count": rec_count,
-            "tracked_run_count": updated_runs,
+            "recommendation_count": len(recs),
+            "created": bool(saved.get("created")),
+            "error": rec_err,
             "started_at": started_at,
             "finished_at": format_dt_taipei(now_taipei()),
-            "message": "收盤推薦保存與歷史推薦追蹤已完成。",
+            "message": "每日推薦紀錄已檢查完成。",
         }
-        return _VALIDATION_JOB_LAST_RESULT
+        return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
     except Exception as exc:
-        _VALIDATION_JOB_LAST_RESULT = {
+        _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
             "success": False,
             "status": "error",
             "reason": reason,
@@ -2268,35 +2086,32 @@ def run_validation_job(force_refresh: bool = False, reason: str = "scheduler") -
             "started_at": started_at,
             "finished_at": format_dt_taipei(now_taipei()),
         }
-        print(f"validation job failed: {exc}")
-        return _VALIDATION_JOB_LAST_RESULT
+        print(f"recommendation history job failed: {exc}")
+        return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
     finally:
-        _VALIDATION_JOB_RUNNING = False
+        _RECOMMENDATION_HISTORY_JOB_RUNNING = False
 
 
-def validation_worker_loop() -> None:
-    """背景排程：服務醒著時自動執行驗證工作。"""
+def recommendation_history_worker_loop() -> None:
     while True:
         try:
-            run_validation_job(
-                force_refresh=VALIDATION_JOB_FORCE_REFRESH,
+            run_recommendation_history_job(
+                force_refresh=RECOMMENDATION_HISTORY_JOB_FORCE_REFRESH,
                 reason="background_scheduler",
             )
         except Exception as exc:
-            print(f"validation worker loop error: {exc}")
-        time.sleep(VALIDATION_JOB_INTERVAL_SECONDS)
+            print(f"recommendation history worker loop error: {exc}")
+        time.sleep(RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS)
 
 
-def start_validation_worker() -> None:
-    global _VALIDATION_WORKER_STARTED
-    if _VALIDATION_WORKER_STARTED or not VALIDATION_JOB_ENABLED:
+def start_recommendation_history_worker() -> None:
+    global _RECOMMENDATION_HISTORY_WORKER_STARTED
+    if _RECOMMENDATION_HISTORY_WORKER_STARTED or not RECOMMENDATION_HISTORY_JOB_ENABLED:
         return
-    _VALIDATION_WORKER_STARTED = True
-    thread = threading.Thread(target=validation_worker_loop, name="validation-worker", daemon=True)
+    _RECOMMENDATION_HISTORY_WORKER_STARTED = True
+    thread = threading.Thread(target=recommendation_history_worker_loop, name="recommendation-history-worker", daemon=True)
     thread.start()
-    print(f"✅ validation worker started, interval={VALIDATION_JOB_INTERVAL_SECONDS}s")
-
-
+    print(f"✅ recommendation history worker started, interval={RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS}s")
 # =========================
 # Startup
 # =========================
@@ -2307,7 +2122,7 @@ def startup_event():
         print("✅ Fubon SDK initialized successfully")
     except Exception as e:
         print(f"⚠️ Fubon SDK startup init failed: {e}")
-    start_validation_worker()
+    start_recommendation_history_worker()
 
 
 # =========================
@@ -2324,137 +2139,83 @@ def health():
 
 
 
-@app.get("/validation")
-def get_validation(
-    date: str = Query("latest"),
-    force_refresh: bool = Query(False),
-):
-    """
-    驗證追蹤端點：
-    - 收盤後自動保存當日推薦10檔
-    - 每次呼叫更新所有 run 的追蹤資料
-    - 返回指定日期（或最新）的驗證結果
-    """
+@app.get("/recommendations/history")
+def get_recommendation_history(limit: int = Query(120, ge=1, le=500)):
+    """Daily archived recommendation records. One record per trading date."""
     try:
-        job_result = run_validation_job(force_refresh=force_refresh, reason="api_validation_page")
-        result = get_cached_all_stocks(force_refresh=False)
-        market_status = get_market_status_text()
-        today_date = normalize_date_key(result["data_date"])
-
-        # 取目標日期的 run
-        store = load_validation_store()
+        store = load_recommendation_history_store()
         if store.get("_read_error"):
             return JSONResponse(status_code=503, content={
                 "success": False,
-                "error": "驗證資料庫讀取失敗，請檢查 Upstash Redis 環境變數或連線狀態。",
-                "validation": None,
-                "summary": {},
-                "available_dates": [],
+                "error": "推薦紀錄資料庫讀取失敗，請檢查 Upstash Redis 環境變數或連線狀態。",
+                "records": [],
             })
-        runs  = store.get("runs", {})
+        records = store.get("records", {})
+        if not isinstance(records, dict):
+            records = {}
 
-        if date.lower() in ("latest", "", "auto"):
-            target_date = max(runs.keys()) if runs else today_date
-        else:
-            target_date = normalize_date_key(date) or today_date
-
-        run = runs.get(target_date)
-        if run is None:
-            latest = max(runs.keys()) if runs else ""
-            run = {
-                "date":       target_date,
-                "created_at": "",
-                "last_update": result["last_update"],
-                "items":      [],
-                "status":     "missing",
-                "message":    f"尚未保存 {target_date} 的推薦。收盤後呼叫 /validation 即自動保存。"
-                              + (f" 最新日期：{latest}" if latest else ""),
-            }
-
-        return {
-            "success":       True,
-            "market_status": market_status,
-            "data_date":     result["data_date"],
-            "last_update":   result["last_update"],
-            "validation":    run,
-            "summary":       summarize_run(run),
-            "available_dates": sorted(runs.keys(), reverse=True)[:30],
-            "job":           job_result,
-        }
-    except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "success": False, "error": str(e),
-            "trace": traceback.format_exc(),
-        })
-
-
-@app.get("/validation/history")
-def get_validation_history(limit: int = Query(60, ge=1, le=365)):
-    """所有歷史驗證 run 列表（含摘要）"""
-    try:
-        store = load_validation_store()
-        runs  = store.get("runs", {})
         result = []
-        for date_key in sorted(runs.keys(), reverse=True)[:limit]:
-            run = runs.get(date_key)
-            if not isinstance(run, dict):
+        for date_key in sorted(records.keys(), reverse=True)[:limit]:
+            record = records.get(date_key)
+            if not isinstance(record, dict):
                 continue
+            items = record.get("items", []) if isinstance(record.get("items"), list) else []
             result.append({
-                "date":       run.get("date", date_key),
-                "created_at": run.get("created_at", ""),
-                "last_update": run.get("last_update", ""),
-                "summary":    summarize_run(run),
-                "items":      run.get("items", []),
+                "date": record.get("date", date_key),
+                "created_at": record.get("created_at", ""),
+                "last_update": record.get("last_update", ""),
+                "market_status": record.get("market_status", ""),
+                "count": len(items),
+                "items": items,
             })
-        return {"success": True, "total": len(result), "runs": result}
+        return {"success": True, "total": len(result), "records": result, "runs": result}
     except Exception as e:
         return JSONResponse(status_code=500, content={
-            "success": False, "error": str(e),
+            "success": False,
+            "error": str(e),
+            "records": [],
         })
 
 
-@app.get("/jobs/validation-tick")
-def validation_tick(
+@app.get("/recommendations/history/status")
+def recommendation_history_status():
+    return {
+        "success": True,
+        "enabled": RECOMMENDATION_HISTORY_JOB_ENABLED,
+        "running": _RECOMMENDATION_HISTORY_JOB_RUNNING,
+        "interval_seconds": RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS,
+        "last_result": _RECOMMENDATION_HISTORY_JOB_LAST_RESULT,
+    }
+
+
+@app.get("/jobs/recommendation-history-tick")
+def recommendation_history_tick(
     secret: str = Query(""),
     force_refresh: bool = Query(True),
 ):
-    """外部 Cron 可呼叫此端點，補強 Render 休眠時的自動驗證。"""
+    """External Cron endpoint for saving the daily recommendation record after close."""
     if ADMIN_SECRET and secret != ADMIN_SECRET:
         return JSONResponse(status_code=403, content={"success": False, "error": "forbidden"})
-    result = run_validation_job(force_refresh=force_refresh, reason="cron_tick")
+    result = run_recommendation_history_job(force_refresh=force_refresh, reason="cron_tick")
     status_code = 200 if result.get("success") else 500
-    if result.get("status") == "store_error":
-        status_code = 503
     if result.get("status") == "running":
         status_code = 409
     return JSONResponse(status_code=status_code, content=result)
 
 
-@app.get("/validation/job-status")
-def validation_job_status():
-    return {
-        "success": True,
-        "enabled": VALIDATION_JOB_ENABLED,
-        "running": _VALIDATION_JOB_RUNNING,
-        "interval_seconds": VALIDATION_JOB_INTERVAL_SECONDS,
-        "last_result": _VALIDATION_JOB_LAST_RESULT,
-    }
-
-
-@app.post("/admin/reset-validation")
-def reset_validation(secret: str = Query("")):
-    """月底清空驗證資料（需帶 ADMIN_SECRET）"""
+@app.post("/admin/reset-recommendation-history")
+def reset_recommendation_history(secret: str = Query("")):
+    """Clear archived recommendation records. Requires ADMIN_SECRET."""
     if not ADMIN_SECRET or secret != ADMIN_SECRET:
-        return JSONResponse(status_code=403, content={"error": "forbidden"})
+        return JSONResponse(status_code=403, content={"success": False, "error": "forbidden"})
     try:
         if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
-            _upstash_cmd("DEL", UPSTASH_REDIS_KEY)
+            _upstash_cmd("DEL", RECOMMENDATION_HISTORY_KEY)
         else:
-            save_validation_store({"runs": {}})
-        return {"success": True, "message": "驗證資料已清空，下次收盤後重新累積。"}
+            save_recommendation_history_store({"records": {}})
+        return {"success": True, "message": "推薦紀錄已清空，下一個收盤日會重新累積。"}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
-
 
 @app.get("/stocks")
 def get_stocks(
@@ -2511,6 +2272,13 @@ def get_stocks(
             if rec_err:
                 recommendation_info["recommendation_status"] = "recommendation_error"
                 recommendation_info["recommendation_message"] = rec_err
+            elif recs:
+                save_daily_recommendation_record(
+                    result["data_date"],
+                    recs,
+                    result["last_update"],
+                    market_status,
+                )
 
         cats = build_categories([s for s in all_stocks if is_main_board_stock(s)])
 
@@ -2558,3 +2326,5 @@ def get_stocks(
                 "focused_stock": None,
             },
         )
+
+
