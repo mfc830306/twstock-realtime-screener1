@@ -104,7 +104,7 @@ const PRICE_CATEGORIES = [
 
 type CategoryKey = (typeof PRICE_CATEGORIES)[number]["key"];
 type RankType = "recommend" | "up" | "down";
-type ActiveScreen = "screener" | "stocks" | "history";
+type ActiveScreen = "screener" | "recommendations" | "history";
 
 type RecommendationHistoryItem = Stock & {
   rank?: number;
@@ -688,7 +688,7 @@ export default function Home() {
             >
               {[
                 { key: "screener" as ActiveScreen, label: "選股首頁" },
-                { key: "stocks" as ActiveScreen, label: "股價列表" },
+                { key: "recommendations" as ActiveScreen, label: "推薦10檔" },
                 { key: "history" as ActiveScreen, label: "推薦紀錄" },
               ].map((item) => {
                 const active = activeScreen === item.key;
@@ -762,16 +762,13 @@ export default function Home() {
           </div>
         )}
 
-        {(activeScreen === "screener" || activeScreen === "stocks") && (
+        {(activeScreen === "screener" || activeScreen === "recommendations") && (
           <>
+        {activeScreen === "screener" && (
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: isMobile
-              ? "1fr"
-              : activeScreen === "screener"
-                ? "minmax(320px, 390px) minmax(0, 1fr)"
-                : "1fr",
+            gridTemplateColumns: "1fr",
             gap: "20px",
             alignItems: "start",
             marginBottom: "22px",
@@ -788,10 +785,9 @@ export default function Home() {
               }}
             >
               <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>
-                {activeScreen === "stocks" ? "價格分類" : "搜尋股票"}
+                價格分類
               </h2>
             </div>
-            {activeScreen === "stocks" && (
             <div style={{ marginBottom: "20px" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
                 {PRICE_CATEGORIES.map((item) => {
@@ -826,7 +822,6 @@ export default function Home() {
                 })}
               </div>
             </div>
-            )}
 
             <input
               value={searchTerm}
@@ -849,7 +844,6 @@ export default function Home() {
               }}
             />
 
-            {activeScreen === "stocks" && (
             <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
               {(["recommend", "up", "down"] as RankType[]).map((r) => {
                 const labels = { recommend: "推薦", up: "漲幅", down: "跌幅" };
@@ -868,9 +862,7 @@ export default function Home() {
                 );
               })}
             </div>
-            )}
 
-            {activeScreen === "stocks" && (
             <div
               style={{
                 marginTop: "18px",
@@ -889,10 +881,12 @@ export default function Home() {
               <div>• 點擊推薦股或列表股，也可直接切換分析</div>
               <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
             </div>
-            )}
           </div>
+        </section>
+        )}
 
-          {activeScreen === "screener" && (
+          {activeScreen === "recommendations" && (
+        <section style={{ marginBottom: "22px" }}>
           <div style={recommendationPanelStyle}>
             <div
               style={{
@@ -1111,8 +1105,8 @@ export default function Home() {
             )}
 
           </div>
-          )}
         </section>
+          )}
 
         {activeFocusedStock && (
           <section
@@ -1273,7 +1267,7 @@ export default function Home() {
           </section>
         )}
 
-        {activeScreen === "stocks" && (
+        {activeScreen === "screener" && (
         <section
           style={{
             background: "linear-gradient(180deg, #0d2f63 0%, #0a2a57 100%)",
