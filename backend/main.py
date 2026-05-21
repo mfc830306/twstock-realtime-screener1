@@ -49,10 +49,23 @@ CACHE_SECONDS = 60
 UPSTASH_REDIS_REST_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").strip()
 UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "").strip()
 RECOMMENDATION_HISTORY_KEY = os.getenv("RECOMMENDATION_HISTORY_KEY", "twstock:recommendation_history_v1")
+RECOMMENDATION_HISTORY_LEGACY_KEYS = [
+    key.strip()
+    for key in os.getenv("RECOMMENDATION_HISTORY_LEGACY_KEYS", "twstock:rec_history").split(",")
+    if key.strip()
+]
 RECOMMENDATION_HISTORY_STORE_PATH = os.getenv(
     "RECOMMENDATION_HISTORY_STORE_PATH",
     os.path.join(os.getcwd(), "recommendation_history.json"),
 )
+RECOMMENDATION_HISTORY_LEGACY_STORE_PATHS = [
+    path.strip()
+    for path in os.getenv(
+        "RECOMMENDATION_HISTORY_LEGACY_STORE_PATHS",
+        os.path.join(os.getcwd(), "rec_history.json"),
+    ).split(os.pathsep)
+    if path.strip()
+]
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "").strip()
 
 
@@ -1916,13 +1929,48 @@ def _upstash_cmd(*args) -> Any:
         raise RuntimeError(f"Upstash Redis read/write failed: {exc}") from exc
 
 
+def normalize_recommendation_history_record(date_key: str, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    normalized_date = normalize_date_key(record.get("date") or date_key)
+    if not normalized_date:
+        return None
+    items = record.get("items", [])
+    if not isinstance(items, list):
+        items = []
+    return {
+        "date": normalized_date,
+        "created_at": record.get("created_at") or record.get("saved_at") or "",
+        "last_update": record.get("last_update") or record.get("updated_at") or "",
+        "market_status": record.get("market_status", ""),
+        "count": int(record.get("count") or len(items)),
+        "items": items,
+    }
+
+
 def normalize_recommendation_history_store(data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {"records": {}}
-    records = data.get("records")
-    if not isinstance(records, dict):
-        records = {}
+
+    records: Dict[str, Any] = {}
+    raw_records = data.get("records")
+    if isinstance(raw_records, dict):
+        for date_key, record in raw_records.items():
+            if not isinstance(record, dict):
+                continue
+            normalized = normalize_recommendation_history_record(date_key, record)
+            if normalized:
+                records[normalized["date"]] = normalized
+
+    legacy_dates = data.get("dates")
+    if isinstance(legacy_dates, dict):
+        for date_key, record in legacy_dates.items():
+            if not isinstance(record, dict):
+                continue
+            normalized = normalize_recommendation_history_record(date_key, record)
+            if normalized and normalized["date"] not in records:
+                records[normalized["date"]] = normalized
+
     data["records"] = records
+    data.pop("dates", None)
     return data
 
 
@@ -1931,17 +1979,43 @@ def load_recommendation_history_store() -> Dict[str, Any]:
     if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
         try:
             raw = _upstash_cmd("GET", RECOMMENDATION_HISTORY_KEY)
-            if raw:
-                return normalize_recommendation_history_store(json.loads(raw))
-            return {"records": {}}
+            store = normalize_recommendation_history_store(json.loads(raw)) if raw else {"records": {}}
+            changed = False
+            for legacy_key in RECOMMENDATION_HISTORY_LEGACY_KEYS:
+                raw = _upstash_cmd("GET", legacy_key)
+                if not raw:
+                    continue
+                legacy_store = normalize_recommendation_history_store(json.loads(raw))
+                for date_key, record in legacy_store.get("records", {}).items():
+                    if date_key not in store["records"]:
+                        store["records"][date_key] = record
+                        changed = True
+            if changed:
+                save_recommendation_history_store(store)
+            return store
         except Exception:
             return {"records": {}, "_read_error": True}
 
     try:
-        if not os.path.exists(RECOMMENDATION_HISTORY_STORE_PATH):
-            return {"records": {}}
-        with open(RECOMMENDATION_HISTORY_STORE_PATH, "r", encoding="utf-8") as f:
-            return normalize_recommendation_history_store(json.load(f))
+        if os.path.exists(RECOMMENDATION_HISTORY_STORE_PATH):
+            with open(RECOMMENDATION_HISTORY_STORE_PATH, "r", encoding="utf-8") as f:
+                primary_store = normalize_recommendation_history_store(json.load(f))
+        else:
+            primary_store = {"records": {}}
+
+        changed = False
+        for legacy_path in RECOMMENDATION_HISTORY_LEGACY_STORE_PATHS:
+            if not legacy_path or not os.path.exists(legacy_path):
+                continue
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                legacy_store = normalize_recommendation_history_store(json.load(f))
+            for date_key, record in legacy_store.get("records", {}).items():
+                if date_key not in primary_store["records"]:
+                    primary_store["records"][date_key] = record
+                    changed = True
+        if changed:
+            save_recommendation_history_store(primary_store)
+        return primary_store
     except Exception:
         return {"records": {}}
 
