@@ -123,6 +123,17 @@ type RecommendationHistoryRecord = {
   items: RecommendationHistoryItem[];
 };
 
+type RecommendationHistoryResponse = {
+  success: boolean;
+  records?: RecommendationHistoryRecord[];
+  runs?: RecommendationHistoryRecord[];
+  warning?: string;
+  persistent?: boolean;
+  storage_mode?: string;
+  error?: string;
+  message?: string;
+};
+
 const ITEMS_PER_PAGE = 20;
 
 function formatNumber(num?: number) {
@@ -288,6 +299,9 @@ export default function Home() {
   const [recommendationHistory, setRecommendationHistory] = useState<RecommendationHistoryRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [historyNotice, setHistoryNotice] = useState("");
+  const [historyWarning, setHistoryWarning] = useState("");
+  const [historySaving, setHistorySaving] = useState(false);
   const [selectedHistoryDate, setSelectedHistoryDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [focusedStock, setFocusedStock] = useState<FocusedStock | null>(null);
@@ -370,10 +384,11 @@ export default function Home() {
     try {
       const res = await fetch(`${API_BASE}/recommendations/history?limit=120`, { cache: "no-store" });
       if (!res.ok) throw new Error(`推薦紀錄 API HTTP ${res.status}`);
-      const data = await res.json();
+      const data: RecommendationHistoryResponse = await res.json();
       if (!data.success) throw new Error(data.error || data.message || "推薦紀錄載入失敗");
       const records: RecommendationHistoryRecord[] = data.records ?? data.runs ?? [];
       setRecommendationHistory(records);
+      setHistoryWarning(data.warning || "");
       setSelectedHistoryDate((current) =>
         current && records.some((record) => record.date === current)
           ? current
@@ -383,9 +398,32 @@ export default function Home() {
       console.error("fetchRecommendationHistory error", e);
       setHistoryError(e instanceof Error ? e.message : "推薦紀錄載入失敗");
       setRecommendationHistory([]);
+      setHistoryWarning("");
       setSelectedHistoryDate("");
     } finally {
       setHistoryLoading(false);
+    }
+  }
+
+  async function archiveLatestRecommendationSafe() {
+    setHistorySaving(true);
+    setHistoryNotice("");
+    setHistoryError("");
+    try {
+      const res = await fetch(`${API_BASE}/jobs/recommendation-history-tick?force_refresh=true`, {
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || data.message || `補存失敗 HTTP ${res.status}`);
+      }
+      setHistoryNotice(data.message || "已檢查最新收盤推薦紀錄。");
+      if (data.warning) setHistoryWarning(data.warning);
+      await fetchRecommendationHistorySafe();
+    } catch (e) {
+      setHistoryError(e instanceof Error ? e.message : "補存最新收盤日失敗");
+    } finally {
+      setHistorySaving(false);
     }
   }
 
@@ -1534,11 +1572,27 @@ export default function Home() {
                 <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>推薦紀錄</h2>
                 <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>每天收盤後各自保存推薦10檔，不覆蓋前一天。</div>
               </div>
-              <button type="button" onClick={fetchRecommendationHistorySafe} disabled={historyLoading}
-                style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: historyLoading ? "not-allowed" : "pointer", opacity: historyLoading ? 0.65 : 1 }}>
-                {historyLoading ? "讀取中..." : "重新整理"}
-              </button>
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                <button type="button" onClick={archiveLatestRecommendationSafe} disabled={historySaving}
+                  style={{ border: "1px solid rgba(255,217,95,0.34)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,217,95,0.1)", color: "#ffd95f", fontWeight: 900, cursor: historySaving ? "not-allowed" : "pointer", opacity: historySaving ? 0.65 : 1 }}>
+                  {historySaving ? "補存中..." : "補存最新收盤日"}
+                </button>
+                <button type="button" onClick={fetchRecommendationHistorySafe} disabled={historyLoading}
+                  style={{ border: "1px solid rgba(120,205,255,0.3)", borderRadius: "12px", padding: "8px 16px", background: "rgba(255,255,255,0.05)", color: "#e8f4ff", fontWeight: 900, cursor: historyLoading ? "not-allowed" : "pointer", opacity: historyLoading ? 0.65 : 1 }}>
+                  {historyLoading ? "讀取中..." : "重新整理"}
+                </button>
+              </div>
             </div>
+            {historyWarning && (
+              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,217,95,0.12)", border: "1px solid rgba(255,217,95,0.26)", color: "#ffd95f", fontWeight: 800, fontSize: "13px", marginBottom: "16px", lineHeight: 1.7 }}>
+                {historyWarning}
+              </div>
+            )}
+            {historyNotice && (
+              <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(80,180,120,0.12)", border: "1px solid rgba(126,231,135,0.22)", color: "#7ee787", fontWeight: 800, fontSize: "13px", marginBottom: "16px", lineHeight: 1.7 }}>
+                {historyNotice}
+              </div>
+            )}
             {historyError && (
               <div style={{ borderRadius: "14px", padding: "12px 16px", background: "rgba(255,80,80,0.14)", border: "1px solid rgba(255,120,120,0.3)", color: "#ffd4d4", fontWeight: 800, fontSize: "13px", marginBottom: "16px" }}>
                 推薦紀錄載入失敗：{historyError}
