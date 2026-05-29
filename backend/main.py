@@ -82,6 +82,18 @@ _RECOMMENDATION_HISTORY_JOB_RUNNING = False
 _RECOMMENDATION_HISTORY_JOB_LAST_RESULT: Dict[str, Any] = {}
 
 
+def get_recommendation_history_storage_info() -> Dict[str, Any]:
+    persistent = bool(UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN)
+    return {
+        "storage_mode": "upstash_redis" if persistent else "local_file",
+        "persistent": persistent,
+        "store_path": "" if persistent else RECOMMENDATION_HISTORY_STORE_PATH,
+        "warning": ""
+        if persistent
+        else "目前推薦紀錄使用 Render 本機檔案保存；服務重啟或重新部署後，前幾天紀錄可能消失。請設定 UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN 才能永久累積。",
+    }
+
+
 
 # =========================
 # Utils
@@ -2107,6 +2119,7 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
 
     _RECOMMENDATION_HISTORY_JOB_RUNNING = True
     started_at = format_dt_taipei(now_taipei())
+    storage_info = get_recommendation_history_storage_info()
     try:
         result = get_cached_all_stocks(force_refresh=force_refresh)
         all_stocks = result["stocks"]
@@ -2124,6 +2137,7 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
                 "started_at": started_at,
                 "finished_at": format_dt_taipei(now_taipei()),
                 "message": "盤中不保存推薦紀錄，等待收盤後完整資料。",
+                **storage_info,
             }
             return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
 
@@ -2148,6 +2162,7 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
             "started_at": started_at,
             "finished_at": format_dt_taipei(now_taipei()),
             "message": "每日推薦紀錄已檢查完成。",
+            **storage_info,
         }
         return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
     except Exception as exc:
@@ -2159,6 +2174,7 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
             "trace": traceback.format_exc(),
             "started_at": started_at,
             "finished_at": format_dt_taipei(now_taipei()),
+            **storage_info,
         }
         print(f"recommendation history job failed: {exc}")
         return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
@@ -2217,12 +2233,14 @@ def health():
 def get_recommendation_history(limit: int = Query(120, ge=1, le=500)):
     """Daily archived recommendation records. One record per trading date."""
     try:
+        storage_info = get_recommendation_history_storage_info()
         store = load_recommendation_history_store()
         if store.get("_read_error"):
             return JSONResponse(status_code=503, content={
                 "success": False,
                 "error": "推薦紀錄資料庫讀取失敗，請檢查 Upstash Redis 環境變數或連線狀態。",
                 "records": [],
+                **storage_info,
             })
         records = store.get("records", {})
         if not isinstance(records, dict):
@@ -2242,7 +2260,13 @@ def get_recommendation_history(limit: int = Query(120, ge=1, le=500)):
                 "count": len(items),
                 "items": items,
             })
-        return {"success": True, "total": len(result), "records": result, "runs": result}
+        return {
+            "success": True,
+            "total": len(result),
+            "records": result,
+            "runs": result,
+            **storage_info,
+        }
     except Exception as e:
         return JSONResponse(status_code=500, content={
             "success": False,
@@ -2253,12 +2277,14 @@ def get_recommendation_history(limit: int = Query(120, ge=1, le=500)):
 
 @app.get("/recommendations/history/status")
 def recommendation_history_status():
+    storage_info = get_recommendation_history_storage_info()
     return {
         "success": True,
         "enabled": RECOMMENDATION_HISTORY_JOB_ENABLED,
         "running": _RECOMMENDATION_HISTORY_JOB_RUNNING,
         "interval_seconds": RECOMMENDATION_HISTORY_JOB_INTERVAL_SECONDS,
         "last_result": _RECOMMENDATION_HISTORY_JOB_LAST_RESULT,
+        **storage_info,
     }
 
 
