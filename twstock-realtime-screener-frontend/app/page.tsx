@@ -23,10 +23,7 @@ type Stock = {
   operation_style?: string;
   strategy_action?: string;
   entry_price?: string;
-  target_price?: string;
   stop_loss?: string;
-  max_hold_days?: string;
-  risk_reward?: string;
   risk_note?: string;
   update_time?: string;
   analysis_source?: string;
@@ -54,9 +51,7 @@ type FocusedStock = {
   analysis: string;
   strategy_action: string;
   entry_price: string;
-  target_price: string;
   stop_loss: string;
-  risk_reward: string;
   risk_note: string;
   update_time: string;
 };
@@ -214,9 +209,7 @@ function stockToFocused(stock: Stock): FocusedStock {
     analysis: stock.reason || "-",
     strategy_action: stock.strategy_action || "-",
     entry_price: stock.entry_price || "-",
-    target_price: stock.target_price || "-",
     stop_loss: stock.stop_loss || "-",
-    risk_reward: stock.risk_reward || "-",
     risk_note: stock.risk_note || "-",
     update_time: stock.update_time || "-",
   };
@@ -347,7 +340,7 @@ export default function Home() {
       });
       if (options?.forceRefresh) params.set("force_refresh", "true");
       setRecommendationStatus("loading");
-      setRecommendationMessage("推薦10檔計算中，股票列表可先使用。");
+      setRecommendationMessage("正式推薦計算中，股票列表可先使用。");
 
       const res = await fetch(`${BACKEND_BASE}?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -371,9 +364,9 @@ export default function Home() {
       return data;
     } catch (err) {
       if (requestId !== recommendationsRequestIdRef.current) return null;
-      const message = err instanceof Error ? err.message : "推薦10檔載入失敗";
+      const message = err instanceof Error ? err.message : "正式推薦載入失敗";
       setRecommendationStatus("recommendation_error");
-      setRecommendationMessage(`推薦10檔暫時無法顯示：${message}`);
+      setRecommendationMessage(`正式推薦暫時無法顯示：${message}`);
       return null;
     }
   }
@@ -742,7 +735,7 @@ export default function Home() {
             >
               {[
                 { key: "screener" as ActiveScreen, label: "選股首頁" },
-                { key: "recommendations" as ActiveScreen, label: "推薦10檔" },
+                { key: "recommendations" as ActiveScreen, label: "專業推薦" },
                 { key: "history" as ActiveScreen, label: "推薦紀錄" },
               ].map((item) => {
                 const active = activeScreen === item.key;
@@ -930,7 +923,7 @@ export default function Home() {
               <div style={{ fontWeight: 900, color: "#9fc3f6", marginBottom: "6px" }}>
                 交易模式說明
               </div>
-              <div>• 推薦10檔只在收盤後結算，盤中不更新推薦名單</div>
+              <div>• 正式推薦只在收盤後結算，最多10檔，寧可少選也不補位</div>
               <div>• 搜尋單一個股時，會自動顯示專業分析卡</div>
               <div>• 點擊推薦股或列表股，也可直接切換分析</div>
               <div>• A / B+ 偏強，C 觀察，D 保守控風險</div>
@@ -952,7 +945,7 @@ export default function Home() {
               }}
             >
               <div>
-                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 推薦10檔</h2>
+                <h2 style={{ fontSize: "24px", fontWeight: 900, margin: 0 }}>🔥 專業轉強推薦（最多10檔）</h2>
                 {recommendationMessage && (
                   <div style={{ color: "#9cccf9", fontSize: "12px", fontWeight: 800, marginTop: "6px" }}>
                     {recommendationMessage}
@@ -991,9 +984,9 @@ export default function Home() {
               {recommendations.length === 0 ? (
                 <div style={{ color: "#cfe2ff", padding: "16px 4px", fontWeight: 700 }}>
                   {recommendationStatus === "intraday_paused"
-                    ? "盤中暫停結算推薦10檔，請收盤後再更新。"
+                    ? "盤中暫停結算正式推薦，請收盤後再更新。"
                     : recommendationStatus === "after_close_settlement"
-                      ? "後端目前回傳 0 檔推薦。請確認已部署最新 MAIN，或按右上角更新重新結算。"
+                      ? "今日沒有股票完整通過歷史K線、均線、量能、MACD與過熱控管條件。正式推薦寧可留空，也不使用快照補位。"
                       : recommendationMessage || "目前沒有可顯示的推薦資料"}
                 </div>
               ) : (
@@ -1146,11 +1139,10 @@ export default function Home() {
                           fontSize: "15px",
                         }}
                       >
-                        <span>進場：{stock.entry_price || "-"}</span>
-                        <span>目標：{stock.target_price || "-"}</span>
-                        <span>停損：{stock.stop_loss || "-"}</span>
-                        <span>風報比：{stock.risk_reward || "-"}</span>
+                        <span>建議進場：{stock.entry_price || "-"}</span>
+                        <span>結構停損：{stock.stop_loss || "-"}</span>
                       </div>
+
                     </div>
                   );
                 })
@@ -1286,20 +1278,18 @@ export default function Home() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: isMobile ? "1fr" : "repeat(4, minmax(0,1fr))",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0,1fr))",
                 gap: "12px",
                 marginTop: "16px",
               }}
             >
               {[
-                { label: "建議進場", value: activeFocusedStock.entry_price },
-                { label: "目標價", value: activeFocusedStock.target_price },
-                { label: "停損價", value: activeFocusedStock.stop_loss },
-                { label: "風報比", value: activeFocusedStock.risk_reward },
+                { label: "建議進場區間", value: activeFocusedStock.entry_price },
+                { label: "結構停損價", value: activeFocusedStock.stop_loss },
               ].map(({ label, value }) => (
-                <div key={label} style={tradePlanCardStyle}>
-                  <div style={tradePlanLabelStyle}>{label}</div>
-                  <div style={tradePlanValueStyle}>{value || "-"}</div>
+                <div key={label} style={priceLevelCardStyle}>
+                  <div style={priceLevelLabelStyle}>{label}</div>
+                  <div style={priceLevelValueStyle}>{value || "-"}</div>
                 </div>
               ))}
             </div>
@@ -1369,7 +1359,6 @@ export default function Home() {
                   <th style={thStyle}>訊號</th>
                   <th style={thStyle}>評級</th>
                   <th style={thStyle}>分數</th>
-                  <th style={thStyle}>風報比</th>
                 </tr>
               </thead>
 
@@ -1481,8 +1470,6 @@ export default function Home() {
                       </td>
 
                       <td style={tdStyle}>{stock.recommendation_score || stock.score || 0}</td>
-
-                      <td style={tdStyle}>{stock.risk_reward || "-"}</td>
                     </tr>
                   );
                 })}
@@ -1570,7 +1557,7 @@ export default function Home() {
               <div>
                 <div style={{ color: "#8fc3ff", fontSize: "13px", fontWeight: 900, marginBottom: "4px" }}>每日歸檔</div>
                 <h2 style={{ fontSize: isMobile ? "22px" : "28px", fontWeight: 900, margin: 0 }}>推薦紀錄</h2>
-                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>每天收盤後各自保存推薦10檔，不覆蓋前一天。</div>
+                <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px" }}>每天收盤後各自保存正式推薦，最多10檔，不覆蓋前一天。</div>
               </div>
               <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                 <button type="button" onClick={archiveLatestRecommendationSafe} disabled={historySaving}
@@ -1600,7 +1587,7 @@ export default function Home() {
             )}
             {recommendationHistory.length === 0 ? (
               <div style={{ borderRadius: "16px", padding: "16px", background: "rgba(255,217,95,0.1)", border: "1px solid rgba(255,217,95,0.22)", color: "#ffd95f", fontWeight: 800 }}>
-                {historyLoading ? "讀取中..." : "尚未保存任何推薦紀錄。收盤後後端會自動保存當日推薦10檔。"}
+                {historyLoading ? "讀取中..." : "尚未保存任何推薦紀錄。收盤後後端會自動保存當日正式推薦。"}
               </div>
             ) : (
               <div>
@@ -1646,7 +1633,7 @@ export default function Home() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", marginBottom: "12px", flexWrap: "wrap", gap: "8px", flexDirection: isMobile ? "column" : "row" }}>
                       <div>
                         <div style={{ color: "#fff", fontSize: "20px", fontWeight: 900 }}>
-                          {formatDateString(selectedHistoryRecord.date)} 推薦10檔
+                          {formatDateString(selectedHistoryRecord.date)} 正式推薦
                         </div>
                         <div style={{ color: "#9fc7f5", fontSize: "12px", marginTop: "4px", fontWeight: 800 }}>
                           建立：{selectedHistoryRecord.created_at || "-"} ｜ 更新：{selectedHistoryRecord.last_update || "-"} ｜ 狀態：{selectedHistoryRecord.market_status || "-"}
@@ -1675,6 +1662,9 @@ export default function Home() {
                             </div>
                             <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 800, marginTop: "4px" }}>
                               股價 {formatPrice(stock.saved_price ?? stock.price)} ｜ <span style={{ color: changeColor }}>漲跌% {formatSigned(savedChangePercent)}%</span> ｜ 成交量 {formatNumber(stock.saved_volume ?? stock.volume)}
+                            </div>
+                            <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 800, marginTop: "4px" }}>
+                              建議進場 {stock.entry_price || "-"} ｜ 結構停損 {stock.stop_loss || "-"}
                             </div>
                           </div>
                         );
@@ -1796,21 +1786,21 @@ const analysisBlockTextStyle: React.CSSProperties = {
   fontWeight: 700,
 };
 
-const tradePlanCardStyle: React.CSSProperties = {
+const priceLevelCardStyle: React.CSSProperties = {
   background: "linear-gradient(180deg, rgba(45,95,170,0.55) 0%, rgba(22,58,107,0.55) 100%)",
   border: "1px solid rgba(108,162,255,0.16)",
   borderRadius: "16px",
   padding: "14px 16px",
 };
 
-const tradePlanLabelStyle: React.CSSProperties = {
+const priceLevelLabelStyle: React.CSSProperties = {
   color: "#9fc3f6",
   fontSize: "13px",
   fontWeight: 700,
   marginBottom: "8px",
 };
 
-const tradePlanValueStyle: React.CSSProperties = {
+const priceLevelValueStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "16px",
   fontWeight: 900,
