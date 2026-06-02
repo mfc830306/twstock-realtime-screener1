@@ -1,0 +1,28 @@
+name: Archive daily stock recommendations
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC. 05:50 UTC = 13:50 Asia/Taipei.
+    - cron: "50 5 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake backend and archive latest closed trading day
+        env:
+          ARCHIVE_URL: ${{ secrets.RECOMMENDATION_ARCHIVE_URL }}
+        run: |
+          if [ -z "$ARCHIVE_URL" ]; then
+            echo "Missing GitHub Actions secret: RECOMMENDATION_ARCHIVE_URL"
+            exit 1
+          fi
+
+          curl --fail-with-body \
+            --location \
+            --retry 4 \
+            --retry-delay 20 \
+            --retry-all-errors \
+            --max-time 300 \
+            "$ARCHIVE_URL"
