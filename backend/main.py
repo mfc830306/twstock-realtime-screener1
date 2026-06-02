@@ -829,10 +829,11 @@ def build_technical_price_levels(
     ma10: float,
     atr14: float,
     recent_low: float,
+    recent_high: float = 0.0,
 ) -> Dict[str, str]:
-    """技術面進場與結構停損參考價位。"""
+    """技術面進場/出場/止損參考價位（不假設固定停利%，出場用技術壓力位）。"""
     if close <= 0:
-        return {"entry_price": "", "stop_loss": ""}
+        return {"entry_price": "", "exit_price": "", "stop_loss": ""}
 
     # 進場：回測支撐區（MA5/MA10 或 ATR 回檔）
     pullback_buffer = max(atr14 * 0.5, close * 0.01)
@@ -846,8 +847,16 @@ def build_technical_price_levels(
     stop_buffer = max(atr14 * 0.35, close * 0.008)
     stop_loss = min(structural_support - stop_buffer, entry_low - stop_buffer)
 
+    # 出場：技術壓力位參考（近期高點 + ATR 延伸，非固定停利）
+    # 取近期高點與 ATR 推算的上方目標，給操作者參考壓力區間
+    atr_extension = close + max(atr14 * 2.0, close * 0.04)
+    resistance    = recent_high if recent_high > close else atr_extension
+    exit_low  = min(resistance, atr_extension)
+    exit_high = max(resistance, atr_extension)
+
     return {
         "entry_price": format_price_range(entry_low, close),
+        "exit_price":  format_price_range(exit_low, exit_high),
         "stop_loss":   format_price_value(max(stop_loss, 0.01)),
     }
 
@@ -1427,6 +1436,11 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             [safe_float(candle.get("low")) for candle in analysis_candles[-3:]],
             ma10,
         )
+        recent_high = max(
+            [safe_float(candle.get("high")) for candle in analysis_candles[-20:]],
+            default=close_now,
+        )
+
         # 前一天的 MACD Hist
         prev_closes = closes[:-1]
         _, _, prev_macd_hist = calc_macd(prev_closes) if len(prev_closes) >= 35 else (0, 0, 0)
@@ -1487,17 +1501,18 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             ma10=ma10,
             atr14=atr14,
             recent_low=recent_low,
+            recent_high=recent_high,
         )
 
         # 操作評級
         if stock_type in {"準備轉強", "續攻型"}:
             operation_rating = "A"
             operation_bias   = "優先觀察"
-            strategy_action  = f"列入優先觀察清單；進場參考 {levels['entry_price']}，結構停損 {levels['stop_loss']}。"
+            strategy_action  = f"列入優先觀察清單；進場參考 {levels['entry_price']}，上方壓力 {levels['exit_price']}，結構停損 {levels['stop_loss']}。"
         elif stock_type == "轉強觀察":
             operation_rating = "B+"
             operation_bias   = "觀察等確認"
-            strategy_action  = f"接近轉強條件；進場參考 {levels['entry_price']}，結構停損 {levels['stop_loss']}。"
+            strategy_action  = f"接近轉強條件；進場參考 {levels['entry_price']}，上方壓力 {levels['exit_price']}，結構停損 {levels['stop_loss']}。"
         else:
             operation_rating = "C"
             operation_bias   = "暫不操作"
@@ -1519,6 +1534,7 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "operation_style":    "技術訊號觀察",
             "strategy_action":    strategy_action,
             "entry_price":        levels["entry_price"],
+            "exit_price":         levels["exit_price"],
             "stop_loss":          levels["stop_loss"],
             "risk_note":          f"若跌破結構停損價 {levels['stop_loss']}，或5日線死亡交叉10日線，轉強假設失效。",
             "recommendation_score": setup_score,
@@ -1666,6 +1682,7 @@ def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
         "operation_style": s.get("operation_style", ""),
         "strategy_action": s.get("strategy_action", ""),
         "entry_price": s.get("entry_price", ""),
+        "exit_price": s.get("exit_price", ""),
         "stop_loss": s.get("stop_loss", ""),
         "risk_note": s.get("risk_note", ""),
         "setup_score": s.get("setup_score", 0),
@@ -1703,6 +1720,7 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
         "analysis":             stock.get("reason", ""),
         "strategy_action":      stock.get("strategy_action", ""),
         "entry_price":          stock.get("entry_price", ""),
+        "exit_price":           stock.get("exit_price", ""),
         "stop_loss":            stock.get("stop_loss", ""),
         "risk_note":            stock.get("risk_note", ""),
         "setup_score":          stock.get("setup_score", 0),
@@ -1952,24 +1970,6 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
             last_update=last_update,
             top_n=10,
         )
-        if rec_err:
-            _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
-                "success": False,
-                "status": "recommendation_error",
-                "reason": reason,
-                "market_status": market_status,
-                "data_date": data_date,
-                "last_update": last_update,
-                "recommendation_count": 0,
-                "created": False,
-                "error": rec_err,
-                "started_at": started_at,
-                "finished_at": format_dt_taipei(now_taipei()),
-                "message": "正式推薦計算失敗，本次不寫入每日紀錄，稍後可安全重試。",
-                **storage_info,
-            }
-            return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
-
         saved = save_daily_recommendation_record(data_date, recs, last_update, market_status)
 
         _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
@@ -2033,6 +2033,28 @@ def startup_event():
     try:
         ensure_fubon_sdk()
         print("✅ Fubon SDK initialized successfully")
+
+        # ===== SDK API 探測（部署後看 log，確認後可刪除）=====
+        try:
+            stock_client = get_stock_rest_client()
+            print("=== stock_client 可用模組 ===")
+            for attr in dir(stock_client):
+                if not attr.startswith("_"):
+                    print(f"  stock.{attr}")
+            # 進一步看每個模組底下有什麼
+            for mod_name in dir(stock_client):
+                if mod_name.startswith("_"):
+                    continue
+                mod = getattr(stock_client, mod_name, None)
+                methods = [m for m in dir(mod) if not m.startswith("_")] if mod else []
+                if methods:
+                    print(f"=== stock.{mod_name} 底下 ===")
+                    for m in methods:
+                        print(f"    stock.{mod_name}.{m}")
+        except Exception as e:
+            print(f"⚠️ SDK 探測失敗: {e}")
+        # ===== 探測結束 =====
+
     except Exception as e:
         print(f"⚠️ Fubon SDK startup init failed: {e}")
     start_recommendation_history_worker()
@@ -2196,7 +2218,7 @@ def get_stocks(
             if rec_err:
                 recommendation_info["recommendation_status"] = "recommendation_error"
                 recommendation_info["recommendation_message"] = rec_err
-            else:
+            elif recs:
                 save_daily_recommendation_record(
                     result["data_date"],
                     recs,
@@ -2250,3 +2272,5 @@ def get_stocks(
                 "focused_stock": None,
             },
         )
+
+
