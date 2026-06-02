@@ -216,11 +216,11 @@ def build_recommendation_settlement_info(market_status: Optional[str] = None) ->
     if should_settle_recommendations(status):
         return {
             "recommendation_status": "after_close_settlement",
-            "recommendation_message": "推薦10檔以最近一次收盤後完整資料結算，適合隔日觀察或進場前追蹤。",
+            "recommendation_message": "正式推薦最多10檔，以最近一次收盤後完整歷史K線結算；寧可少選，不使用快照補位。",
         }
     return {
         "recommendation_status": "intraday_paused",
-        "recommendation_message": "盤中暫停結算推薦10檔，避免半日成交量與未完成日K影響名單；請收盤後再更新。",
+        "recommendation_message": "盤中暫停結算正式推薦，避免半日成交量與未完成日K影響名單；請收盤後再更新。",
     }
 
 
@@ -249,6 +249,14 @@ def format_price_value(v: float) -> str:
     if abs(rounded - int(rounded)) < 0.001:
         return str(int(rounded))
     return f"{rounded:.2f}"
+
+
+def format_price_range(low: float, high: float) -> str:
+    low = max(low, 0.01)
+    high = max(high, low)
+    if abs(high - low) < 0.005:
+        return format_price_value(high)
+    return f"{format_price_value(low)} ~ {format_price_value(high)}"
 
 
 def calc_position_ratio(price: float, high_price: float, low_price: float) -> float:
@@ -585,8 +593,6 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
     else:
         op_rating = "C"
 
-    plan = build_fixed_trade_plan(price)
-
     return {
         "market": market_label,
         "symbol": symbol,
@@ -609,13 +615,9 @@ def normalize_snapshot_row(row: Dict[str, Any], market_label: str) -> Optional[D
         "technical_comment": f"收盤位置 {close_position:.0%}；振幅 {amplitude_pct:.1f}%；量 {volume:,} 張",
         "operation_rating": op_rating,
         "operation_bias": "偏多觀察" if op_rating in {"A", "B+"} else "觀察",
-        "operation_style": "2~3天短線",
-        "strategy_action": f"收盤後評估，目標 {plan['target_price']}，停損 {plan['stop_loss']}",
-        "entry_price": plan["entry_price"],
-        "target_price": plan["target_price"],
-        "stop_loss": plan["stop_loss"],
-        "risk_reward": "固定 2.5% 停損 / 5~6% 停利",
-        "risk_note": f"跌破 {plan['stop_loss']} 停損",
+        "operation_style": "技術訊號觀察",
+        "strategy_action": "快照僅供列表排序；正式推薦需完成歷史K線確認。",
+        "risk_note": "快照訊號不是正式推薦，請以完整歷史K線分析為準。",
         "score": snap_score,
         "recommendation_score": snap_score,
         "setup_score": 0,
@@ -811,34 +813,6 @@ def find_focused_stock(filtered: List[Dict[str, Any]], q: str) -> Optional[Dict[
 
 
 # =========================
-# 交易規則（固定）
-# =========================
-TAKE_PROFIT_PCT  = 0.05   # 停利 +5%
-STOP_LOSS_PCT    = 0.025  # 停損 -2.5%
-MAX_HOLD_DAYS    = 3      # 最多持有3天
-
-
-def build_fixed_trade_plan(price: float) -> Dict[str, str]:
-    """固定停利5~6%、停損2.5%、最多持有3天"""
-    if price <= 0:
-        return {
-            "entry_price": "隔日開盤",
-            "target_price": "",
-            "stop_loss": "",
-            "max_hold_days": str(MAX_HOLD_DAYS),
-        }
-    target_low  = round(price * (1 + TAKE_PROFIT_PCT), 2)
-    target_high = round(price * 1.06, 2)
-    stop_loss   = round(price * (1 - STOP_LOSS_PCT), 2)
-    return {
-        "entry_price": "隔日開盤",
-        "target_price": f"{target_low} ~ {target_high}",
-        "stop_loss": str(stop_loss),
-        "max_hold_days": str(MAX_HOLD_DAYS),
-    }
-
-
-# =========================
 # K 線分析工具函數
 # =========================
 
@@ -847,6 +821,35 @@ _K_CACHE: Dict[str, Dict[str, Any]] = {}  # 當次服務期間的 K 線快取
 def positive_min(values: List[float], default: float = 0.0) -> float:
     positives = [x for x in values if x > 0]
     return min(positives) if positives else default
+
+
+def build_technical_price_levels(
+    close: float,
+    ma5: float,
+    ma10: float,
+    atr14: float,
+    recent_low: float,
+) -> Dict[str, str]:
+    """技術面進場與結構停損參考價位。"""
+    if close <= 0:
+        return {"entry_price": "", "stop_loss": ""}
+
+    # 進場：回測支撐區（MA5/MA10 或 ATR 回檔）
+    pullback_buffer = max(atr14 * 0.5, close * 0.01)
+    support_zone = max(ma5, ma10, close - pullback_buffer)
+    entry_low = min(support_zone, close)
+
+    # 止損：結構支撐下方（MA10 或近期低點）
+    structural_support = max(ma10, recent_low)
+    if structural_support <= 0:
+        structural_support = entry_low
+    stop_buffer = max(atr14 * 0.35, close * 0.008)
+    stop_loss = min(structural_support - stop_buffer, entry_low - stop_buffer)
+
+    return {
+        "entry_price": format_price_range(entry_low, close),
+        "stop_loss":   format_price_value(max(stop_loss, 0.01)),
+    }
 
 
 def overlay_snapshot_on_candles(
@@ -1420,7 +1423,10 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         macd_line, signal_line, macd_hist = calc_macd(closes)
         atr14 = calc_atr(analysis_candles, 14)
         kd_k, kd_d = calc_kd(analysis_candles)
-
+        recent_low = positive_min(
+            [safe_float(candle.get("low")) for candle in analysis_candles[-3:]],
+            ma10,
+        )
         # 前一天的 MACD Hist
         prev_closes = closes[:-1]
         _, _, prev_macd_hist = calc_macd(prev_closes) if len(prev_closes) >= 35 else (0, 0, 0)
@@ -1455,9 +1461,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             dist_from_ma5_pct=dist_from_ma5_pct,
         )
 
-        # 固定交易計畫
-        plan = build_fixed_trade_plan(close_now)
-
         # 分析原因
         reason = build_technical_reason(
             name=safe_str(base_stock.get("name")),
@@ -1478,15 +1481,23 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             dist_from_ma5_pct=dist_from_ma5_pct,
         )
 
+        levels = build_technical_price_levels(
+            close=close_now,
+            ma5=ma5,
+            ma10=ma10,
+            atr14=atr14,
+            recent_low=recent_low,
+        )
+
         # 操作評級
         if stock_type in {"準備轉強", "續攻型"}:
             operation_rating = "A"
-            operation_bias   = "偏多進場"
-            strategy_action  = f"隔日開盤進場，目標 {plan['target_price']}，停損 {plan['stop_loss']}，最多持有 {MAX_HOLD_DAYS} 天。"
+            operation_bias   = "優先觀察"
+            strategy_action  = f"列入優先觀察清單；進場參考 {levels['entry_price']}，結構停損 {levels['stop_loss']}。"
         elif stock_type == "轉強觀察":
             operation_rating = "B+"
             operation_bias   = "觀察等確認"
-            strategy_action  = f"觀察隔日是否續量，確認後再進場。停損參考 {plan['stop_loss']}。"
+            strategy_action  = f"接近轉強條件；進場參考 {levels['entry_price']}，結構停損 {levels['stop_loss']}。"
         else:
             operation_rating = "C"
             operation_bias   = "暫不操作"
@@ -1505,14 +1516,11 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             ),
             "operation_rating":   operation_rating,
             "operation_bias":     operation_bias,
-            "operation_style":    f"2~3天短線平倉",
+            "operation_style":    "技術訊號觀察",
             "strategy_action":    strategy_action,
-            "entry_price":        plan["entry_price"],
-            "target_price":       plan["target_price"],
-            "stop_loss":          plan["stop_loss"],
-            "max_hold_days":      plan["max_hold_days"],
-            "risk_reward":        "固定 2.5% 停損 / 5~6% 停利",
-            "risk_note":          f"收盤跌破 MA5（{format_price_value(ma5)}）即停損出場。",
+            "entry_price":        levels["entry_price"],
+            "stop_loss":          levels["stop_loss"],
+            "risk_note":          f"若跌破結構停損價 {levels['stop_loss']}，或5日線死亡交叉10日線，轉強假設失效。",
             "recommendation_score": setup_score,
             "setup_score":          setup_score,
             "score_breakdown":      score_breakdown,
@@ -1545,66 +1553,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
         return base_stock
 
 
-def build_snapshot_fallback_reason(stock: Dict[str, Any], score: float) -> str:
-    """推薦名單不足時，用快照資料補位的說明文字"""
-    name      = safe_str(stock.get("name"), safe_str(stock.get("symbol")))
-    signal    = safe_str(stock.get("signal"), "收盤快照候選")
-    rating    = safe_str(stock.get("operation_rating"), "-")
-    price     = safe_float(stock.get("price"))
-    change_pct = safe_float(stock.get("change_percent"))
-    open_price = safe_float(stock.get("open")) or price
-    high_price = safe_float(stock.get("high")) or price
-    low_price  = safe_float(stock.get("low"))  or price
-    prev_close = safe_float(stock.get("prev_close"))
-    volume     = safe_int(stock.get("volume"))
-    close_pos  = calc_position_ratio(price, high_price, low_price)
-    amp_pct    = calc_amplitude_pct(high_price, low_price, prev_close)
-    red_k      = price >= open_price if open_price > 0 else False
-
-    pos_note = (
-        "收在日內高檔，尾盤承接力較強" if close_pos >= 0.68
-        else "收在日內中段偏上" if close_pos >= 0.5
-        else "收盤位置仍不算強"
-    )
-    vol_note = (
-        "量能活絡但未失控" if 500 <= volume <= 30000
-        else "量能偏大，需留意隔日震盪" if volume > 30000
-        else "量能偏低，需小心觀察"
-    )
-    k_note = "收紅K，短線買盤佔優" if red_k else "未收紅K，需確認隔日開盤承接"
-
-    return (
-        f"【{name} 快照候選｜{signal}｜評級 {rating}｜分數 {score:.1f}】"
-        f"今日漲幅 {change_pct:+.2f}%，振幅 {amp_pct:.2f}%，{pos_note}。"
-        f"{k_note}；成交量 {volume:,} 張，{vol_note}。"
-        "隔日若開盤守住今日中段並維持量能，視為有效續強；"
-        "開高走低或跌破今日低點，應降級觀察。"
-    )
-
-
-def build_relaxed_fallback_reason(stock: Dict[str, Any], score: float) -> str:
-    """技術候選不足時的保底推薦說明，避免收盤後推薦區完全空白。"""
-    name = safe_str(stock.get("name"), safe_str(stock.get("symbol")))
-    price = safe_float(stock.get("price"))
-    change_pct = safe_float(stock.get("change_percent"))
-    open_price = safe_float(stock.get("open")) or price
-    high_price = safe_float(stock.get("high")) or price
-    low_price = safe_float(stock.get("low")) or price
-    prev_close = safe_float(stock.get("prev_close"))
-    volume = safe_int(stock.get("volume"))
-    close_pos = calc_position_ratio(price, high_price, low_price)
-    amp_pct = calc_amplitude_pct(high_price, low_price, prev_close)
-    k_note = "收紅K" if price >= open_price > 0 else "未收紅K"
-    pos_note = "收盤靠近高檔" if close_pos >= 0.65 else "收盤位於中段偏上" if close_pos >= 0.45 else "收盤位置普通"
-
-    return (
-        f"【{name} 收盤保底候選｜分數 {score:.1f}】"
-        f"今日漲幅 {change_pct:+.2f}%，振幅 {amp_pct:.2f}%，{k_note}，{pos_note}，成交量 {volume:,} 張。"
-        "此檔未完全達到嚴格技術線條件，但在今日候選池排序仍靠前；"
-        "隔日只適合觀察開盤是否守住今日中段與5日線，不建議無條件追價。"
-    )
-
-
 def get_recommendations_safe(
     stocks: List[Dict[str, Any]],
     data_date: str,
@@ -1621,7 +1569,7 @@ def get_recommendations_safe(
         ), ""
     except Exception as exc:
         print(f"recommendation build skipped: {exc}")
-        return [], f"推薦10檔暫時無法計算：{exc}"
+        return [], f"正式推薦暫時無法計算：{exc}"
 
 
 def build_recommendations(
@@ -1629,10 +1577,8 @@ def build_recommendations(
     top_n: int = 10,
 ) -> List[Dict[str, Any]]:
     """
-    純技術分析選股 - 三層篩選機制
-    第一層：setup_score >= 65，完整技術分析
-    第二層：setup_score >= 50，放寬條件
-    第三層：快照候選補位
+    純技術分析選股。
+    正式推薦只接受完整歷史K線分析，寧可少於10檔，也不使用快照補位。
     """
     candidates = [
         s for s in stocks
@@ -1683,151 +1629,15 @@ def build_recommendations(
             safe_int(x.get("volume")),
         )
 
-    def add_unique(target: List[Dict[str, Any]], source: List[Dict[str, Any]]) -> None:
-        seen = {safe_str(item.get("symbol")) for item in target}
-        for item in source:
-            sym = safe_str(item.get("symbol"))
-            if not sym or sym in seen:
-                continue
-            target.append(item)
-            seen.add(sym)
-            if len(target) >= top_n:
-                break
-
-    # 第一層：嚴格技術條件
+    # 正式推薦：只保留完整歷史K線分析通過的股票。
     qualified = [
         s for s in result_map.values()
-        if safe_float(s.get("setup_score")) >= 65
+        if s.get("analysis_source") == "technical_k"
+        and safe_float(s.get("setup_score")) >= 65
         and s.get("stock_type") in {"準備轉強", "續攻型", "轉強觀察"}
     ]
     qualified.sort(key=rank_key, reverse=True)
-    recommendations: List[Dict[str, Any]] = qualified[:top_n]
-
-    if len(recommendations) >= top_n:
-        return recommendations
-
-    # 第二層：放寬條件
-    relaxed = [
-        s for s in result_map.values()
-        if safe_float(s.get("setup_score")) >= 50
-        and s.get("stock_type") in {"準備轉強", "續攻型", "轉強觀察", "整理待發"}
-        and s.get("candlestick_pattern") not in {"長上影線", "開高走低黑K", "空方吞噬"}
-        and s.get("ma_cross") != "死亡交叉"
-    ]
-    relaxed.sort(key=rank_key, reverse=True)
-    add_unique(recommendations, relaxed)
-
-    if len(recommendations) >= top_n:
-        return recommendations
-
-    # 第三層：快照候選補位
-    snapshot_fallback: List[Dict[str, Any]] = []
-    for stock in candidates:
-        score  = safe_float(stock.get("recommendation_score") or stock.get("score"))
-        signal = safe_str(stock.get("signal"))
-        rating = safe_str(stock.get("operation_rating"))
-        change_pct = safe_float(stock.get("change_percent"))
-        if (
-            score >= 45
-            and 0.1 <= change_pct <= 8.0
-            and signal in {"量增轉強", "整理待發", "穩步走高"}
-            and rating in {"A", "B+"}
-        ):
-            fb = dict(stock)
-            fb["setup_score"]          = safe_float(fb.get("setup_score")) or score
-            fb["recommendation_score"] = score
-            fb["stock_type"]           = fb.get("stock_type") or "收盤快照候選"
-            fb["analysis_source"]      = "snapshot_fallback"
-            fb["score_breakdown"]      = {
-                "candle_score": 8,
-                "ma_score": 0,
-                "volume_score": 8,
-                "macd_score": 0,
-                "overheat_penalty": 0,
-                "total_score": score,
-                "ma_score_max": 45,
-                "volume_score_max": 20,
-                "macd_score_max": 15,
-                "candle_score_max": 20,
-                "ma_gap_pct": 0,
-                "vol_ratio": 1,
-                "dist_from_ma5_pct": 0,
-                "macd_hist": 0,
-                "prev_macd_hist": 0,
-                "overheat_flags": [],
-                "fail_reasons": [],
-                "note": "快照補位項目，均線與MACD等待歷史K補齊後重算。",
-            }
-            fb["reason"]               = build_snapshot_fallback_reason(fb, score)
-            snapshot_fallback.append(fb)
-    snapshot_fallback.sort(key=rank_key, reverse=True)
-    add_unique(recommendations, snapshot_fallback)
-
-    if len(recommendations) >= top_n:
-        return recommendations[:top_n]
-
-    # 第四層：收盤保底候選。保留過熱控管，但不要讓推薦區完全空白。
-    relaxed_fallback: List[Dict[str, Any]] = []
-    for stock in candidates:
-        change_pct = safe_float(stock.get("change_percent"))
-        volume = safe_int(stock.get("volume"))
-        if not (0.1 <= change_pct <= 8.0 and 500 <= volume <= 150000):
-            continue
-        score = max(snapshot_prescore(stock), safe_float(stock.get("recommendation_score") or stock.get("score")))
-        if score < 35:
-            continue
-        fb = dict(stock)
-        fb["setup_score"] = safe_float(fb.get("setup_score")) or score
-        fb["recommendation_score"] = score
-        fb["score"] = score
-        fb["stock_type"] = fb.get("stock_type") or "收盤保底候選"
-        fb["signal"] = fb.get("signal") or "收盤保底候選"
-        fb["operation_rating"] = fb.get("operation_rating") or "B+"
-        fb["analysis_source"] = "relaxed_snapshot_fallback"
-        fb["reason"] = build_relaxed_fallback_reason(fb, score)
-        relaxed_fallback.append(fb)
-    relaxed_fallback.sort(key=rank_key, reverse=True)
-    add_unique(recommendations, relaxed_fallback)
-
-    if len(recommendations) >= top_n:
-        return recommendations[:top_n]
-
-    # 第五層：全市場保底。只在前面完全不足時啟用，確保收盤後畫面一定有可觀察清單。
-    emergency_pool = [
-        s for s in stocks
-        if is_main_board_stock(s)
-        and safe_float(s.get("price")) >= 8
-        and safe_int(s.get("volume")) > 0
-        and safe_float(s.get("change_percent")) > -1.5
-    ]
-    emergency_pool.sort(
-        key=lambda s: (
-            max(snapshot_prescore(s), safe_float(s.get("recommendation_score") or s.get("score"))),
-            safe_float(s.get("change_percent")),
-            safe_int(s.get("volume")),
-        ),
-        reverse=True,
-    )
-    emergency_fallback: List[Dict[str, Any]] = []
-    for stock in emergency_pool:
-        score = max(snapshot_prescore(stock), safe_float(stock.get("recommendation_score") or stock.get("score")))
-        if score <= 0:
-            continue
-        fb = dict(stock)
-        fb["setup_score"] = safe_float(fb.get("setup_score")) or score
-        fb["recommendation_score"] = score
-        fb["score"] = score
-        fb["stock_type"] = "市場保底觀察"
-        fb["signal"] = fb.get("signal") or "市場保底觀察"
-        fb["operation_rating"] = fb.get("operation_rating") or "C"
-        fb["analysis_source"] = "emergency_market_fallback"
-        fb["reason"] = build_relaxed_fallback_reason(fb, score)
-        emergency_fallback.append(fb)
-        if len(emergency_fallback) >= top_n * 2:
-            break
-    add_unique(recommendations, emergency_fallback)
-
-    return recommendations[:top_n]
+    return qualified[:top_n]
 
 
 def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
@@ -1856,9 +1666,7 @@ def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
         "operation_style": s.get("operation_style", ""),
         "strategy_action": s.get("strategy_action", ""),
         "entry_price": s.get("entry_price", ""),
-        "target_price": s.get("target_price", ""),
         "stop_loss": s.get("stop_loss", ""),
-        "risk_reward": s.get("risk_reward", ""),
         "risk_note": s.get("risk_note", ""),
         "setup_score": s.get("setup_score", 0),
         "score_breakdown": s.get("score_breakdown", {}),
@@ -1890,15 +1698,12 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
         "trend_type":           stock.get("trend_type", ""),
         "operation_rating":     stock.get("operation_rating", ""),
         "operation_bias":       stock.get("operation_bias", ""),
-        "operation_style":      stock.get("operation_style", "2~3天短線平倉"),
+        "operation_style":      stock.get("operation_style", "技術訊號觀察"),
         "technical_comment":    stock.get("technical_comment", ""),
         "analysis":             stock.get("reason", ""),
         "strategy_action":      stock.get("strategy_action", ""),
-        "entry_price":          stock.get("entry_price", "隔日開盤"),
-        "target_price":         stock.get("target_price", ""),
+        "entry_price":          stock.get("entry_price", ""),
         "stop_loss":            stock.get("stop_loss", ""),
-        "max_hold_days":        stock.get("max_hold_days", str(MAX_HOLD_DAYS)),
-        "risk_reward":          stock.get("risk_reward", "固定 2.5% 停損 / 5~6% 停利"),
         "risk_note":            stock.get("risk_note", ""),
         "setup_score":          stock.get("setup_score", 0),
         "candlestick_pattern":  stock.get("candlestick_pattern", ""),
@@ -1954,6 +1759,7 @@ def normalize_recommendation_history_record(date_key: str, record: Dict[str, Any
         "last_update": record.get("last_update") or record.get("updated_at") or "",
         "market_status": record.get("market_status", ""),
         "count": int(record.get("count") or len(items)),
+        "selection_policy": record.get("selection_policy", ""),
         "items": items,
     }
 
@@ -2074,7 +1880,7 @@ def save_daily_recommendation_record(
     last_update: str,
     market_status: str,
 ) -> Dict[str, Any]:
-    """Save one daily top-10 recommendation record. Existing dates are not overwritten."""
+    """Save one daily recommendation record with up to ten items. Existing dates are not overwritten."""
     normalized_date = normalize_date_key(date_key)
     if not normalized_date:
         return {"created": False, "reason": "missing_date", "record": None}
@@ -2085,12 +1891,10 @@ def save_daily_recommendation_record(
 
     records = store.setdefault("records", {})
     existing = records.get(normalized_date)
-    if isinstance(existing, dict) and existing.get("items"):
+    if isinstance(existing, dict):
         return {"created": False, "reason": "already_exists", "record": existing}
 
     items = [build_recommendation_record_item(stock, index + 1) for index, stock in enumerate(recommendations[:10])]
-    if not items:
-        return {"created": False, "reason": "empty_recommendations", "record": None}
 
     record = {
         "date": normalized_date,
@@ -2098,6 +1902,7 @@ def save_daily_recommendation_record(
         "last_update": last_update,
         "market_status": market_status,
         "count": len(items),
+        "selection_policy": "technical_k_only",
         "items": items,
     }
     records[normalized_date] = record
@@ -2106,7 +1911,7 @@ def save_daily_recommendation_record(
 
 
 def run_recommendation_history_job(force_refresh: bool = False, reason: str = "scheduler") -> Dict[str, Any]:
-    """After close, archive the day's top-10 recommendations without tracking returns."""
+    """After close, archive the day's formal recommendations without tracking returns."""
     global _RECOMMENDATION_HISTORY_JOB_RUNNING, _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
 
     if _RECOMMENDATION_HISTORY_JOB_RUNNING:
@@ -2147,6 +1952,24 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
             last_update=last_update,
             top_n=10,
         )
+        if rec_err:
+            _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
+                "success": False,
+                "status": "recommendation_error",
+                "reason": reason,
+                "market_status": market_status,
+                "data_date": data_date,
+                "last_update": last_update,
+                "recommendation_count": 0,
+                "created": False,
+                "error": rec_err,
+                "started_at": started_at,
+                "finished_at": format_dt_taipei(now_taipei()),
+                "message": "正式推薦計算失敗，本次不寫入每日紀錄，稍後可安全重試。",
+                **storage_info,
+            }
+            return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
+
         saved = save_daily_recommendation_record(data_date, recs, last_update, market_status)
 
         _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
@@ -2258,6 +2081,7 @@ def get_recommendation_history(limit: int = Query(120, ge=1, le=500)):
                 "last_update": record.get("last_update", ""),
                 "market_status": record.get("market_status", ""),
                 "count": len(items),
+                "selection_policy": record.get("selection_policy", ""),
                 "items": items,
             })
         return {
@@ -2372,7 +2196,7 @@ def get_stocks(
             if rec_err:
                 recommendation_info["recommendation_status"] = "recommendation_error"
                 recommendation_info["recommendation_message"] = rec_err
-            elif recs:
+            else:
                 save_daily_recommendation_record(
                     result["data_date"],
                     recs,
@@ -2426,5 +2250,3 @@ def get_stocks(
                 "focused_stock": None,
             },
         )
-
-
