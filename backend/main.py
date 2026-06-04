@@ -709,6 +709,11 @@ def get_cached_recommendations(
 ) -> List[Dict[str, Any]]:
     if not should_settle_recommendations():
         return []
+
+    archived_items = get_archived_recommendations(data_date)
+    if archived_items is not None:
+        return archived_items[:top_n]
+
     cached_items = _RECOMMENDATION_CACHE.get("items")
     if (
         isinstance(cached_items, list)
@@ -829,11 +834,10 @@ def build_technical_price_levels(
     ma10: float,
     atr14: float,
     recent_low: float,
-    recent_high: float = 0.0,
 ) -> Dict[str, str]:
-    """技術面進場/出場/止損參考價位（不假設固定停利%，出場用技術壓力位）。"""
+    """技術面進場與結構停損參考價位。"""
     if close <= 0:
-        return {"entry_price": "", "exit_price": "", "stop_loss": ""}
+        return {"entry_price": "", "stop_loss": ""}
 
     # 進場：回測支撐區（MA5/MA10 或 ATR 回檔）
     pullback_buffer = max(atr14 * 0.5, close * 0.01)
@@ -847,16 +851,8 @@ def build_technical_price_levels(
     stop_buffer = max(atr14 * 0.35, close * 0.008)
     stop_loss = min(structural_support - stop_buffer, entry_low - stop_buffer)
 
-    # 出場：技術壓力位參考（近期高點 + ATR 延伸，非固定停利）
-    # 取近期高點與 ATR 推算的上方目標，給操作者參考壓力區間
-    atr_extension = close + max(atr14 * 2.0, close * 0.04)
-    resistance    = recent_high if recent_high > close else atr_extension
-    exit_low  = min(resistance, atr_extension)
-    exit_high = max(resistance, atr_extension)
-
     return {
         "entry_price": format_price_range(entry_low, close),
-        "exit_price":  format_price_range(exit_low, exit_high),
         "stop_loss":   format_price_value(max(stop_loss, 0.01)),
     }
 
@@ -1405,16 +1401,24 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
     try:
         symbol = safe_str(base_stock.get("symbol"))
         if not symbol:
-            return base_stock
+            merged = dict(base_stock)
+            merged["analysis_error"] = "missing_symbol"
+            return merged
 
         data = fetch_symbol_daily_candles(symbol)
         candles = data.get("candles", [])
         if len(candles) < 35:
-            return base_stock
+            merged = dict(base_stock)
+            merged["analysis_error"] = f"historical_k_insufficient:{len(candles)}"
+            merged["historical_k_count"] = len(candles)
+            return merged
 
         analysis_candles, prev_close = overlay_snapshot_on_candles(candles, base_stock)
         if len(analysis_candles) < 35:
-            return base_stock
+            merged = dict(base_stock)
+            merged["analysis_error"] = f"analysis_k_insufficient:{len(analysis_candles)}"
+            merged["historical_k_count"] = len(analysis_candles)
+            return merged
 
         closes  = [safe_float(x.get("close"))  for x in analysis_candles]
         volumes = [safe_int(x.get("volume"))    for x in analysis_candles]
@@ -1436,11 +1440,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             [safe_float(candle.get("low")) for candle in analysis_candles[-3:]],
             ma10,
         )
-        recent_high = max(
-            [safe_float(candle.get("high")) for candle in analysis_candles[-20:]],
-            default=close_now,
-        )
-
         # 前一天的 MACD Hist
         prev_closes = closes[:-1]
         _, _, prev_macd_hist = calc_macd(prev_closes) if len(prev_closes) >= 35 else (0, 0, 0)
@@ -1501,18 +1500,17 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             ma10=ma10,
             atr14=atr14,
             recent_low=recent_low,
-            recent_high=recent_high,
         )
 
         # 操作評級
         if stock_type in {"準備轉強", "續攻型"}:
             operation_rating = "A"
             operation_bias   = "優先觀察"
-            strategy_action  = f"列入優先觀察清單；進場參考 {levels['entry_price']}，上方壓力 {levels['exit_price']}，結構停損 {levels['stop_loss']}。"
+            strategy_action  = f"列入優先觀察清單；進場參考 {levels['entry_price']}，結構停損 {levels['stop_loss']}。"
         elif stock_type == "轉強觀察":
             operation_rating = "B+"
             operation_bias   = "觀察等確認"
-            strategy_action  = f"接近轉強條件；進場參考 {levels['entry_price']}，上方壓力 {levels['exit_price']}，結構停損 {levels['stop_loss']}。"
+            strategy_action  = f"接近轉強條件；進場參考 {levels['entry_price']}，結構停損 {levels['stop_loss']}。"
         else:
             operation_rating = "C"
             operation_bias   = "暫不操作"
@@ -1534,7 +1532,6 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             "operation_style":    "技術訊號觀察",
             "strategy_action":    strategy_action,
             "entry_price":        levels["entry_price"],
-            "exit_price":         levels["exit_price"],
             "stop_loss":          levels["stop_loss"],
             "risk_note":          f"若跌破結構停損價 {levels['stop_loss']}，或5日線死亡交叉10日線，轉強假設失效。",
             "recommendation_score": setup_score,
@@ -1565,8 +1562,10 @@ def build_historical_analysis_for_stock(base_stock: Dict[str, Any]) -> Dict[str,
             merged["prev_close"] = round(prev_close, 2)
         return merged
 
-    except Exception:
-        return base_stock
+    except Exception as exc:
+        merged = dict(base_stock)
+        merged["analysis_error"] = f"historical_k_error:{exc}"
+        return merged
 
 
 def get_recommendations_safe(
@@ -1646,6 +1645,20 @@ def build_recommendations(
         )
 
     # 正式推薦：只保留完整歷史K線分析通過的股票。
+    technical_k_count = sum(
+        1 for s in result_map.values() if s.get("analysis_source") == "technical_k"
+    )
+    if seed_items and technical_k_count == 0:
+        sample_errors = [
+            f"{safe_str(s.get('symbol'))}:{safe_str(s.get('analysis_error'), 'no_technical_k')}"
+            for s in result_map.values()
+        ][:8]
+        raise RuntimeError(
+            "歷史K線分析全部未完成，正式推薦不寫入0檔。"
+            f" 候選 {len(seed_items)} 檔，成功 0 檔。"
+            f" 範例：{'；'.join(sample_errors)}"
+        )
+
     qualified = [
         s for s in result_map.values()
         if s.get("analysis_source") == "technical_k"
@@ -1682,7 +1695,6 @@ def clean_stock_output(s: Dict[str, Any]) -> Dict[str, Any]:
         "operation_style": s.get("operation_style", ""),
         "strategy_action": s.get("strategy_action", ""),
         "entry_price": s.get("entry_price", ""),
-        "exit_price": s.get("exit_price", ""),
         "stop_loss": s.get("stop_loss", ""),
         "risk_note": s.get("risk_note", ""),
         "setup_score": s.get("setup_score", 0),
@@ -1720,7 +1732,6 @@ def build_focused_analysis(stock: Dict[str, Any]) -> Dict[str, Any]:
         "analysis":             stock.get("reason", ""),
         "strategy_action":      stock.get("strategy_action", ""),
         "entry_price":          stock.get("entry_price", ""),
-        "exit_price":           stock.get("exit_price", ""),
         "stop_loss":            stock.get("stop_loss", ""),
         "risk_note":            stock.get("risk_note", ""),
         "setup_score":          stock.get("setup_score", 0),
@@ -1897,6 +1908,7 @@ def save_daily_recommendation_record(
     recommendations: List[Dict[str, Any]],
     last_update: str,
     market_status: str,
+    overwrite_empty: bool = False,
 ) -> Dict[str, Any]:
     """Save one daily recommendation record with up to ten items. Existing dates are not overwritten."""
     normalized_date = normalize_date_key(date_key)
@@ -1910,7 +1922,10 @@ def save_daily_recommendation_record(
     records = store.setdefault("records", {})
     existing = records.get(normalized_date)
     if isinstance(existing, dict):
-        return {"created": False, "reason": "already_exists", "record": existing}
+        existing_items = existing.get("items", [])
+        existing_count = len(existing_items) if isinstance(existing_items, list) else int(existing.get("count") or 0)
+        if not (overwrite_empty and existing_count == 0):
+            return {"created": False, "reason": "already_exists", "record": existing}
 
     items = [build_recommendation_record_item(stock, index + 1) for index, stock in enumerate(recommendations[:10])]
 
@@ -1925,10 +1940,40 @@ def save_daily_recommendation_record(
     }
     records[normalized_date] = record
     save_recommendation_history_store(store)
-    return {"created": True, "reason": "created", "record": record}
+    return {
+        "created": True,
+        "reason": "overwrote_empty" if isinstance(existing, dict) else "created",
+        "record": record,
+    }
 
 
-def run_recommendation_history_job(force_refresh: bool = False, reason: str = "scheduler") -> Dict[str, Any]:
+def get_archived_recommendations(date_key: str) -> Optional[List[Dict[str, Any]]]:
+    """Return the immutable archived picks for a trading date, or None when not archived yet."""
+    normalized_date = normalize_date_key(date_key)
+    if not normalized_date:
+        return None
+
+    store = load_recommendation_history_store()
+    if store.get("_read_error"):
+        return None
+
+    records = store.get("records", {})
+    if not isinstance(records, dict):
+        return None
+
+    record = records.get(normalized_date)
+    if not isinstance(record, dict):
+        return None
+
+    items = record.get("items", [])
+    return items if isinstance(items, list) else []
+
+
+def run_recommendation_history_job(
+    force_refresh: bool = False,
+    reason: str = "scheduler",
+    overwrite_empty: bool = False,
+) -> Dict[str, Any]:
     """After close, archive the day's formal recommendations without tracking returns."""
     global _RECOMMENDATION_HISTORY_JOB_RUNNING, _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
 
@@ -1970,7 +2015,31 @@ def run_recommendation_history_job(force_refresh: bool = False, reason: str = "s
             last_update=last_update,
             top_n=10,
         )
-        saved = save_daily_recommendation_record(data_date, recs, last_update, market_status)
+        if rec_err:
+            _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
+                "success": False,
+                "status": "recommendation_error",
+                "reason": reason,
+                "market_status": market_status,
+                "data_date": data_date,
+                "last_update": last_update,
+                "recommendation_count": 0,
+                "created": False,
+                "error": rec_err,
+                "started_at": started_at,
+                "finished_at": format_dt_taipei(now_taipei()),
+                "message": "正式推薦計算失敗，本次不寫入每日紀錄，稍後可安全重試。",
+                **storage_info,
+            }
+            return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
+
+        saved = save_daily_recommendation_record(
+            data_date,
+            recs,
+            last_update,
+            market_status,
+            overwrite_empty=overwrite_empty,
+        )
 
         _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
             "success": True,
@@ -2033,28 +2102,6 @@ def startup_event():
     try:
         ensure_fubon_sdk()
         print("✅ Fubon SDK initialized successfully")
-
-        # ===== SDK API 探測（部署後看 log，確認後可刪除）=====
-        try:
-            stock_client = get_stock_rest_client()
-            print("=== stock_client 可用模組 ===")
-            for attr in dir(stock_client):
-                if not attr.startswith("_"):
-                    print(f"  stock.{attr}")
-            # 進一步看每個模組底下有什麼
-            for mod_name in dir(stock_client):
-                if mod_name.startswith("_"):
-                    continue
-                mod = getattr(stock_client, mod_name, None)
-                methods = [m for m in dir(mod) if not m.startswith("_")] if mod else []
-                if methods:
-                    print(f"=== stock.{mod_name} 底下 ===")
-                    for m in methods:
-                        print(f"    stock.{mod_name}.{m}")
-        except Exception as e:
-            print(f"⚠️ SDK 探測失敗: {e}")
-        # ===== 探測結束 =====
-
     except Exception as e:
         print(f"⚠️ Fubon SDK startup init failed: {e}")
     start_recommendation_history_worker()
@@ -2138,11 +2185,16 @@ def recommendation_history_status():
 def recommendation_history_tick(
     secret: str = Query(""),
     force_refresh: bool = Query(True),
+    overwrite_empty: bool = Query(False),
 ):
     """External Cron endpoint for saving the daily recommendation record after close."""
     if ADMIN_SECRET and secret != ADMIN_SECRET:
         return JSONResponse(status_code=403, content={"success": False, "error": "forbidden"})
-    result = run_recommendation_history_job(force_refresh=force_refresh, reason="cron_tick")
+    result = run_recommendation_history_job(
+        force_refresh=force_refresh,
+        reason="cron_tick",
+        overwrite_empty=overwrite_empty,
+    )
     status_code = 200 if result.get("success") else 500
     if result.get("status") == "running":
         status_code = 409
@@ -2218,7 +2270,7 @@ def get_stocks(
             if rec_err:
                 recommendation_info["recommendation_status"] = "recommendation_error"
                 recommendation_info["recommendation_message"] = rec_err
-            elif recs:
+            else:
                 save_daily_recommendation_record(
                     result["data_date"],
                     recs,
@@ -2272,5 +2324,3 @@ def get_stocks(
                 "focused_stock": None,
             },
         )
-
-
