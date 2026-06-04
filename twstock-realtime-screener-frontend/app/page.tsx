@@ -403,7 +403,7 @@ export default function Home() {
     setHistoryNotice("");
     setHistoryError("");
     try {
-      const res = await fetch(`${API_BASE}/jobs/recommendation-history-tick?force_refresh=true`, {
+      const res = await fetch(`${API_BASE}/jobs/recommendation-history-tick?force_refresh=true&overwrite_empty=true`, {
         cache: "no-store",
       });
       const data = await res.json();
@@ -1806,5 +1806,4 @@ const priceLevelValueStyle: React.CSSProperties = {
   fontWeight: 900,
   lineHeight: 1.6,
 };
-
 
