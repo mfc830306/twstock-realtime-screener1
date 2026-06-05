@@ -711,7 +711,7 @@ def get_cached_recommendations(
         return []
 
     archived_items = get_archived_recommendations(data_date)
-    if archived_items is not None:
+    if archived_items:  # 只有非空歸檔才直接回傳；空歸檔則重新計算
         return archived_items[:top_n]
 
     cached_items = _RECOMMENDATION_CACHE.get("items")
