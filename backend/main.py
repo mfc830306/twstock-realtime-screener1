@@ -967,7 +967,7 @@ def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
 
     stock_client = get_stock_rest_client()
     to_date   = now_taipei().strftime("%Y-%m-%d")
-    from_date = (now_taipei() - timedelta(days=400)).strftime("%Y-%m-%d")
+    from_date = (now_taipei() - timedelta(days=360)).strftime("%Y-%m-%d")
 
     resp = stock_client.historical.candles(
         **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
