@@ -706,12 +706,13 @@ def get_cached_recommendations(
     data_date: str,
     last_update: str,
     top_n: int = 10,
+    ignore_archive: bool = False,
 ) -> List[Dict[str, Any]]:
     if not should_settle_recommendations():
         return []
 
     archived_items = get_archived_recommendations(data_date)
-    if archived_items:  # 只有非空歸檔才直接回傳；空歸檔則重新計算
+    if archived_items is not None and not ignore_archive:
         return archived_items[:top_n]
 
     cached_items = _RECOMMENDATION_CACHE.get("items")
@@ -970,7 +971,8 @@ def fetch_symbol_daily_candles(symbol: str) -> Dict[str, Any]:
     from_date = (now_taipei() - timedelta(days=360)).strftime("%Y-%m-%d")
 
     resp = stock_client.historical.candles(
-        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc"}
+        **{"symbol": symbol, "from": from_date, "to": to_date, "timeframe": "D", "sort": "asc",
+           "fields": "open,high,low,close,volume,change"}
     )
     rows    = extract_rows(resp)
     candles: List[Dict[str, Any]] = []
@@ -1573,6 +1575,7 @@ def get_recommendations_safe(
     data_date: str,
     last_update: str,
     top_n: int = 10,
+    ignore_archive: bool = False,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """安全包裝 get_cached_recommendations，不讓例外中斷主流程"""
     try:
@@ -1581,6 +1584,7 @@ def get_recommendations_safe(
             data_date=data_date,
             last_update=last_update,
             top_n=top_n,
+            ignore_archive=ignore_archive,
         ), ""
     except Exception as exc:
         print(f"recommendation build skipped: {exc}")
@@ -1666,24 +1670,6 @@ def build_recommendations(
         and s.get("stock_type") in {"準備轉強", "續攻型", "轉強觀察"}
     ]
     qualified.sort(key=rank_key, reverse=True)
-
-    # ===== 診斷：分數分布（看 0 檔卡在哪）=====
-    tech_stocks = [s for s in result_map.values() if s.get("analysis_source") == "technical_k"]
-    scores = sorted((safe_float(s.get("setup_score")) for s in tech_stocks), reverse=True)
-    type_counts: Dict[str, int] = {}
-    for s in tech_stocks:
-        st = safe_str(s.get("stock_type"), "未分類")
-        type_counts[st] = type_counts.get(st, 0) + 1
-    print(
-        f"[選股診斷] 候選 {len(candidates)} → 分析 {len(seed_items)} → 完整K {len(tech_stocks)} → "
-        f"達標(≥65且型態符合) {len(qualified)}"
-    )
-    print(f"[選股診斷] 分數 Top10: {[round(x,1) for x in scores[:10]]}")
-    print(f"[選股診斷] ≥65分: {sum(1 for x in scores if x >= 65)} 檔，"
-          f"60-64分: {sum(1 for x in scores if 60 <= x < 65)} 檔，"
-          f"55-59分: {sum(1 for x in scores if 55 <= x < 60)} 檔")
-    print(f"[選股診斷] 型態分布: {type_counts}")
-    # ===== 診斷結束 =====
 
     return qualified[:top_n]
 
@@ -2028,11 +2014,19 @@ def run_recommendation_history_job(
             }
             return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
 
+        archived_items = get_archived_recommendations(data_date)
+        should_rebuild_empty_archive = (
+            overwrite_empty
+            and isinstance(archived_items, list)
+            and len(archived_items) == 0
+        )
+
         recs, rec_err = get_recommendations_safe(
             all_stocks,
             data_date=data_date,
             last_update=last_update,
             top_n=10,
+            ignore_archive=should_rebuild_empty_archive,
         )
         if rec_err:
             _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
@@ -2204,7 +2198,7 @@ def recommendation_history_status():
 def recommendation_history_tick(
     secret: str = Query(""),
     force_refresh: bool = Query(True),
-    overwrite_empty: bool = Query(False),
+    overwrite_empty: bool = Query(True),
 ):
     """External Cron endpoint for saving the daily recommendation record after close."""
     if ADMIN_SECRET and secret != ADMIN_SECRET:
