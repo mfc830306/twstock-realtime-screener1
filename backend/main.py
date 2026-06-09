@@ -1951,6 +1951,98 @@ def save_daily_recommendation_record(
         "record": record,
     }
 
+def update_recommendation_tracking(
+    all_stocks: List[Dict[str, Any]],
+    data_date: str = "",
+    last_update: str = "",
+    track_days: int = 5,
+) -> int:
+    """收盤後更新每筆推薦紀錄的追蹤資料：最新價、目前漲幅、最高漲幅、是否跌破止損。
+    只追蹤推薦後 track_days 個交易日內的紀錄。回傳更新的紀錄筆數。"""
+    store = load_recommendation_history_store()
+    if store.get("_read_error"):
+        return 0
+    records = store.get("records", {})
+    if not isinstance(records, dict) or not records:
+        return 0
+
+    # 建立 symbol -> 現價/最高價 對照表
+    price_map: Dict[str, Dict[str, float]] = {}
+    for s in all_stocks:
+        sym = safe_str(s.get("symbol"))
+        if sym:
+            price_map[sym] = {
+                "price": safe_float(s.get("price")),
+                "high":  safe_float(s.get("high")),
+            }
+
+    tracking_date = normalize_date_key(data_date) or now_taipei().strftime("%Y%m%d")
+    tracking_time = safe_str(last_update) or format_dt_taipei(now_taipei())
+    sorted_dates = sorted(records.keys(), reverse=True)
+    updated = 0
+
+    for date_key in sorted_dates:
+        record = records.get(date_key)
+        if not isinstance(record, dict):
+            continue
+        items = record.get("items", [])
+        if not isinstance(items, list) or not items:
+            continue
+
+        # 以行情資料日期判斷是否更新，避免休市或背景任務重跑時重複累加追蹤天數。
+        rec_date = normalize_date_key(date_key)
+        if not rec_date:
+            continue
+        tracked_days = safe_int(record.get("tracked_days", 0))
+        if record.get("last_tracked_date") == tracking_date:
+            continue
+        if rec_date == tracking_date:
+            # 推薦當天不追蹤（推薦價就是今天，漲幅 0）
+            continue
+        if tracked_days >= track_days:
+            continue
+
+        changed = False
+        for item in items:
+            sym = safe_str(item.get("symbol"))
+            saved_price = safe_float(item.get("saved_price")) or safe_float(item.get("price"))
+            if not sym or saved_price <= 0:
+                continue
+            pm = price_map.get(sym)
+            if not pm or pm["price"] <= 0:
+                continue
+            latest = pm["price"]
+            day_high = pm["high"] if pm["high"] > 0 else latest
+
+            current_gain = (latest - saved_price) / saved_price * 100
+            # 最高漲幅：用當日最高價更新歷史最大
+            prev_max = safe_float(item.get("max_gain_pct"))
+            day_high_gain = (day_high - saved_price) / saved_price * 100
+            new_max = max(prev_max, day_high_gain, current_gain)
+
+            stop_loss = safe_float(item.get("stop_loss"))
+            below_stop = bool(stop_loss > 0 and latest < stop_loss)
+
+            item["latest_price"]     = round(latest, 2)
+            item["current_gain_pct"] = round(current_gain, 2)
+            item["max_gain_pct"]     = round(new_max, 2)
+            item["below_stop_loss"]  = below_stop
+            item["last_tracked"]     = tracking_time
+            changed = True
+
+        if changed:
+            record["tracked_days"]      = tracked_days + 1
+            record["last_tracked_date"] = tracking_date
+            record["tracking_last_update"] = tracking_time
+            records[date_key] = record
+            updated += 1
+
+    if updated > 0:
+        store["records"] = records
+        save_recommendation_history_store(store)
+    return updated
+
+
 
 def get_archived_recommendations(date_key: str) -> Optional[List[Dict[str, Any]]]:
     """Return the immutable archived picks for a trading date, or None when not archived yet."""
@@ -2054,6 +2146,18 @@ def run_recommendation_history_job(
             overwrite_empty=overwrite_empty,
         )
 
+        # 收盤後更新所有追蹤中推薦的報酬（最新價/目前漲幅/最高漲幅/止損）
+        try:
+            tracked = update_recommendation_tracking(
+                all_stocks,
+                data_date=data_date,
+                last_update=last_update,
+                track_days=5,
+            )
+        except Exception as track_exc:
+            tracked = 0
+            print(f"update_recommendation_tracking error: {track_exc}")
+
         _RECOMMENDATION_HISTORY_JOB_LAST_RESULT = {
             "success": True,
             "status": saved.get("reason", "completed"),
@@ -2067,6 +2171,7 @@ def run_recommendation_history_job(
             "started_at": started_at,
             "finished_at": format_dt_taipei(now_taipei()),
             "message": "每日推薦紀錄已檢查完成。",
+            "tracked_records": tracked,
             **storage_info,
         }
         return _RECOMMENDATION_HISTORY_JOB_LAST_RESULT
