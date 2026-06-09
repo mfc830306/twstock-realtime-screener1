@@ -107,6 +107,11 @@ type RecommendationHistoryItem = Stock & {
   saved_change?: number;
   saved_change_percent?: number;
   saved_volume?: number;
+  latest_price?: number;
+  current_gain_pct?: number;
+  max_gain_pct?: number;
+  below_stop_loss?: boolean;
+  last_tracked?: string;
 };
 
 type RecommendationHistoryRecord = {
@@ -1666,6 +1671,32 @@ export default function Home() {
                             <div style={{ color: "#9fc7f5", fontSize: "12px", lineHeight: 1.7, fontWeight: 800, marginTop: "4px" }}>
                               建議進場 {stock.entry_price || "-"} ｜ 結構停損 {stock.stop_loss || "-"}
                             </div>
+                            {stock.latest_price != null && (
+                              <div style={{
+                                marginTop: "8px",
+                                paddingTop: "8px",
+                                borderTop: "1px dashed rgba(255,255,255,0.12)",
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: "10px",
+                                fontSize: "12px",
+                                fontWeight: 900,
+                                lineHeight: 1.6,
+                                background: stock.below_stop_loss ? "rgba(255,80,80,0.10)" : "transparent",
+                                borderRadius: stock.below_stop_loss ? "8px" : 0,
+                                padding: stock.below_stop_loss ? "8px" : "8px 0 0 0",
+                              }}>
+                                <span style={{ color: "#cfe3ff" }}>推薦 {formatPrice(stock.saved_price ?? stock.price)}</span>
+                                <span style={{ color: "#fff" }}>最新 {formatPrice(stock.latest_price)}</span>
+                                <span style={{ color: (stock.current_gain_pct ?? 0) >= 0 ? "#ff8b8b" : "#57e389" }}>
+                                  目前 {formatSigned(stock.current_gain_pct)}%
+                                </span>
+                                <span style={{ color: "#ffd95f" }}>最高 {formatSigned(stock.max_gain_pct)}%</span>
+                                {stock.below_stop_loss
+                                  ? <span style={{ color: "#ff5a5a" }}>⚠ 已跌破止損 {stock.stop_loss}</span>
+                                  : <span style={{ color: "#9fc7f5" }}>止損 {stock.stop_loss || "-"}</span>}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
